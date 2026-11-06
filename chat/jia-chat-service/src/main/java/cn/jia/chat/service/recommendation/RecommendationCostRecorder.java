@@ -17,7 +17,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /** Records the source attempt before any paid call. No business transaction, wallet mutation,
- * provider replay, background thread, or estimation. A crash/transport error remains visible
+ * provider replay or estimation. Durable response recovery only redelivers source evidence. A crash/transport error remains visible
  * as PENDING_USAGE; it is never retried or interpreted as free to repair accounting.
  */
 @Component
@@ -26,19 +26,22 @@ public final class RecommendationCostRecorder {
     public record Attempt(UsageCostService.Binding binding, ModelTokenPrice price, long revision) { }
     private final UsageCostService costs;
     private final ModelPriceCatalog prices;
+    private final RecommendationUsageJournal journal;
     private final String channel;
     private final String expectedTier;
 
-    public RecommendationCostRecorder(UsageCostService costs, ModelPriceCatalog prices,
+    public RecommendationCostRecorder(UsageCostService costs, ModelPriceCatalog prices, RecommendationUsageJournal journal,
             @Value("${jia.chat.recommendation.usage-channel:}") String channel,
             @Value("${jia.chat.recommendation.usage-tier:}") String expectedTier) {
         this.costs = costs;
         this.prices = prices;
+        this.journal = journal;
         this.channel = channel.strip();
         this.expectedTier = expectedTier.strip();
     }
 
     public Attempt begin(Context context, String requestedModel) {
+        journal.prepare();
         var binding = new UsageCostService.Binding(new EconomyScope(context.tenantId(), context.clientId()),
                 context.ownerJiacn(), context.taskId(), "ASSIGNEE_RECOMMENDATION", UUID.randomUUID().toString());
         var price = prices.find(channel, requestedModel, expectedTier).orElse(null);
@@ -59,7 +62,7 @@ public final class RecommendationCostRecorder {
         raw.put("phase", "RESPONDED"); raw.put("providerReceiptId", evidence.providerReceiptId());
         raw.put("actualModel", evidence.actualModel()); raw.put("serviceTier", evidence.actualTier());
         raw.put("usage", evidence.rawUsageJson());
-        costs.record(new UsageCostService.Observation(attempt.binding(), "responded", attempt.revision(),
+        journal.record(new UsageCostService.Observation(attempt.binding(), "responded", attempt.revision(),
                 json(raw), evidence.normalizedUsage(), attempt.price(), System.currentTimeMillis()));
     }
 

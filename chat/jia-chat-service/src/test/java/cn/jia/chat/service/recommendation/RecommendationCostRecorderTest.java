@@ -22,11 +22,13 @@ class RecommendationCostRecorderTest {
     private static final ModelTokenPrice PRICE = new ModelTokenPrice("channel", "model", "standard", "v1", "synthetic",
             Map.of(INPUT, BigDecimal.ONE, CACHED_INPUT, BigDecimal.ZERO, OUTPUT, BigDecimal.TEN), null, Map.of());
     private final UsageCostService costs = mock(UsageCostService.class);
+    private final RecommendationUsageJournal journal = mock(RecommendationUsageJournal.class);
     private final ModelPriceCatalog prices = mock(ModelPriceCatalog.class);
     private RecommendationCostRecorder recorder() {
         when(prices.find("channel", "model", "standard")).thenReturn(Optional.of(PRICE));
         when(costs.record(any())).thenReturn(new UsageCostService.Receipt("attempt", 1, TokenUsageCost.Status.PENDING_USAGE, null, false));
-        return new RecommendationCostRecorder(costs, prices, "channel", "standard");
+        doAnswer(call -> { costs.record(call.getArgument(0)); return null; }).when(journal).record(any());
+        return new RecommendationCostRecorder(costs, prices, journal, "channel", "standard");
     }
     private static ChatCompletion response(String actualModel, String tier) throws Exception {
         String raw = "{\"id\":\"provider-receipt\",\"model\":\"" + actualModel + "\",\"object\":\"chat.completion\",\"created\":1,\"choices\":[],"
@@ -74,10 +76,17 @@ class RecommendationCostRecorderTest {
         assertNotEquals(first.binding().sourceAttemptId(), second.binding().sourceAttemptId());
         assertNull(first.price()); assertNull(second.price());
     }
-    @Test void failedCompletionWritePropagatesWithoutProviderReplayOrZeroCost() throws Exception {
+    @Test void journalFailurePropagatesWithoutProviderReplayOrZeroCost() throws Exception {
         var recorder = recorder(); var attempt = recorder.begin(CONTEXT, "model");
-        when(costs.record(any())).thenThrow(new IllegalStateException("database unavailable"));
+        doThrow(new IllegalStateException("durable source unavailable")).when(journal).record(any());
         assertThrows(IllegalStateException.class, () -> recorder.complete(attempt, response("model", "default")));
-        verify(costs, times(2)).record(any());
+        verify(costs).record(any());
     }
+    @Test void storagePreparationPrecedesStartedReceiptAndFailurePreventsPaidAttempt() {
+        var recorder = recorder();
+        doThrow(new IllegalStateException("storage unavailable")).when(journal).prepare();
+        assertThrows(IllegalStateException.class, () -> recorder.begin(CONTEXT, "model"));
+        verifyNoInteractions(costs);
+    }
+
 }
