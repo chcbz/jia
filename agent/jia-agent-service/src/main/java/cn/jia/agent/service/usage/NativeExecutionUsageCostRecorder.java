@@ -14,7 +14,8 @@ import java.util.LinkedHashMap;
  */
 @Service
 public final class NativeExecutionUsageCostRecorder {
-    public record Evidence(String executionId, String requestedModel, String usageEvidenceJson) { }
+    public enum Phase { STARTED, TERMINAL }
+    public record Evidence(String executionId, Phase phase, String requestedModel, String usageEvidenceJson) { }
     private static final ObjectMapper JSON = new ObjectMapper();
     private final PersonalWorkspaceExecutionDao executions;
     private final UsageCostService costs;
@@ -38,12 +39,14 @@ public final class NativeExecutionUsageCostRecorder {
                 execution.getOwnerJiacn(), execution.getTaskId(), "NATIVE_EXECUTION_EVIDENCE", execution.getExecutionId());
         var raw = new LinkedHashMap<String, Object>();
         raw.put("executionId", execution.getExecutionId()); raw.put("runId", execution.getRunId());
+        raw.put("phase", evidence.phase().name());
         raw.put("requestedModel", evidence.requestedModel());
         raw.put("usageEvidence", JSON.readTree(evidence.usageEvidenceJson()));
-        // One immutable terminal observation per native execution. Redelivery uses exactly
-        // the same identity/content; conflicting evidence is not silently replaced. Price
-        // cannot be looked up after the call and misrepresented as a pre-call snapshot.
-        return costs.record(new UsageCostService.Observation(binding, "terminal", 0,
+        // Ordered source observations reuse the ledger's revision/idempotency owner.
+        // A started observation survives a crash with unknown usage; terminal evidence
+        // revises that same attempt, never creates another wallet charge or model call.
+        boolean started = evidence.phase() == Phase.STARTED;
+        return costs.record(new UsageCostService.Observation(binding, started ? "started" : "terminal", started ? 0 : 1,
                 JSON.writeValueAsString(raw), null, null, 0));
     }
 }

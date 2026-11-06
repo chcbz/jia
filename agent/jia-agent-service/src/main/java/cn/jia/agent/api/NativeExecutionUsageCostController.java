@@ -15,7 +15,7 @@ import tools.jackson.databind.JsonNode;
 @RestController
 @RequestMapping("/internal/agent/tasks")
 public final class NativeExecutionUsageCostController {
-    public record Request(String executionId, String requestedModel, JsonNode usageEvidence) { }
+    public record Request(String executionId, NativeExecutionUsageCostRecorder.Phase phase, String requestedModel, JsonNode usageEvidence) { }
     public record Receipt(String executionId, String attemptId, String revision, String status, String costYuan) { }
     private final NativeExecutionUsageCostRecorder recorder;
     private final AgentRuntimeAuthenticationService authentication;
@@ -28,7 +28,8 @@ public final class NativeExecutionUsageCostController {
     public ResponseEntity<JsonResult<Receipt>> record(@PathVariable String taskId, @PathVariable String runId,
             @RequestBody JsonRequest<Request> protocolRequest, Authentication principal) {
         var body = protocolRequest == null ? null : protocolRequest.data();
-        if (body == null || body.executionId() == null || !body.executionId().matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}")
+        if (body == null || body.phase() == null || body.executionId() == null || !body.executionId().matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}")
+                || body.phase() == NativeExecutionUsageCostRecorder.Phase.STARTED && body.usageEvidence() != null && !body.usageEvidence().isNull()
                 || body.usageEvidence() != null && !body.usageEvidence().isNull() && !body.usageEvidence().isObject())
             throw new IllegalArgumentException("Invalid native usage evidence");
         var receipt = authentication.withNativeFence(principal, () -> {
@@ -36,7 +37,7 @@ public final class NativeExecutionUsageCostController {
             var scope = new PersonalWorkspaceExecutionService.RuntimeScope(trusted.tenantId(), trusted.clientId(),
                     trusted.ownerJiacn(), trusted.agentId(), trusted.runtimeInstanceId());
             return recorder.record(scope, taskId, runId, new NativeExecutionUsageCostRecorder.Evidence(
-                    body.executionId(), body.requestedModel(), body.usageEvidence() == null ? "null" : body.usageEvidence().toString()));
+                    body.executionId(), body.phase(), body.requestedModel(), body.usageEvidence() == null ? "null" : body.usageEvidence().toString()));
         });
         return ResponseEntity.ok().header("Cache-Control", "private, no-store").body(JsonResult.success(
                 new Receipt(body.executionId(), receipt.attemptId(), Long.toString(receipt.revision()),

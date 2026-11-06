@@ -30,15 +30,25 @@ class NativeExecutionUsageCostControllerTest {
         when(recorder.record(any(),eq("task"),eq("run"),any())).thenAnswer(i -> {
             var scope=(cn.jia.agent.service.PersonalWorkspaceExecutionService.RuntimeScope)i.getArgument(0);
             assertEquals("executor",scope.executorOwnerJiacn()); assertEquals("agent",scope.agentId());
-            return new UsageCostService.Receipt("b".repeat(64),1,TokenUsageCost.Status.PENDING_USAGE,null,false);
+            return new UsageCostService.Receipt("b".repeat(64),2,TokenUsageCost.Status.PENDING_USAGE,null,false);
         });
-        var body=new NativeExecutionUsageCostController.Request("exec","requested-only",new ObjectMapper().readTree("{\"status\":\"UNVERIFIED\"}"));
+        var body=new NativeExecutionUsageCostController.Request("exec",NativeExecutionUsageCostRecorder.Phase.TERMINAL,"requested-only",new ObjectMapper().readTree("{\"status\":\"UNVERIFIED\"}"));
         var controller=new NativeExecutionUsageCostController(recorder,auth);
         var response=controller.record("task","run",new JsonRequest<>(1,"fixture",body),principal);
         assertEquals(200,response.getStatusCode().value());
         var receipt=response.getBody().getData();
-        assertEquals("exec",receipt.executionId());assertEquals("1",receipt.revision());
+        assertEquals("exec",receipt.executionId());assertEquals("2",receipt.revision());
         assertEquals("PENDING_USAGE",receipt.status());assertNull(receipt.costYuan());
         verify(auth).withNativeFence(eq(principal),any());
     }
+    @Test void startedEvidenceCannotClaimUsageAndMissingPhaseCannotGuessSemantics() {
+        var recorder=mock(NativeExecutionUsageCostRecorder.class);
+        var controller=new NativeExecutionUsageCostController(recorder,mock(AgentRuntimeAuthenticationService.class));
+        for (var phase : new NativeExecutionUsageCostRecorder.Phase[]{null, NativeExecutionUsageCostRecorder.Phase.STARTED}) {
+            var body=new NativeExecutionUsageCostController.Request("exec",phase,"requested-only",new ObjectMapper().readTree("{}"));
+            assertThrows(IllegalArgumentException.class, () -> controller.record("task","run",new JsonRequest<>(1,"fixture",body),null));
+        }
+        verifyNoInteractions(recorder);
+    }
+
 }

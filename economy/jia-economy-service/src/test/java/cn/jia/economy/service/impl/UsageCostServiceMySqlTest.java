@@ -101,6 +101,24 @@ class UsageCostServiceMySqlTest {
         assertEquals("{\"provider\":\"synthetic-usage\"}", jdbc.queryForObject("SELECT raw_usage_json FROM economy_usage_revision WHERE revision=3", String.class));
     }
 
+    @Test void nativeStartedAndTerminalReceiptsKeepOneUnknownAttemptAcrossLostAcks() {
+        var binding = new Binding(SCOPE, "owner", "task", "NATIVE_EXECUTION_EVIDENCE", "exec");
+        var started = new Observation(binding, "started", 0, "{\"phase\":\"STARTED\",\"usageEvidence\":null}", null, null, 0);
+        var terminal = new Observation(binding, "terminal", 1, "{\"phase\":\"TERMINAL\",\"usageEvidence\":null}", null, null, 0);
+        conflict(REVISION, () -> service.record(terminal));
+        assertEquals(0, summary().attempts());
+        var first = service.record(started);
+        assertEquals(1, first.revision()); assertNull(first.costYuan());
+        assertTrue(service.record(started).replay());
+        var last = service.record(terminal);
+        assertEquals(first.attemptId(), last.attemptId()); assertEquals(2, last.revision());
+        assertTrue(service.record(terminal).replay());
+        assertEquals(1, service.record(started).revision());
+        assertEquals(1, summary().attempts()); assertEquals(1, summary().pendingUsage());
+        assertEquals(PENDING_USAGE, last.status()); assertNull(last.costYuan());
+        assertEquals(2, count("economy_usage_revision"));
+    }
+
     @Test void duplicateAndOldReceiptReplayNeverRepriceOrDoubleCount() {
         var initial = priced(BINDING, "receipt-1", 0, 10);
         var original = service.record(initial); assertTrue(service.record(initial).replay());
