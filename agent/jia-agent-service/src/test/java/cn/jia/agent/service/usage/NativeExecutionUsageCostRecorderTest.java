@@ -32,6 +32,7 @@ class NativeExecutionUsageCostRecorderTest {
         assertNull(saved.getValue().normalizedUsage()); assertNull(saved.getValue().price());
         assertTrue(saved.getValue().rawUsageJson().contains("requested-only"));
         assertTrue(saved.getValue().rawUsageJson().contains("\"total\""));
+        verify(executions).findForNativeUsageCost("0", "client", "executor", "agent", "task", "run", "exec");
         verifyNoMoreInteractions(executions, costs);
     }
 
