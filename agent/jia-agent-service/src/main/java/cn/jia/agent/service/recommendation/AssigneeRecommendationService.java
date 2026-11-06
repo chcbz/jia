@@ -72,7 +72,10 @@ public final class AssigneeRecommendationService {
                 try { materials.verifyUnchanged(actor, taskId, materialObservation); }
                 catch (Failure failure) { if (failure.status() == 409) throw stale("MATERIAL"); throw failure; }
                 // Display current status/name; recommendation is not execution admission.
-                return decode(taskId, task.getTaskVersion(), observedAt, after.candidates(), raw);
+                var judgedCandidates = new ArrayList<Candidate>();
+                for (int i = 0; i < observation.candidates().size(); i++)
+                    judgedCandidates.add(new Candidate(after.candidates().get(i).agent(), observation.candidates().get(i).evidence()));
+                return refreshAvailability(decode(taskId, task.getTaskVersion(), observedAt, judgedCandidates, raw), after.candidates());
             });
             outcome = "success";
             return result;
@@ -164,12 +167,37 @@ public final class AssigneeRecommendationService {
         if (!before.candidates().stream().map(c -> c.agent().agentId()).toList()
                 .equals(after.candidates().stream().map(c -> c.agent().agentId()).toList())) throw stale("CANDIDATE_SET");
         if (!before.providerOwners().equals(after.providerOwners())) throw stale("CANDIDATE_FACTS");
-        if (!before.skillFacts().equals(after.skillFacts())) throw stale("SKILL_EVIDENCE");
+        if (!stableSkills(before.skillFacts()).equals(stableSkills(after.skillFacts()))) throw stale("SKILL_EVIDENCE");
         for (int i = 0; i < before.candidates().size(); i++) {
             var old = before.candidates().get(i); var now = after.candidates().get(i);
             if (old.agent().boundToMe() != now.agent().boundToMe() || old.agent().canOperate() != now.agent().canOperate()
                     || !old.agent().abilities().equals(now.agent().abilities())) throw stale("CANDIDATE_FACTS");
         }
+    }
+    // A recommendation is advice, not execution admission. Catalog health may
+    // change during a model call without changing what skill was installed.
+    private record StableSkill(String installationId, String key, String version, String title, String description, String kind) { }
+    private static Map<String,List<StableSkill>> stableSkills(Map<String,List<SkillManagementService.RecommendationSkill>> facts) {
+        var result = new LinkedHashMap<String,List<StableSkill>>();
+        facts.forEach((agent, rows) -> result.put(agent, rows.stream().map(s -> new StableSkill(
+                s.installationId(), s.skillKey(), s.skillVersion(), s.title(), s.description(), s.kind())).toList()));
+        return result;
+    }
+    private static Result refreshAvailability(Result result, List<Candidate> current) {
+        var byAgent = new HashMap<String,Candidate>();
+        current.forEach(c -> byAgent.put(c.agent().agentId(), c));
+        var rows = result.recommendations().stream().map(old -> {
+            var now = byAgent.get(old.agent().agentId());
+            var byEvidence = new HashMap<String,Evidence>();
+            now.evidence().forEach(e -> byEvidence.put(e.id(), e));
+            var evidence = old.evidence().stream().map(e -> byEvidence.get(e.id())).toList();
+            var gaps = new ArrayList<>(old.gaps());
+            boolean unavailable = evidence.stream().anyMatch(e -> !e.available());
+            if (unavailable) gaps.add("所引用技能当前未就绪；本次建议不代表可以立即执行，请以实际承办准入为准。");
+            return new Recommendation(now.agent(), unavailable ? "UNKNOWN" : old.recommendationLevel(), old.reason(), evidence.stream().filter(Evidence::available).toList(), List.copyOf(gaps));
+        }).toList();
+        String state = rows.stream().anyMatch(r -> Set.of("HIGH", "MEDIUM").contains(r.recommendationLevel())) ? "READY" : "NO_MATCH";
+        return new Result(result.taskId(), result.taskVersion(), result.observedAt(), state, result.requirementSummary(), rows, result.questions(), true);
     }
     // Business-specific output contract belongs to API; the model adapter only transports it.
     static String outputSchema(List<Candidate> candidates) throws com.fasterxml.jackson.core.JsonProcessingException {
