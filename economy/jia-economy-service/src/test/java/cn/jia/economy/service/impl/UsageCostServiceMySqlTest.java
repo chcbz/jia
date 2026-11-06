@@ -101,6 +101,30 @@ class UsageCostServiceMySqlTest {
         assertEquals("{\"provider\":\"synthetic-usage\"}", jdbc.queryForObject("SELECT raw_usage_json FROM economy_usage_revision WHERE revision=3", String.class));
     }
 
+    @Test void nonTaskUsageIsDurableWithoutSyntheticTaskSummaryAndCannotBeRebound() {
+        var binding = new Binding(SCOPE, "owner", null, "CHAT_EXECUTION_EVIDENCE", "private-dispatch");
+        var started = observation(binding, "started", 0, null, null);
+        var first = service.record(started);
+        assertEquals(PENDING_USAGE, first.status()); assertNull(first.costYuan());
+        assertTrue(service.record(started).replay());
+        var terminal = priced(binding, "terminal", 1, 10);
+        var last = service.record(terminal);
+        assertEquals(first.attemptId(), last.attemptId());
+        assertEquals(new BigDecimal("0.000010"), last.costYuan());
+        assertTrue(service.record(terminal).replay());
+        assertEquals(1, count("economy_usage_attempt")); assertEquals(2, count("economy_usage_revision"));
+        assertEquals(0, count("economy_task_cost"));
+        assertNull(jdbc.queryForObject("SELECT task_id FROM economy_usage_attempt", String.class));
+        for (var changed : new Binding[]{new Binding(SCOPE, "owner", "invented-task", binding.source(), binding.sourceAttemptId()),
+                new Binding(SCOPE, "other-owner", null, binding.source(), binding.sourceAttemptId())})
+            conflict(ATTEMPT_BINDING, () -> service.record(priced(changed, "rebind", 2, 10)));
+        assertEquals(0, count("economy_task_cost")); // speculative summary also rolls back
+        service.record(priced(BINDING, "task-usage", 0, 10));
+        var unbound = new Binding(SCOPE, BINDING.ownerJiacn(), null, BINDING.source(), BINDING.sourceAttemptId());
+        conflict(ATTEMPT_BINDING, () -> service.record(priced(unbound, "unbind", 1, 10)));
+        assertEquals(1, summary().attempts());
+    }
+
     @Test void nativeStartedAndTerminalReceiptsKeepOneUnknownAttemptAcrossLostAcks() {
         var binding = new Binding(SCOPE, "owner", "task", "NATIVE_EXECUTION_EVIDENCE", "exec");
         var started = new Observation(binding, "started", 0, "{\"phase\":\"STARTED\",\"usageEvidence\":null}", null, null, 0);

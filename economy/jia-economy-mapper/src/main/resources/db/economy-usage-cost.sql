@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS economy_usage_attempt (
     client_id VARCHAR(50) NOT NULL,
     attempt_id CHAR(64) NOT NULL,
     owner_jiacn VARCHAR(100) NOT NULL,
-    task_id VARCHAR(100) NOT NULL,
+    task_id VARCHAR(100) DEFAULT NULL,
     source VARCHAR(100) NOT NULL,
     source_attempt_id LONGTEXT NOT NULL,
     revision BIGINT NOT NULL,

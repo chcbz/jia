@@ -9,11 +9,13 @@ import java.util.Objects;
  * No task lifecycle, wallet, provider call or current-price lookup is performed here.
  */
 public interface UsageCostService {
+    /** Null taskId is a real non-task invocation, not a synthetic task or a wallet charge. */
     record Binding(EconomyScope scope, String ownerJiacn, String taskId, String source, String sourceAttemptId) {
         public Binding {
             Objects.requireNonNull(scope, "scope");
-            for (String value : new String[]{ownerJiacn, taskId, source, sourceAttemptId})
+            for (String value : new String[]{ownerJiacn, source, sourceAttemptId})
                 if (value == null || value.isBlank()) throw new IllegalArgumentException("Cost attempt binding is required");
+            if (taskId != null && taskId.isBlank()) throw new IllegalArgumentException("Task identity cannot be blank");
         }
     }
     /** expectedRevision=0 creates an attempt; later evidence/repricing is an explicit revision.

@@ -48,16 +48,19 @@ public class UsageCostServiceImpl implements UsageCostService {
         String receiptKey = digest(observation.receiptId());
         String requestHash = digest(json.writeValueAsString(observation));
         long now = System.currentTimeMillis();
-        var summaryKey = new EconomyTaskCostEntity().setTenantId(scope.tenantId()).setClientId(scope.clientId())
-                .setOwnerJiacn(binding.ownerJiacn()).setTaskId(binding.taskId()).setUpdatedAt(now);
-        mapper.insertSummaryIfAbsent(summaryKey);
-        var summary = mapper.lockSummary(summaryKey);
+        EconomyTaskCostEntity summary = null;
+        if (binding.taskId() != null) {
+            var summaryKey = new EconomyTaskCostEntity().setTenantId(scope.tenantId()).setClientId(scope.clientId())
+                    .setOwnerJiacn(binding.ownerJiacn()).setTaskId(binding.taskId()).setUpdatedAt(now);
+            mapper.insertSummaryIfAbsent(summaryKey);
+            summary = mapper.lockSummary(summaryKey);
+        }
         var attemptKey = new EconomyUsageAttemptEntity().setTenantId(scope.tenantId()).setClientId(scope.clientId())
                 .setAttemptId(attemptId).setOwnerJiacn(binding.ownerJiacn()).setTaskId(binding.taskId())
                 .setSource(binding.source()).setSourceAttemptId(binding.sourceAttemptId()).setCreatedAt(now).setUpdatedAt(now);
         mapper.insertAttemptIfAbsent(attemptKey);
         var attempt = mapper.lockAttempt(attemptKey);
-        if (!binding.ownerJiacn().equals(attempt.getOwnerJiacn()) || !binding.taskId().equals(attempt.getTaskId())
+        if (!binding.ownerJiacn().equals(attempt.getOwnerJiacn()) || !Objects.equals(binding.taskId(), attempt.getTaskId())
                 || !binding.source().equals(attempt.getSource()) || !binding.sourceAttemptId().equals(attempt.getSourceAttemptId()))
             throw new UsageCostConflict(ATTEMPT_BINDING);
         var revision = new EconomyUsageRevisionEntity().setTenantId(scope.tenantId()).setClientId(scope.clientId())
@@ -77,14 +80,14 @@ public class UsageCostServiceImpl implements UsageCostService {
                 .setStatus(assessed.status().name()).setCostYuan(assessed.costYuan())
                 .setObservedAt(observation.observedAt()).setRecordedAt(now);
         requireOne(mapper.insertRevision(revision));
-        summary.setAttempts(Math.addExact(summary.getAttempts(), attempt.getRevision() == 0 ? 1 : 0))
+        if (summary != null) summary.setAttempts(Math.addExact(summary.getAttempts(), attempt.getRevision() == 0 ? 1 : 0))
                 .setPendingUsage(Math.addExact(summary.getPendingUsage(), pending(assessed.status().name(), PENDING_USAGE) - pending(attempt.getStatus(), PENDING_USAGE)))
                 .setPendingPrice(Math.addExact(summary.getPendingPrice(), pending(assessed.status().name(), PENDING_PRICE) - pending(attempt.getStatus(), PENDING_PRICE)))
                 .setCostYuan(summary.getCostYuan().subtract(amount(attempt.getCostYuan())).add(amount(assessed.costYuan())))
                 .setUpdatedAt(now);
         attempt.setRevision(nextRevision).setStatus(assessed.status().name()).setCostYuan(assessed.costYuan()).setUpdatedAt(now);
         requireOne(mapper.updateAttempt(attempt));
-        requireOne(mapper.updateSummary(summary));
+        if (summary != null) requireOne(mapper.updateSummary(summary));
         return receipt(revision, false);
     }
 

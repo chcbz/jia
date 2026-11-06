@@ -27,6 +27,7 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
                 || request.getRequestURI().matches(request.getContextPath()+"/internal/agent/chat/requests/[^/]+/turns/[^/]+/materials/inputs/[^/]+/content")
                 || request.getRequestURI().matches(request.getContextPath() + "/internal/agent/tasks/[^/]+/work-items/[^/]+/reassignments/[^/]+/commands/[^/]+/(?:result-commit|lease)")
                 || request.getRequestURI().matches(request.getContextPath() + "/internal/agent/tasks/[^/]+/runs/[^/]+/conversation/usage")
+                || request.getRequestURI().matches(request.getContextPath() + "/internal/agent/chat/dispatches/[^/]+/usage")
                 || request.getRequestURI().matches(request.getContextPath() + "/internal/agent/skill-installations/[^/]+/package")
                 || request.getRequestURI().equals(request.getContextPath() + "/ws/agent/channel")
                 || request.getRequestURI().startsWith(request.getContextPath() + "/agent/runtime/v1/commands/")
@@ -54,6 +55,7 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
                 || "GET".equals(request.getMethod()) && path.matches("/internal/agent/skill-installations/" + id + "/package")
                 || "GET".equals(request.getMethod()) && path.equals("/ws/agent/channel")
                 || "POST".equals(request.getMethod()) && path.matches("/agent/runtime/v1/commands/" + id + "/acks")
+                || "POST".equals(request.getMethod()) && path.matches("/internal/agent/chat/dispatches/" + id + "/usage")
                 || "GET".equals(request.getMethod()) && path.equals("/internal/agent/tasks/conversation-executions/commands")
                 || "POST".equals(request.getMethod()) && path.matches("/internal/agent/tasks/" + id
                 + "/runs/" + id + "/conversation/(?:inputs(?:/" + id + "/content)?|lease(?:/renew)?|failure|resume|usage|effects/" + id + "/(?:start|result)|result-commits/" + id
