@@ -114,7 +114,7 @@ public final class AgentTaskProviderCostConsentDaoImpl
         id(row.getTaskId(), "taskId", 100); id(row.getConsentId(), "consentId", 100);
     }
     private static void scope(String tenant,String client,String owner) {
-        if (!"0".equals(tenant)) throw new IllegalArgumentException("tenantId");
+        cn.jia.core.security.TenantClaimPolicy.exact(tenant);
         id(client,"clientId",50); id(owner,"ownerJiacn",50);
         if ("0".equals(owner)) throw new IllegalArgumentException("ownerJiacn");
     }

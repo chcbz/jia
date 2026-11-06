@@ -116,6 +116,7 @@ class AgentTaskBillingMySqlTransactionTest {
         for (Class<?> mapper : List.of(AgentTaskMetaMapper.class, AgentTaskMemberMapper.class,
                 AgentTaskWorkItemMapper.class, AgentTaskEventMapper.class, AgentTaskExecutionGrantMapper.class,
                 AgentTaskBountyBootstrapOutboxMapper.class, AgentTaskFormalDeliveryMapper.class, AgentTaskCancellationMapper.class,
+                PersonalWorkspaceExecutionMapper.class, PersonalWorkspaceExecutionInputMapper.class, PersonalWorkspaceExecutionOutputMapper.class, SkillExecutionMapper.class, AgentTaskProviderCostConsentMapper.class,
                 EconomyLedgerMapper.class, EconomyTaskBillingMapper.class)) config.addMapper(mapper);
         var global = new GlobalConfig(); global.setIdentifierGenerator(new DefaultIdentifierGenerator());
         var factory = new MybatisSqlSessionFactoryBean(); factory.setDataSource(source);
@@ -185,9 +186,23 @@ class AgentTaskBillingMySqlTransactionTest {
             if (failOccupation) throw new InjectedFailure();
             return changed;
         }).when(cancelDao).releaseTaskOccupation(anyString(), anyString(), anyString(), anyString(), anyLong());
+        var leases = new AgentWorkItemLeaseServiceImpl(members, work, roots, events, 900000);
+        leases.setAssigneeAuthority(authority);
+        when(authority.requireTaskAgent(TENANT,CLIENT,OWNER,TASK,AGENT,false)).thenReturn(AGENT);
+        var executionCancellation = proxy(new TaskExecutionCancellationServiceImpl(
+                new PersonalWorkspaceExecutionDaoImpl(sql.getMapper(PersonalWorkspaceExecutionMapper.class),
+                        sql.getMapper(PersonalWorkspaceExecutionInputMapper.class), sql.getMapper(PersonalWorkspaceExecutionOutputMapper.class)),
+                new SkillExecutionDaoImpl(sql.getMapper(SkillExecutionMapper.class)),
+                mock(org.springframework.context.ApplicationEventPublisher.class)), TaskExecutionCancellationService.class);
+        var consentCancellation = proxy(new AgentTaskProviderCostConsentServiceImpl(
+                new AgentTaskProviderCostConsentDaoImpl(sql.getMapper(AgentTaskProviderCostConsentMapper.class)),
+                assignment,roots,mock(ControlledImageProviderOperatorPolicy.class),new ObjectMapper()), AgentTaskProviderCostConsentService.class);
         cancellation = new AgentTaskCancellationServiceImpl(roots,
                 new AgentTaskStateServiceImpl(meta, members, work, roots, events), work,
-                new AgentTaskExecutionGrantDaoImpl(sql.getMapper(AgentTaskExecutionGrantMapper.class)), cancelDao, billing);
+                new AgentTaskExecutionGrantDaoImpl(sql.getMapper(AgentTaskExecutionGrantMapper.class)), cancelDao, billing,
+                executionCancellation,
+                mock(cn.jia.chat.service.TaskDiscussionCancellation.class),
+                proxy(leases,AgentWorkItemLeaseService.class),consentCancellation);
         jdbc.update("INSERT INTO agent_task_meta(task_id,owner_jiacn,tenant_id,client_id) VALUES(?,?,?,?)",
                 TASK, OWNER, TENANT, CLIENT);
         jdbc.update("""
@@ -299,6 +314,70 @@ class AgentTaskBillingMySqlTransactionTest {
         assertEquals(50, wallet(jdbc)); assertEquals("running", taskState());
         assertTrue(decide("changes_requested").getReplayed());
     }
+
+    @Test void runningCancellationReleasesHoldAndClosesExecutionLeaseAndGrantTogether() throws Exception {
+        prepareCancellation();assign();prepareRunning();
+        var receipt=cancellation.cancel(TENANT,CLIENT,OWNER,PAYER,TASK,3);
+        assertEquals("cancelled",receipt.status()); assertEquals(100,wallet(jdbc));assertEquals("RELEASED",charge());
+        assertEquals("CANCELLED",executionState());assertEquals("CANCELLED",skillPhase());
+        assertEquals("left",jdbc.queryForObject("SELECT member_status FROM agent_task_member",String.class));
+        assertNull(jdbc.queryForObject("SELECT lease_token FROM agent_task_work_item",String.class));
+        assertEquals(2,jdbc.queryForObject("SELECT attempt_count FROM agent_task_work_item",Integer.class));
+        assertEquals("REVOKED",jdbc.queryForObject("SELECT state FROM agent_task_execution_grant",String.class));
+        assertEquals(100L,jdbc.queryForObject("SELECT started_at FROM agent_task_meta",Long.class));
+        assertEquals("paid-lease",jdbc.queryForObject("SELECT conversation_lease_token FROM agent_personal_workspace_execution",String.class));
+        assertEquals(receipt,cancellation.cancel(TENANT,CLIENT,OWNER,PAYER,TASK,3));
+        assertEquals(2,count("economy_transaction"));
+    }
+    @Test void finalCancellationWriteFailureRollsBackMoneyExecutionSkillAndLease() throws Exception {
+        prepareCancellation();assign();prepareRunning();failOccupation=true;
+        assertThrows(InjectedFailure.class,()->cancellation.cancel(TENANT,CLIENT,OWNER,PAYER,TASK,3));
+        assertEquals("running",taskState());assertEquals(50,wallet(jdbc));assertEquals("HELD",charge());
+        assertEquals("QUEUED",executionState());assertEquals("RUNNING",skillPhase());
+        assertEquals("work-lease",jdbc.queryForObject("SELECT lease_token FROM agent_task_work_item",String.class));
+        assertEquals("working",jdbc.queryForObject("SELECT member_status FROM agent_task_member",String.class));
+        assertEquals("ACTIVE",jdbc.queryForObject("SELECT state FROM agent_task_execution_grant",String.class));
+    }
+    @Test void failedTaskCanReleaseHoldWithoutRewritingFailedWorkHistory() throws Exception {
+        prepareCancellation();assign();
+        jdbc.update("UPDATE agent_task_meta SET reward_status='failed',task_version=3,started_at=100,failure_reason='fixture failure'");
+        jdbc.update("UPDATE agent_task_member SET member_status='failed',started_at=100,completed_at=200");
+        jdbc.update("UPDATE agent_task_work_item SET status='failed',attempt_count=2,completed_at=200");
+        cancellation.cancel(TENANT,CLIENT,OWNER,PAYER,TASK,3);
+        assertEquals("RELEASED",charge()); assertEquals(100,wallet(jdbc));
+        assertEquals("failed",jdbc.queryForObject("SELECT member_status FROM agent_task_member",String.class));
+        assertEquals("failed",jdbc.queryForObject("SELECT status FROM agent_task_work_item",String.class));
+    }
+    @Test void cancellationAndAcceptanceRaceHaveOnlyOneBusinessAndFinancialTerminal() throws Exception {
+        prepareCancellation();assign();prepareSubmitted();
+        try(var pool=Executors.newFixedThreadPool(2)) {
+            var start=new CountDownLatch(1);
+            var cancel=pool.submit(()->{start.await();try {cancellation.cancel(TENANT,CLIENT,OWNER,PAYER,TASK,4);return true;}catch(RuntimeException lost){return false;}});
+            var accept=pool.submit(()->{start.await();try {decide("accepted");return true;}catch(RuntimeException lost){return false;}});
+            start.countDown();assertNotEquals(cancel.get(20,TimeUnit.SECONDS),accept.get(20,TimeUnit.SECONDS));
+        }
+        assertEquals(2,count("economy_transaction"));
+        if("cancelled".equals(taskState())) {assertEquals("RELEASED",charge());assertEquals(100,wallet(jdbc));}
+        else {assertEquals("completed",taskState());assertEquals("CAPTURED",charge());assertEquals(50,wallet(jdbc));}
+    }
+    private void prepareRunning() {
+        jdbc.update("UPDATE agent_task_meta SET reward_status='running',task_version=3,started_at=100");
+        jdbc.update("UPDATE agent_task_member SET member_status='working',started_at=100");
+        jdbc.update("UPDATE agent_task_work_item SET status='running',version=5,attempt_count=2,lease_token='work-lease',lease_until=200");
+        jdbc.update("""
+            INSERT INTO agent_personal_workspace_execution
+            (execution_id,tenant_id,client_id,owner_jiacn,task_id,run_id,target_agent_id,instruction,output_content_mime_type,
+             execution_state,grant_revision,idempotency_key,request_hash,created_at,execution_mode,execution_protocol_version,
+             conversation_lease_token,conversation_lease_version,conversation_lease_expires_at,conversation_provider_started_at,conversation_provider_lease_version)
+            VALUES ('exec',?,?,?,?, 'run',?,'fixture instruction','text/plain','QUEUED',1,'exec-key',REPEAT('a',64),100,'CONVERSATION',5,'paid-lease',3,200,150,3)
+            """,TENANT,CLIENT,OWNER,TASK,AGENT);
+        jdbc.update("""
+            INSERT INTO agent_skill_execution (tenant_id,client_id,owner_jiacn,execution_id,snapshot_json,snapshot_sha256,
+             phase,version,effects_json,created_at,updated_at) VALUES (?,?,?,'exec','{}',REPEAT('a',64),'RUNNING',2,'{}',100,100)
+            """,TENANT,CLIENT,OWNER);
+    }
+    private String executionState(){return jdbc.queryForObject("SELECT execution_state FROM agent_personal_workspace_execution WHERE execution_id='exec'",String.class);}
+    private String skillPhase(){return jdbc.queryForObject("SELECT phase FROM agent_skill_execution WHERE execution_id='exec'",String.class);}
 
     @Test
     void initialCancellationRefundsOriginalPayerAndReplaysWithoutMoreWrites() throws Exception {
@@ -462,11 +541,16 @@ class AgentTaskBillingMySqlTransactionTest {
         // Its standalone initializer also validates columns owned by a later native-protocol initializer.
         for (String file : List.of("agent-personal-workspace-v1_11-executions.sql",
                 "agent-personal-workspace-v1_13-task-execution.sql",
+                "agent-personal-workspace-v1_13-task-publication.sql",
                 "agent-personal-workspace-v1_14-conversation-execution.sql",
-                "agent-personal-workspace-v1_15-conversation-lease.sql")) {
+                "agent-personal-workspace-v1_14-conversation-output.sql",
+                "agent-personal-workspace-v1_15-conversation-lease.sql",
+                "agent-personal-workspace-v1_16-conversation-provider-start.sql",
+                "agent-skill-execution-v1.sql", "agent-personal-workspace-native-v5.sql")) {
             new ResourceDatabasePopulator(new org.springframework.core.io.ClassPathResource("db/" + file))
                     .execute(jdbc.getDataSource());
         }
+        new cn.jia.agent.config.ControlledImageFollowupV3SchemaInitializer(jdbc).afterPropertiesSet();
         // Legacy Chat base-table DDL lives in the existing mapper fixture; it is read-only in this suite.
         createTable(Path.of("../../chat/jia-chat-mapper/src/test/resources/db/schema.sql"), "chat_conversation", false);
         new ResourceDatabasePopulator(new FileSystemResource(Path.of(

@@ -22,8 +22,7 @@ import java.util.Set;
 
 import static cn.jia.agent.exception.AgentTaskStateException.Reason.*;
 
-/** Root-first atomic cancellation. Presence of current execution/transport/cost facts is unsupported,
- * not proof of failure/completion. No process, installation, file, or history is deleted. */
+/** Root-first atomic task cancellation. Existing outputs and paid-attempt facts are preserved. */
 @Named
 public class AgentTaskCancellationServiceImpl implements AgentTaskCancellationService {
     private final AgentTaskMutationTransaction transactions;
@@ -32,17 +31,29 @@ public class AgentTaskCancellationServiceImpl implements AgentTaskCancellationSe
     private final AgentTaskExecutionGrantDao grants;
     private final AgentTaskCancellationDao cancellation;
     private final TaskBillingService billing;
+    private final cn.jia.agent.service.TaskExecutionCancellationService executions;
+    private final cn.jia.chat.service.TaskDiscussionCancellation discussions;
+    private final cn.jia.agent.service.AgentWorkItemLeaseService leases;
+    private final cn.jia.agent.service.AgentTaskProviderCostConsentService consents;
 
     @Inject
     public AgentTaskCancellationServiceImpl(AgentTaskMutationTransaction transactions,
             AgentTaskStateService states, AgentTaskWorkItemDao workItems,
-            AgentTaskExecutionGrantDao grants, AgentTaskCancellationDao cancellation, TaskBillingService billing) {
+            AgentTaskExecutionGrantDao grants, AgentTaskCancellationDao cancellation, TaskBillingService billing,
+            cn.jia.agent.service.TaskExecutionCancellationService executions,
+            cn.jia.chat.service.TaskDiscussionCancellation discussions,
+            cn.jia.agent.service.AgentWorkItemLeaseService leases,
+            cn.jia.agent.service.AgentTaskProviderCostConsentService consents) {
         this.transactions=Objects.requireNonNull(transactions);
         this.states=Objects.requireNonNull(states);
         this.workItems=Objects.requireNonNull(workItems);
         this.grants=Objects.requireNonNull(grants);
         this.cancellation=Objects.requireNonNull(cancellation);
         this.billing=Objects.requireNonNull(billing);
+        this.executions=Objects.requireNonNull(executions);
+        this.discussions=Objects.requireNonNull(discussions);
+        this.leases=Objects.requireNonNull(leases);
+        this.consents=Objects.requireNonNull(consents);
     }
 
     @Override
@@ -65,9 +76,8 @@ public class AgentTaskCancellationServiceImpl implements AgentTaskCancellationSe
             if (!replay && root.getTaskVersion()!=expectedTaskVersion) throw error(VERSION_CONFLICT);
             if (root.getReward()!=null && root.getReward()!=0
                     || cancellation.hasMoneyFacts(tenant,client,owner,taskId)) throw error(INVALID_TRANSITION);
-            if ((!replay && !Set.of("open","planning","assigned").contains(
-                    root.getRewardStatus()==null ? "" : root.getRewardStatus()))
-                    || root.getStartedAt()!=null || root.getCompletedAt()!=null) throw error(INVALID_TRANSITION);
+            if (!replay && !Set.of("open","planning","assigned","running","reviewing","blocked","failed").contains(
+                    root.getRewardStatus()==null ? "" : root.getRewardStatus())) throw error(INVALID_TRANSITION);
 
             List<AgentTaskMemberEntity> members=cancellation.lockMembers(tenant,client,owner,taskId);
             if (members==null) throw error(INVALID_PERSISTED_STATE);
@@ -81,13 +91,8 @@ public class AgentTaskCancellationServiceImpl implements AgentTaskCancellationSe
                 AgentTaskMemberStatus status;
                 try { status=AgentTaskMemberStatus.fromPersistedValue(member.getMemberStatus()); }
                 catch (IllegalArgumentException failure) { throw error(INVALID_PERSISTED_STATE); }
-                // LEFT/REJECTED completedAt is an exit clock written by the existing
-                // state service, not work-start evidence. Preserve it on initial cancel/replay.
-                if (member.getStartedAt()!=null
-                        || !(status==AgentTaskMemberStatus.INVITED || status==AgentTaskMemberStatus.ACCEPTED
-                            || status==AgentTaskMemberStatus.LEFT || status==AgentTaskMemberStatus.REJECTED)
-                        || !status.isTerminal() && member.getCompletedAt()!=null
-                        || replay && !status.isTerminal()) throw error(INVALID_TRANSITION);
+                // Completed members retain their historical state. Active members exit below.
+                if (replay && !status.isTerminal()) throw error(INVALID_TRANSITION);
             }
             List<AgentTaskWorkItemEntity> items=workItems.listByTaskForUpdate(
                     tenant,client,owner,taskId,AgentWorkItemDependencyServiceImpl.MAX_WORK_ITEMS+1);
@@ -103,18 +108,9 @@ public class AgentTaskCancellationServiceImpl implements AgentTaskCancellationSe
                 AgentTaskWorkItemStatus status;
                 try { status=AgentTaskWorkItemStatus.fromPersistedValue(item.getStatus()); }
                 catch (IllegalArgumentException failure) { throw error(INVALID_PERSISTED_STATE); }
-                if (!(status==AgentTaskWorkItemStatus.PENDING || status==AgentTaskWorkItemStatus.READY
-                        || status==AgentTaskWorkItemStatus.CANCELLED) || item.getAttemptCount()==null
-                        || item.getAttemptCount()!=0 || item.getLeaseToken()!=null || item.getLeaseUntil()!=null
-                        || item.getSubmittedAt()!=null || item.getCompletedAt()!=null
-                        || item.getResultArtifactId()!=null || replay && !status.isTerminal()) {
-                    throw error(INVALID_TRANSITION);
-                }
+                if (replay && !status.isTerminal()) throw error(INVALID_TRANSITION);
             }
-            // Current locking reads, not a potentially stale REPEATABLE_READ snapshot.
-            // Native preparations/current Chat work are unsupported; closed conversation outputs stay intact.
-            if (cancellation.hasExecutionFacts(tenant,client,owner,taskId)
-                    || cancellation.hasCommandFacts(tenant,client,owner,taskId)) throw error(INVALID_TRANSITION);
+
             List<AgentTaskExecutionGrantEntity> taskGrants=cancellation.lockGrants(tenant,client,owner,taskId);
             if (taskGrants==null) throw error(INVALID_PERSISTED_STATE);
             Set<String> grantIds=new HashSet<>();
@@ -165,28 +161,36 @@ public class AgentTaskCancellationServiceImpl implements AgentTaskCancellationSe
             if (replay) return new Receipt(taskId,"cancelled",root.getTaskVersion());
             // Assignment facts require an explicit HELD/LEGACY_FREE bill; missing money is not free.
             // Only a never-assigned task may cancel without a bill. Release joins this root transaction.
-            boolean assigned = "assigned".equals(root.getRewardStatus()) || root.getAssignedAgentId()!=null
+            boolean assigned = Set.of("assigned","running","reviewing","blocked","failed").contains(root.getRewardStatus()) || root.getAssignedAgentId()!=null
                     || root.getAssignedAt()!=null || !taskGrants.isEmpty()
                     || members.stream().anyMatch(m -> Set.of("accepted","left").contains(m.getMemberStatus()));
+            // Execution authority closes before discussion locks and money writes. All join
+            // this root transaction; afterCommit hints/STOP outbox never perform network IO here.
+            executions.cancelTaskExecutions(tenant,client,owner,taskId);
+            consents.cancelForTask(new cn.jia.agent.service.AgentTaskProviderCostConsentService.Scope(tenant,client,owner),taskId);
+            discussions.cancelTaskDiscussions(tenant,client,owner,taskId);
             billing.release(new TaskBillingService.Task(new EconomyScope(tenant,client),owner,taskId),assigned);
             for (var member:members) {
                 String target=switch (member.getMemberStatus()) {
                     case "invited" -> "rejected";
-                    case "accepted" -> "left";
+                    case "accepted", "working", "blocked" -> "left";
                     default -> null; // preserve pre-existing rejected/left terminals
                 };
                 if (target!=null) states.transitionMember(tenant,client,owner,taskId,member.getAgentId(),
                         transition(target,member.getVersion()));
             }
             for (var item:items) {
-                if (!"cancelled".equals(item.getStatus())) states.transitionWorkItem(
-                        tenant,client,owner,item.getWorkItemId(),transition("cancelled",item.getVersion()));
+                var status=AgentTaskWorkItemStatus.fromPersistedValue(item.getStatus());
+                if (status.isTerminal()) continue;
+                if (status==AgentTaskWorkItemStatus.CLAIMED || status==AgentTaskWorkItemStatus.RUNNING) {
+                    leases.cancelForTask(tenant,client,owner,taskId,item.getWorkItemId(),item.getVersion());
+                } else states.transitionWorkItem(tenant,client,owner,item.getWorkItemId(),transition("cancelled",item.getVersion()));
             }
             long now=System.currentTimeMillis();
             for (var grant:taskGrants) {
                 if (!"ACTIVE".equals(grant.getState())) continue;
                 String hash=TaskEventPayload.ContentDigest.fromUtf8(
-                        "INITIAL_CANCEL\n"+taskId+"\n"+expectedTaskVersion+"\n"+grant.getGrantId()).sha256();
+                        "TASK_CANCEL\n"+taskId+"\n"+expectedTaskVersion+"\n"+grant.getGrantId()).sha256();
                 if (!grants.revoke(tenant,client,owner,taskId,grant.getGrantId(),grant.getGrantVersion(),
                         "cancel_"+hash,hash,Math.max(now,grant.getCreatedAt()))) throw error(VERSION_CONFLICT);
             }
@@ -228,6 +232,6 @@ public class AgentTaskCancellationServiceImpl implements AgentTaskCancellationSe
                 && s.chars().noneMatch(Character::isISOControl);
     }
     private static AgentTaskStateException error(AgentTaskStateException.Reason reason) {
-        return new AgentTaskStateException(reason,"Initial task cancellation is unavailable for this input or state");
+        return new AgentTaskStateException(reason,"Task cancellation is unavailable for this input or state");
     }
 }

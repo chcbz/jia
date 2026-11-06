@@ -145,6 +145,15 @@ class TaskExecutionCancellationMySqlTest {
         assertEquals("RESERVED",jdbc.queryForObject("SELECT state FROM agent_task_provider_cost_consent WHERE consent_id='unused'",String.class));
         verifyNoInteractions(events);
     }
+    @Test void configuredNonzeroTenantCanCancelWithoutTouchingDefaultTenant() {
+        consent("default-tenant","INITIAL_ASSIGN_AND_START","ISSUED");
+        consent("configured-tenant","ORDINARY_ACTION","RESERVED");
+        jdbc.update("UPDATE agent_task_provider_cost_consent SET tenant_id='1' WHERE consent_id='configured-tenant'");
+        tx.executeWithoutResult(s->consents.cancelForTask(
+                new cn.jia.agent.service.AgentTaskProviderCostConsentService.Scope("1","client","owner"),"task"));
+        assertEquals("REVOKED",jdbc.queryForObject("SELECT state FROM agent_task_provider_cost_consent WHERE consent_id='configured-tenant'",String.class));
+        assertEquals("ISSUED",jdbc.queryForObject("SELECT state FROM agent_task_provider_cost_consent WHERE consent_id='default-tenant'",String.class));
+    }
     @Test void consentCancellationRequiresOuterTransactionAndExactOwnerTask() {
         consent("unused","INITIAL_ASSIGN_AND_START","ISSUED");
         assertThrows(org.springframework.transaction.IllegalTransactionStateException.class,this::cancelConsents);

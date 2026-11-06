@@ -13,7 +13,5 @@ public interface AgentTaskCancellationDao {
     int cancelUnadmittedBootstrap(String tenantId, String clientId, String ownerJiacn,
             String taskId, long id, long version, long now);
     boolean hasMoneyFacts(String tenantId, String clientId, String ownerJiacn, String taskId);
-    boolean hasExecutionFacts(String tenantId, String clientId, String ownerJiacn, String taskId);
-    boolean hasCommandFacts(String tenantId, String clientId, String ownerJiacn, String taskId);
     int releaseTaskOccupation(String tenantId, String clientId, String ownerJiacn, String taskId, long now);
 }

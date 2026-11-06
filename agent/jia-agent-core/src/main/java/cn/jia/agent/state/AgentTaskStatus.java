@@ -41,7 +41,8 @@ public enum AgentTaskStatus {
             case RUNNING -> EnumSet.of(REVIEWING, BLOCKED, FAILED, CANCELLED).contains(target);
             case BLOCKED -> EnumSet.of(RUNNING, FAILED, CANCELLED).contains(target);
             case REVIEWING -> EnumSet.of(RUNNING, COMPLETED, FAILED, CANCELLED).contains(target);
-            case COMPLETED, FAILED, CANCELLED -> target == ARCHIVED;
+            case FAILED -> target == CANCELLED || target == ARCHIVED;
+            case COMPLETED, CANCELLED -> target == ARCHIVED;
             case ARCHIVED -> false;
         };
     }

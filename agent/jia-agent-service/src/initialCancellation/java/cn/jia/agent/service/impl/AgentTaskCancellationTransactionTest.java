@@ -106,7 +106,11 @@ class AgentTaskCancellationTransactionTest {
         tx=new AgentTaskMutationTransactionImpl(roots,new DataSourceTransactionManager(ds));
         states=new AgentTaskStateServiceImpl(roots,members,items,tx,events);
         var billing=mock(TaskBillingService.class);
-        service=new AgentTaskCancellationServiceImpl(tx,states,items,grants,dao,billing);
+        service=new AgentTaskCancellationServiceImpl(tx,states,items,grants,dao,billing,
+                mock(cn.jia.agent.service.TaskExecutionCancellationService.class),
+                mock(cn.jia.chat.service.TaskDiscussionCancellation.class),
+                mock(cn.jia.agent.service.AgentWorkItemLeaseService.class),
+                mock(cn.jia.agent.service.AgentTaskProviderCostConsentService.class));
     }
     AgentTaskMetaEntity readRoot(String owner,String task,boolean lock) {
         var rows=jdbc.query("SELECT * FROM root WHERE owner=? AND task_id=?"+(lock ? " FOR UPDATE" : ""),(rs,n) -> {

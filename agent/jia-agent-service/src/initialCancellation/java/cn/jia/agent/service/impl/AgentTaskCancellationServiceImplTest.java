@@ -23,6 +23,10 @@ class AgentTaskCancellationServiceImplTest {
     AgentTaskCancellationDao dao;
     AgentTaskCancellationServiceImpl service;
     TaskBillingService billing;
+    TaskExecutionCancellationService executions=mock(TaskExecutionCancellationService.class);
+    cn.jia.chat.service.TaskDiscussionCancellation discussions=mock(cn.jia.chat.service.TaskDiscussionCancellation.class);
+    AgentWorkItemLeaseService leases=mock(AgentWorkItemLeaseService.class);
+    AgentTaskProviderCostConsentService consents=mock(AgentTaskProviderCostConsentService.class);
 
     @BeforeEach void setup() {
         root=new AgentTaskMetaEntity().setTaskId("417").setOwnerJiacn("owner").setRewardStatus("assigned")
@@ -48,7 +52,8 @@ class AgentTaskCancellationServiceImplTest {
             var state=new AgentTaskStateDTO(); state.setTaskId("417"); state.setStatus("cancelled"); state.setVersion(2L);
             return state;
         });
-        service=new AgentTaskCancellationServiceImpl(tx,states,items,grants,dao,billing);
+        service=new AgentTaskCancellationServiceImpl(tx,states,items,grants,dao,billing,
+                executions, discussions, leases, consents);
     }
     @Test void assignedCancellationReleasesInRootTransactionBeforeStateWrites() {
         cancel();
@@ -124,8 +129,8 @@ class AgentTaskCancellationServiceImplTest {
                 startsWith("cancel_"),matches("[0-9a-f]{64}"),anyLong());
         verify(dao).releaseTaskOccupation(eq("0"),eq("client"),eq("owner"),eq("417"),anyLong());
     }
-    @ParameterizedTest(name="{displayName} [{index}] {argumentsWithNames}") @ValueSource(strings={"open","planning","assigned"})
-    void allInitialRootStates(String status) { root.setRewardStatus(status); assertEquals("cancelled",cancel().status()); }
+    @ParameterizedTest(name="{displayName} [{index}] {argumentsWithNames}") @ValueSource(strings={"open","planning","assigned","running","reviewing","blocked","failed"})
+    void allCancellableRootStates(String status) { root.setRewardStatus(status); assertEquals("cancelled",cancel().status()); }
     @Test void staleVersionBeforeAnyWrite() {
         root.setTaskVersion(2L);
         assertEquals(AgentTaskStateException.Reason.VERSION_CONFLICT,assertThrows(AgentTaskStateException.class,this::cancel).getReason());
@@ -149,49 +154,51 @@ class AgentTaskCancellationServiceImplTest {
                 () -> service.cancel("0","client","foreign","actor","417",1));
         verifyNoInteractions(dao,items,states,grants);
     }
-    @ParameterizedTest(name="{displayName} [{index}] {argumentsWithNames}") @ValueSource(strings={"running","reviewing","blocked","completed","failed","archived","Assigned","?"})
+    @ParameterizedTest(name="{displayName} [{index}] {argumentsWithNames}") @ValueSource(strings={"completed","archived","Assigned","?"})
     void unsupportedOrUnknownRoot(String status) { root.setRewardStatus(status); assertThrows(AgentTaskStateException.class,this::cancel); noWrites(); }
-    @Test void startedAssignedRootRejected() { root.setStartedAt(1L); assertThrows(AgentTaskStateException.class,this::cancel); noWrites(); }
+    @Test void startedRootPreservesItsStartFactOnCancel() { root.setStartedAt(1L); assertEquals("cancelled",cancel().status()); assertEquals(1L,root.getStartedAt()); }
     @Test void ordinaryRewardAndFundingFactsBothRejected() {
         root.setReward(1); assertThrows(AgentTaskStateException.class,this::cancel); noWrites();
         root.setReward(null); when(dao.hasMoneyFacts("0","client","owner","417")).thenReturn(true);
         assertThrows(AgentTaskStateException.class,this::cancel); noWrites();
     }
-    @ParameterizedTest(name="{displayName} [{index}] {argumentsWithNames}") @ValueSource(strings={"claimed","running","submitted","blocked","completed","failed","READY","?"})
-    void unsafeChildStateRejected(String status) {
+    @ParameterizedTest @ValueSource(strings={"READY","?"})
+    void unknownChildStateRejected(String status) {
         when(items.listByTaskForUpdate("0","client","owner","417",501)).thenReturn(List.of(item("w",status)));
         assertThrows(AgentTaskStateException.class,this::cancel); noWrites();
     }
-    @Test void attemptsOrLeaseOrSubmittedEvidenceEvenOnReadyRejected() {
-        for (var row:List.of(item("w","ready").setAttemptCount(1),item("w","ready").setLeaseToken("expired"),
-                item("w","ready").setLeaseUntil(0L),item("w","ready").setSubmittedAt(1L),
-                item("w","ready").setResultArtifactId("artifact"))) {
-            when(items.listByTaskForUpdate("0","client","owner","417",501)).thenReturn(List.of(row));
-            assertThrows(AgentTaskStateException.class,this::cancel); noWrites();
-        }
+    @ParameterizedTest @ValueSource(strings={"claimed","running"})
+    void leasedWorkUsesLeaseOwnerServiceNotGenericStateTransition(String status) {
+        when(items.listByTaskForUpdate("0","client","owner","417",501)).thenReturn(List.of(item("w",status)));
+        cancel(); verify(leases).cancelForTask("0","client","owner","417","w",0L);
+        verify(states,never()).transitionWorkItem(anyString(),anyString(),anyString(),anyString(),any());
     }
-    @Test void memberStartedOrWorkingIsNotCancelled() {
-        when(dao.lockMembers("0","client","owner","417")).thenReturn(List.of(member("a","accepted").setStartedAt(1L)));
-        assertThrows(AgentTaskStateException.class,this::cancel); noWrites();
-        when(dao.lockMembers("0","client","owner","417")).thenReturn(List.of(member("a","working")));
-        assertThrows(AgentTaskStateException.class,this::cancel); noWrites();
+    @ParameterizedTest @ValueSource(strings={"pending","ready","submitted","blocked"})
+    void otherNonterminalWorkUsesExistingStateService(String status) {
+        when(items.listByTaskForUpdate("0","client","owner","417",501)).thenReturn(List.of(item("w",status)));
+        cancel(); verify(states).transitionWorkItem(eq("0"),eq("client"),eq("owner"),eq("w"),argThat(c->"cancelled".equals(c.getTargetStatus())));
+        verifyNoInteractions(leases);
     }
-    @ParameterizedTest(name="{displayName} [{index}] {argumentsWithNames}") @ValueSource(strings={"working","blocked","done","failed"})
-    void workedMemberStatesRejectEvenWithoutStartedTimestamp(String status) {
-        when(dao.lockMembers("0","client","owner","417")).thenReturn(List.of(member("a",status)));
-        assertThrows(AgentTaskStateException.class,this::cancel); noWrites();
+    @ParameterizedTest @ValueSource(strings={"completed","failed","cancelled"})
+    void terminalWorkAndArtifactsArePreserved(String status) {
+        var row=item("w",status).setAttemptCount(3).setSubmittedAt(1L).setCompletedAt(2L).setResultArtifactId("saved-artifact");
+        when(items.listByTaskForUpdate("0","client","owner","417",501)).thenReturn(List.of(row));
+        cancel(); assertEquals(status,row.getStatus()); assertEquals("saved-artifact",row.getResultArtifactId());
+        verifyNoInteractions(leases); verify(states,never()).transitionWorkItem(anyString(),anyString(),anyString(),anyString(),any());
     }
-    @ParameterizedTest(name="{displayName} [{index}] {argumentsWithNames}") @ValueSource(strings={"invited","accepted"})
-    void nonterminalCompletedClockIsStillUncertainAndRejected(String status) {
-        when(dao.lockMembers("0","client","owner","417"))
-                .thenReturn(List.of(member("a",status).setCompletedAt(1L)));
-        assertThrows(AgentTaskStateException.class,this::cancel); noWrites();
+    @ParameterizedTest @ValueSource(strings={"accepted","working","blocked"})
+    void activeMemberExitsWithoutErasingStartHistory(String status) {
+        var row=member("a",status).setStartedAt(1L);
+        when(dao.lockMembers("0","client","owner","417")).thenReturn(List.of(row));
+        cancel(); verify(states).transitionMember(eq("0"),eq("client"),eq("owner"),eq("417"),eq("a"),argThat(c->"left".equals(c.getTargetStatus())));
+        assertEquals(1L,row.getStartedAt());
     }
-    @ParameterizedTest(name="{displayName} [{index}] {argumentsWithNames}") @ValueSource(strings={"left","rejected"})
-    void memberExitClockDoesNotHideActualStartEvidence(String status) {
-        when(dao.lockMembers("0","client","owner","417"))
-                .thenReturn(List.of(member("a",status).setStartedAt(1L).setCompletedAt(2L)));
-        assertThrows(AgentTaskStateException.class,this::cancel); noWrites();
+    @ParameterizedTest @ValueSource(strings={"left","rejected","done","failed"})
+    void terminalMemberHistoryIsNotRewritten(String status) {
+        var row=member("a",status).setStartedAt(1L).setCompletedAt(2L);
+        when(dao.lockMembers("0","client","owner","417")).thenReturn(List.of(row));
+        cancel(); verify(states,never()).transitionMember(anyString(),anyString(),anyString(),anyString(),anyString(),any());
+        assertEquals(status,row.getMemberStatus()); assertEquals(2L,row.getCompletedAt());
     }
     @Test void completeGraphOverflowAndForeignScopeRejected() {
         when(items.listByTaskForUpdate("0","client","owner","417",501)).thenReturn(Collections.nCopies(501,item("w","ready")));
@@ -199,12 +206,18 @@ class AgentTaskCancellationServiceImplTest {
         when(items.listByTaskForUpdate("0","client","owner","417",501)).thenReturn(List.of(item("w","ready").setOwnerJiacn("foreign")));
         assertThrows(AgentTaskStateException.class,this::cancel); noWrites();
     }
-    @Test void nativeOrChatInflightAndCommandsRejectBeforeMutation() {
-        when(dao.hasExecutionFacts("0","client","owner","417")).thenReturn(true);
-        assertThrows(AgentTaskStateException.class,this::cancel); noWrites();
-        when(dao.hasExecutionFacts("0","client","owner","417")).thenReturn(false);
-        when(dao.hasCommandFacts("0","client","owner","417")).thenReturn(true);
-        assertThrows(AgentTaskStateException.class,this::cancel); noWrites();
+    @Test void closesExecutionAndConsentBeforeDiscussionAndWalletWithinRootOperation() {
+        cancel(); var order=inOrder(executions,consents,discussions,billing,states);
+        order.verify(executions).cancelTaskExecutions("0","client","owner","417");
+        order.verify(consents).cancelForTask(new AgentTaskProviderCostConsentService.Scope("0","client","owner"),"417");
+        order.verify(discussions).cancelTaskDiscussions("0","client","owner","417");
+        order.verify(billing).release(any(),eq(true));
+        order.verify(states).transitionMember(anyString(),anyString(),anyString(),anyString(),anyString(),any());
+    }
+    @Test void shutdownFailureDoesNotProceedToMoneyOrBusinessStateWrites() {
+        doThrow(new IllegalStateException("discussion shutdown failed")).when(discussions).cancelTaskDiscussions(anyString(),anyString(),anyString(),anyString());
+        assertThrows(IllegalStateException.class,this::cancel);
+        verifyNoInteractions(billing,states,grants,leases);
     }
     @Test void retryBootstrapTerminalizesWithoutInventingAttemptAndAdmittedPreserved() {
         when(dao.lockBootstraps("0","client","owner","417")).thenReturn(List.of(bootstrap("RETRY")));
