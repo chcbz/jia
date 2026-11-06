@@ -49,7 +49,8 @@ let browser, ws, server;
     throw Error('missing UI state: ' + description);
   };
   const financial = pathname => ['/economy/wallet', '/economy/ledger', '/economy/events'].includes(pathname) ||
-    pathname.startsWith('/agent/tasks/' + input.taskId + '/deliberation-operations') ||
+    pathname === '/agent/tasks/' + input.taskId + '/assignment-operation' ||
+    pathname === '/agent/tasks/' + input.taskId + '/point-and-deliberate/request' ||
     pathname === '/agent/tasks/' + input.taskId + '/point-and-deliberate';
   let walletUrl;
   async function handleRequest(p) {
