@@ -7,8 +7,8 @@ import lombok.experimental.Accessors;
 @Data
 @Accessors(chain = true)
 public class EconomyWalletSnapshotRow {
-    private Long availableMicro;
-    private Long heldMicro;
-    private Long minimumHeldComponentMicro;
+    private Long availableWen;
+    private Long heldWen;
+    private Long minimumHeldComponentWen;
     private Long version;
 }

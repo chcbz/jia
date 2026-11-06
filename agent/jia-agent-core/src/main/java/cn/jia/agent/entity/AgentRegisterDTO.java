@@ -12,4 +12,6 @@ public class AgentRegisterDTO implements Serializable {
 
     private String agentId;
     private String endpoint;
+    /** Latest reported default execution model; null means not reported, not free. */
+    private String executionModel;
 }

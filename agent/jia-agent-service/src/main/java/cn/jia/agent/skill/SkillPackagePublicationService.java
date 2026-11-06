@@ -19,7 +19,7 @@ import static cn.jia.agent.skill.SkillMarketplaceException.require;
 @Service
 public final class SkillPackagePublicationService {
     public record Publish(String productId,String productVersionId,String name,String description,String skillKey,
-            String skillVersion,long priceMicro,String deploymentRestriction,String approvedPermissionsManifest,
+            String skillVersion,long priceWen,String deploymentRestriction,String approvedPermissionsManifest,
             String packageSha256,String manifestSha256,long expectedProductVersion,String coveredUpgradeFromProductVersionId) { }
     public record Receipt(String productId,String productVersionId,long productVersion,String packageSha256,
             String manifestSha256,String disposition,String coveredUpgradeFromProductVersionId) { }
@@ -49,7 +49,7 @@ public final class SkillPackagePublicationService {
         byte[] digest=SkillPackageStore.sha256(archive);
         require(command.packageSha256().equals(HexFormat.of().formatHex(digest)),409,"SKILL_PACKAGE_CHANGED");
         byte[] permissions=SkillPackageStore.sha256(command.approvedPermissionsManifest().getBytes(StandardCharsets.UTF_8));
-        var product=new PlatformSkillProduct(command.productId(),command.productVersionId(),command.skillKey(),command.skillVersion(),command.name(),command.description(),command.priceMicro(),command.deploymentRestriction(),null,digest,archive.length,command.approvedPermissionsManifest(),permissions);
+        var product=new PlatformSkillProduct(command.productId(),command.productVersionId(),command.skillKey(),command.skillVersion(),command.name(),command.description(),command.priceWen(),command.deploymentRestriction(),null,digest,archive.length,command.approvedPermissionsManifest(),permissions);
         var prepared=new PlatformSkillPackage(product,archive.clone());var store=packages.getIfUnique();require(store!=null,503,"SKILL_PACKAGE_UNAVAILABLE");
         var manifest=store.manifest(prepared);
         require(Objects.equals(command.manifestSha256(),manifest==null?null:manifest.manifestSha256()),409,"SKILL_MANIFEST_CHANGED");
@@ -92,7 +92,7 @@ public final class SkillPackagePublicationService {
         require(path.isEmpty()||selected!=null,404,"RESOURCE_NOT_FOUND");
         return Map.of("productVersionId",productVersionId,"packageSha256",HexFormat.of().formatHex(version.getPackageSha256()),
                 "skillKey",version.getSkillKey(),"skillVersion",version.getSkillVersion(),
-                "priceMicro",Long.toString(version.getPriceMicro()),"approvedPermissionsManifest",version.getApprovedPermissionsManifest(),
+                "priceWen",Long.toString(version.getPriceWen()),"approvedPermissionsManifest",version.getApprovedPermissionsManifest(),
                 "data",path.isEmpty()?files:selected);
     }
     public List<ProductView> listProducts(Scope actor,Grant grant,int offset,int limit) {
@@ -168,7 +168,7 @@ public final class SkillPackagePublicationService {
         if(existing!=null){require(matches(a,c,existing,digest,permissions,byteLength)&&c.productVersionId().equals(product.getCurrentProductVersionId())&&"PUBLISHED".equals(product.getStatus()),409,"SKILL_VERSION_IMMUTABLE");coverUpgrade(a,c,existing);return receipt(c,product.getVersion(),"RECORDED");}
         require(product.getVersion()!=null&&(c.expectedProductVersion()==0&&product.getVersion()==1||c.expectedProductVersion()==product.getVersion()),409,"SKILL_PRODUCT_CHANGED");
         long sequence=1;if(product.getCurrentProductVersionId()!=null){var previous=market.selectApprovedProductVersionForUpdate(a.tenantId(),a.clientId(),product.getCurrentProductVersionId());require(previous!=null&&a.tenantId().equals(previous.getTenantId())&&a.clientId().equals(previous.getClientId())&&c.productId().equals(previous.getProductId())&&c.skillKey().equals(previous.getSkillKey())&&previous.getVersionSequence()!=null,409,"SKILL_PRODUCT_CHANGED");sequence=Math.addExact(previous.getVersionSequence(),1L);}
-        var version=new SkillProductVersionEntity().setProductVersionId(c.productVersionId()).setProductId(c.productId()).setVersionSequence(sequence).setSkillKey(c.skillKey()).setSkillVersion(c.skillVersion()).setPriceMicro(c.priceMicro()).setPackageSha256(digest).setPackageSize(byteLength);
+        var version=new SkillProductVersionEntity().setProductVersionId(c.productVersionId()).setProductId(c.productId()).setVersionSequence(sequence).setSkillKey(c.skillKey()).setSkillVersion(c.skillVersion()).setPriceWen(c.priceWen()).setPackageSha256(digest).setPackageSize(byteLength);
         version.setApprovedPermissionsManifest(c.approvedPermissionsManifest()).setApprovedPermissionsSha256(permissions).setDeploymentRestriction(c.deploymentRestriction()).setReviewStatus("APPROVED").setTenantId(a.tenantId()).setClientId(a.clientId()).setCreateTime(now);
         one(market.insertProductVersion(version));long baseVersion=product.getVersion();one(market.publishProductVersion(a.tenantId(),a.clientId(),c.productId(),c.productVersionId(),baseVersion,now));coverUpgrade(a,c,version);return receipt(c,baseVersion+1,"PUBLISHED");
     }
@@ -184,7 +184,7 @@ public final class SkillPackagePublicationService {
         if(policy==null)one(market.insertCoveredUpgradePolicy(actor.tenantId(),actor.clientId(),sourceId,command.productVersionId()));
         else require("COVERED".equals(policy),409,"SKILL_UPGRADE_POLICY_CONFLICT");
     }
-    private static boolean matches(Scope a,Publish c,SkillProductVersionEntity v,byte[] hash,byte[] permissions,long byteLength) {return a.tenantId().equals(v.getTenantId())&&a.clientId().equals(v.getClientId())&&c.productId().equals(v.getProductId())&&c.productVersionId().equals(v.getProductVersionId())&&c.skillKey().equals(v.getSkillKey())&&c.skillVersion().equals(v.getSkillVersion())&&Objects.equals(c.priceMicro(),v.getPriceMicro())&&Arrays.equals(hash,v.getPackageSha256())&&Objects.equals(byteLength,v.getPackageSize())&&Arrays.equals(permissions,v.getApprovedPermissionsSha256())&&c.approvedPermissionsManifest().equals(v.getApprovedPermissionsManifest())&&c.deploymentRestriction().equals(v.getDeploymentRestriction())&&"APPROVED".equals(v.getReviewStatus());}
+    private static boolean matches(Scope a,Publish c,SkillProductVersionEntity v,byte[] hash,byte[] permissions,long byteLength) {return a.tenantId().equals(v.getTenantId())&&a.clientId().equals(v.getClientId())&&c.productId().equals(v.getProductId())&&c.productVersionId().equals(v.getProductVersionId())&&c.skillKey().equals(v.getSkillKey())&&c.skillVersion().equals(v.getSkillVersion())&&Objects.equals(c.priceWen(),v.getPriceWen())&&Arrays.equals(hash,v.getPackageSha256())&&Objects.equals(byteLength,v.getPackageSize())&&Arrays.equals(permissions,v.getApprovedPermissionsSha256())&&c.approvedPermissionsManifest().equals(v.getApprovedPermissionsManifest())&&c.deploymentRestriction().equals(v.getDeploymentRestriction())&&"APPROVED".equals(v.getReviewStatus());}
     private static Receipt receipt(Publish c,long version,String disposition){return new Receipt(c.productId(),c.productVersionId(),version,c.packageSha256(),c.manifestSha256(),disposition,c.coveredUpgradeFromProductVersionId());}
     private static void one(int count){require(count==1,409,"SKILL_PRODUCT_CHANGED");}
     private static void validate(Publish c,byte[] archive) {
@@ -192,7 +192,7 @@ public final class SkillPackagePublicationService {
         for(String id:Arrays.asList(c.productId(),c.productVersionId()))require(id!=null&&id.matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}"),400,"BAD_REQUEST");
         require(c.coveredUpgradeFromProductVersionId()==null||c.coveredUpgradeFromProductVersionId().matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}"),400,"BAD_REQUEST");
         for(String id:Arrays.asList(c.skillKey(),c.skillVersion()))require(id!=null&&id.matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,63}"),400,"BAD_REQUEST");
-        require(c.name()!=null&&!c.name().isBlank()&&c.name().length()<=255&&c.description()!=null&&c.description().length()<=4000&&c.priceMicro()>=0&&c.expectedProductVersion()>=0&&c.deploymentRestriction()!=null&&Set.of("NONE","ADMIN_ONLY").contains(c.deploymentRestriction())&&c.packageSha256()!=null&&c.packageSha256().matches("[0-9a-f]{64}")&&(c.manifestSha256()==null||c.manifestSha256().matches("[0-9a-f]{64}")),400,"BAD_REQUEST");
+        require(c.name()!=null&&!c.name().isBlank()&&c.name().length()<=255&&c.description()!=null&&c.description().length()<=4000&&c.priceWen()>=0&&c.expectedProductVersion()>=0&&c.deploymentRestriction()!=null&&Set.of("NONE","ADMIN_ONLY").contains(c.deploymentRestriction())&&c.packageSha256()!=null&&c.packageSha256().matches("[0-9a-f]{64}")&&(c.manifestSha256()==null||c.manifestSha256().matches("[0-9a-f]{64}")),400,"BAD_REQUEST");
         try {SkillMarketplaceHttp.permissions(c.approvedPermissionsManifest());}catch(RuntimeException invalid){throw new SkillMarketplaceException(400,"SKILL_PERMISSIONS_INVALID");}
     }
 }

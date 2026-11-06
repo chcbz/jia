@@ -15,10 +15,10 @@ public final class FundedBountyPreviewPriceBook {
     public static final long CACHED_INPUT_RATE_PER_MILLION = 500_000L;
     public static final long OUTPUT_RATE_PER_MILLION = 6_000_000L;
     public static final long REASONING_RATE_PER_MILLION = 8_000_000L;
-    public static final long FIXED_REQUEST_FEE_MICRO = 1_000_000L;
-    public static final long WORST_RISK_RESERVE_MICRO = 20_000_000L;
+    public static final long FIXED_REQUEST_FEE_WEN = 1_000_000L;
+    public static final long WORST_RISK_RESERVE_WEN = 20_000_000L;
     public static final long FEE_BPS = 300L;
-    public static final long FEE_CAP_MICRO = 100_000_000L;
+    public static final long FEE_CAP_WEN = 100_000_000L;
     public static final long QUOTE_TTL_MILLIS = 300_000L;
 
     public static final TokenClasses ESTIMATED_TOKENS = new TokenClasses(18_000L, 4_000L, 6_000L, 3_000L);

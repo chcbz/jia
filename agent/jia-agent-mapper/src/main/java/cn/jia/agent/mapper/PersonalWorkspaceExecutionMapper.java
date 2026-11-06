@@ -8,6 +8,33 @@ import org.apache.ibatis.annotations.Update;
 
 public interface PersonalWorkspaceExecutionMapper extends BaseMapper<PersonalWorkspaceExecutionEntity> {
     @Select("""
+            SELECT * FROM agent_personal_workspace_execution
+            WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
+              AND task_id=#{taskId} AND execution_mode IN ('TASK','CONVERSATION')
+              AND BINARY tenant_id=BINARY #{tenantId} AND BINARY client_id=BINARY #{clientId}
+              AND BINARY owner_jiacn=BINARY #{ownerJiacn} AND BINARY task_id=BINARY #{taskId}
+              AND execution_state NOT IN ('OUTPUT_COMMITTED','RESULT_COMMITTED','FAILED','INPUTS_REVOKED','CANCELLED')
+            ORDER BY execution_id FOR UPDATE
+            """)
+    java.util.List<PersonalWorkspaceExecutionEntity> lockUnfinishedTaskExecutions(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("taskId") String taskId);
+
+    @Update("""
+            UPDATE agent_personal_workspace_execution SET execution_state='CANCELLED',update_time=#{now}
+            WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
+              AND task_id=#{taskId} AND execution_id=#{executionId} AND execution_state=#{expectedState}
+              AND execution_mode IN ('TASK','CONVERSATION')
+              AND BINARY tenant_id=BINARY #{tenantId} AND BINARY client_id=BINARY #{clientId}
+              AND BINARY owner_jiacn=BINARY #{ownerJiacn} AND BINARY task_id=BINARY #{taskId}
+              AND BINARY execution_id=BINARY #{executionId}
+            """)
+    int cancelLockedTaskExecution(@Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("taskId") String taskId,
+            @Param("executionId") String executionId, @Param("expectedState") String expectedState,
+            @Param("now") long now);
+
+    @Select("""
         SELECT e.* FROM agent_personal_workspace_execution e
         WHERE BINARY e.tenant_id=BINARY #{tenantId} AND BINARY e.client_id=BINARY #{clientId}
           AND BINARY e.target_agent_id=BINARY #{agentId} AND BINARY e.task_id=BINARY #{taskId}
@@ -23,6 +50,33 @@ public interface PersonalWorkspaceExecutionMapper extends BaseMapper<PersonalWor
         @Param("clientId") String clientId,@Param("executorOwner") String executorOwner,
         @Param("agentId") String agentId,@Param("taskId") String taskId,@Param("runId") String runId);
 
+
+    /** Cost evidence only: immutable original grant identity survives cancellation/version changes.
+     * The authenticated Runtime must still have the original executor binding. No execution,
+     * task-state, grant reactivation or wallet authority is granted by this read.
+     */
+    @Select("""
+        SELECT e.* FROM agent_personal_workspace_execution e
+        WHERE e.tenant_id=#{tenantId} AND e.client_id=#{clientId} AND e.execution_id=#{executionId}
+          AND BINARY e.tenant_id=BINARY #{tenantId} AND BINARY e.client_id=BINARY #{clientId}
+          AND BINARY e.execution_id=BINARY #{executionId} AND BINARY e.task_id=BINARY #{taskId}
+          AND BINARY e.run_id=BINARY #{runId} AND BINARY e.target_agent_id=BINARY #{agentId}
+          AND e.execution_mode='CONVERSATION' AND e.execution_protocol_version=5
+          AND EXISTS (
+            SELECT 1 FROM agent_task_execution_grant g
+            JOIN agent_runtime r ON r.agent_id=g.target_agent_id AND r.binding_id=g.executor_binding_id
+              AND BINARY r.tenant_id=BINARY g.tenant_id AND BINARY r.client_id=BINARY g.client_id
+              AND BINARY r.owner_jiacn=BINARY g.executor_owner_jiacn
+              AND BINARY r.agent_id=BINARY g.target_agent_id
+            WHERE BINARY g.tenant_id=BINARY e.tenant_id AND BINARY g.client_id=BINARY e.client_id
+              AND BINARY g.owner_jiacn=BINARY e.owner_jiacn AND BINARY g.task_id=BINARY e.task_id
+              AND BINARY g.grant_id=BINARY e.task_grant_id AND BINARY g.target_agent_id=BINARY e.target_agent_id
+              AND BINARY g.executor_owner_jiacn=BINARY #{executorOwner})
+        """)
+    PersonalWorkspaceExecutionEntity findForNativeUsageCost(@Param("tenantId") String tenantId,
+        @Param("clientId") String clientId, @Param("executorOwner") String executorOwner,
+        @Param("agentId") String agentId, @Param("taskId") String taskId,
+        @Param("runId") String runId, @Param("executionId") String executionId);
 
     @Select("""
             SELECT COUNT(*)

@@ -292,9 +292,7 @@ public class AgentProtocolMessageNormalizer {
             case "agent.message", "agent.reply", "agent_message" -> AgentProtocolConstants.TYPE_CHAT_MESSAGE;
             case "agent.message.delta", "agent_message_delta" -> AgentProtocolConstants.TYPE_CHAT_MESSAGE_DELTA;
             case "task_assign" -> AgentProtocolConstants.TYPE_TASK_ASSIGN_LEGACY;
-            case AgentProtocolConstants.LEGACY_TASK_REPORT,
-                 AgentProtocolConstants.LEGACY_TASK_REPORT_ALIAS,
-                 AgentProtocolConstants.LEGACY_CODEX_RESULT,
+            case AgentProtocolConstants.LEGACY_CODEX_RESULT,
                  "task.result" -> AgentProtocolConstants.TYPE_WORK_RESULT;
             case "progress.report", "task.progress" -> AgentProtocolConstants.TYPE_WORK_PROGRESS;
             case AgentProtocolConstants.LEGACY_AGENT_ACTION -> AgentProtocolConstants.TYPE_COMMAND_DISPATCH;
@@ -457,10 +455,6 @@ public class AgentProtocolMessageNormalizer {
             return AgentProtocolConstants.isExecutionTrigger(canonicalType());
         }
 
-        public boolean legacyTaskReport() {
-            return AgentProtocolConstants.LEGACY_TASK_REPORT.equals(originalType)
-                    || AgentProtocolConstants.LEGACY_TASK_REPORT_ALIAS.equals(originalType);
-        }
     }
 
     public static class AgentProtocolException extends RuntimeException {

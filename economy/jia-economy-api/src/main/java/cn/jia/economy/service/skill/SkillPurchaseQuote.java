@@ -16,7 +16,7 @@ public class SkillPurchaseQuote {
     private String productVersionId;
     private String targetAgentId;
     private Long expectedAgentVersion;
-    private Long expectedPriceMicro;
+    private Long expectedPriceWen;
     private String approvedPermissionsManifest;
     private byte[] approvedPermissionsSha256;
     private String deploymentRestriction;

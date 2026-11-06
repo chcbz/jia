@@ -50,7 +50,7 @@
           "approvedPermissionsSha256": "f4016e9bd4924086fb2feec1d52b3d97575547260f13a34b8e6a94c91cab1944",
           "price": {
             "amountMinor": "0",
-            "currency": "SILVER"
+            "currency": "WEN"
           },
           "coverage": "ENTITLEMENT",
           "entitlementId": "se_demo",
@@ -82,7 +82,7 @@
           "quoteId": "sq_demo",
           "expectedPrice": {
             "amountMinor": "0",
-            "currency": "SILVER"
+            "currency": "WEN"
           }
         }
       },
@@ -135,7 +135,7 @@
           "fundingStatus": "NONE",
           "price": {
             "amountMinor": "0",
-            "currency": "SILVER"
+            "currency": "WEN"
           },
           "actorLabel": "我",
           "createdAt": 1792756800000,
@@ -189,7 +189,7 @@
           "approvedPermissionsSha256": "f4016e9bd4924086fb2feec1d52b3d97575547260f13a34b8e6a94c91cab1944",
           "price": {
             "amountMinor": "0",
-            "currency": "SILVER"
+            "currency": "WEN"
           },
           "coverage": "PURCHASE",
           "entitlementId": null,
@@ -221,7 +221,7 @@
           "quoteId": "sq_demo",
           "expectedPrice": {
             "amountMinor": "0",
-            "currency": "SILVER"
+            "currency": "WEN"
           }
         }
       },
@@ -263,7 +263,7 @@
           "fundingStatus": "NONE",
           "price": {
             "amountMinor": "0",
-            "currency": "SILVER"
+            "currency": "WEN"
           },
           "actorLabel": "我",
           "createdAt": 1792756800000,
@@ -466,7 +466,7 @@
               "fundingStatus": "NONE",
               "price": {
                 "amountMinor": "0",
-                "currency": "SILVER"
+                "currency": "WEN"
               },
               "actorLabel": "我",
               "createdAt": 1792756800000,
@@ -1478,7 +1478,7 @@
           "fundingStatus": "NONE",
           "price": {
             "amountMinor": "0",
-            "currency": "SILVER"
+            "currency": "WEN"
           },
           "actorLabel": "我",
           "createdAt": 1792756800000,
@@ -1510,7 +1510,7 @@
           "quoteId": "sq_demo",
           "expectedPrice": {
             "amountMinor": "0",
-            "currency": "SILVER"
+            "currency": "WEN"
           }
         }
       },
@@ -1536,7 +1536,7 @@
           "quoteId": "sq_demo",
           "expectedPrice": {
             "amountMinor": "0",
-            "currency": "SILVER"
+            "currency": "WEN"
           }
         }
       },
@@ -1562,7 +1562,7 @@
           "quoteId": "sq_demo",
           "expectedPrice": {
             "amountMinor": "0",
-            "currency": "SILVER"
+            "currency": "WEN"
           },
           "ownerJiacn": "other"
         }
@@ -1591,7 +1591,7 @@
           "quoteId": "sq_demo",
           "expectedPrice": {
             "amountMinor": "0",
-            "currency": "SILVER"
+            "currency": "WEN"
           }
         }
       },
@@ -1617,7 +1617,7 @@
           "quoteId": "sq_demo",
           "expectedPrice": {
             "amountMinor": "0",
-            "currency": "SILVER"
+            "currency": "WEN"
           }
         }
       },
@@ -1643,7 +1643,7 @@
           "quoteId": "sq_demo",
           "expectedPrice": {
             "amountMinor": "0",
-            "currency": "SILVER"
+            "currency": "WEN"
           }
         }
       },
@@ -1669,7 +1669,7 @@
           "quoteId": "sq_demo",
           "expectedPrice": {
             "amountMinor": "1.5",
-            "currency": "SILVER"
+            "currency": "WEN"
           }
         }
       },
@@ -1695,7 +1695,7 @@
           "quoteId": "sq_demo",
           "expectedPrice": {
             "amountMinor": "9223372036854775808",
-            "currency": "SILVER"
+            "currency": "WEN"
           }
         }
       },
@@ -1974,7 +1974,7 @@
           "fundingStatus": "NONE",
           "price": {
             "amountMinor": "0",
-            "currency": "SILVER"
+            "currency": "WEN"
           },
           "actorLabel": "我",
           "createdAt": 1792756800000,
@@ -2149,7 +2149,7 @@
           "fundingStatus": "NONE",
           "price": {
             "amountMinor": "0",
-            "currency": "SILVER"
+            "currency": "WEN"
           },
           "actorLabel": "我",
           "createdAt": 1792756800000,
@@ -2180,7 +2180,7 @@
           "approvedPermissionsSha256": "f4016e9bd4924086fb2feec1d52b3d97575547260f13a34b8e6a94c91cab1944",
           "price": {
             "amountMinor": "0",
-            "currency": "SILVER"
+            "currency": "WEN"
           },
           "coverage": "ENTITLEMENT",
           "entitlementId": "se_demo",
@@ -2232,7 +2232,7 @@
           "fundingStatus": "REFUNDED",
           "price": {
             "amountMinor": "0",
-            "currency": "SILVER"
+            "currency": "WEN"
           },
           "actorLabel": "我",
           "createdAt": 1792756800000,
@@ -2433,12 +2433,12 @@
           "quoteId": "sq_demo",
           "expectedPrice": {
             "amountMinor": "0",
-            "currency": "SILVER"
+            "currency": "WEN"
           }
         }
       },
-      "canonicalUtf8": "{\"data\":{\"action\":\"UPGRADE\",\"approvedPermissions\":[\"READ_AUTHORIZED_INPUT\",\"WRITE_TASK_RESULT\"],\"expectedAgentVersion\":\"12\",\"expectedPrice\":{\"amountMinor\":\"0\",\"currency\":\"SILVER\"},\"expectedSkillRevision\":\"7\",\"quoteId\":\"sq_demo\",\"skillKey\":\"image-edit\",\"sourceSkillInstallationId\":\"si_old\",\"targetProductVersionId\":\"spv_new\"},\"method\":\"POST\",\"path\":\"/agent/agt_demo/skill-changes\"}",
-      "sha256": "9e47aa8c2ddd81cafbb933c8f7eae624e0adf6d6f9064b6814e868ab4e3e465a"
+      "canonicalUtf8": "{\"data\":{\"action\":\"UPGRADE\",\"approvedPermissions\":[\"READ_AUTHORIZED_INPUT\",\"WRITE_TASK_RESULT\"],\"expectedAgentVersion\":\"12\",\"expectedPrice\":{\"amountMinor\":\"0\",\"currency\":\"WEN\"},\"expectedSkillRevision\":\"7\",\"quoteId\":\"sq_demo\",\"skillKey\":\"image-edit\",\"sourceSkillInstallationId\":\"si_old\",\"targetProductVersionId\":\"spv_new\"},\"method\":\"POST\",\"path\":\"/agent/agt_demo/skill-changes\"}",
+      "sha256": "526008a0e27763650cc43c0e4367488b463596f64118c995bc0149ede5ce5619"
     },
     {
       "domain": "cyf.skill.canonical.test.v1",

@@ -22,7 +22,7 @@ class SkillPackagePublicationControllerTest {
     private static String metadata(String extra) {
         return """
             {"productId":"product","productVersionId":"target","name":"Images","description":"images",
-             "skillKey":"image-generate","skillVersion":"1.3.0","priceMicro":"5000000","deploymentRestriction":"NONE",
+             "skillKey":"image-generate","skillVersion":"1.3.0","priceWen":"5000000","deploymentRestriction":"NONE",
              "approvedPermissionsManifest":"[]","packageSha256":"%s","manifestSha256":null,"expectedProductVersion":"2",
              "positionAuthority":{"appointmentId":"appointment","appointmentRevision":"1","positionRevision":"2","agentId":"wuyong","bindingId":"7"}%s}
             """.formatted("a".repeat(64),extra);
@@ -67,7 +67,7 @@ class SkillPackagePublicationControllerTest {
         controller.updateMetadata(actor(false),request,body);
         verify(service).updateMetadata(any(),argThat(g->g.publish()&&g.agentId().equals("wuyong")),
                 argThat(c->c.name().equals("图片生成")&&c.expectedProductVersion()==2));
-        assertThrows(IllegalArgumentException.class,()->controller.updateMetadata(actor(false),request,body.replace("\"name\":","\"priceMicro\":\"0\",\"name\":")));
+        assertThrows(IllegalArgumentException.class,()->controller.updateMetadata(actor(false),request,body.replace("\"name\":","\"priceWen\":\"0\",\"name\":")));
         assertThrows(IllegalArgumentException.class,()->controller.updateMetadata(actor(true),request,body.replace("positionAuthority","legacyGrant")));
         verifyNoMoreInteractions(service);
     }

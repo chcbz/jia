@@ -192,14 +192,14 @@ public class SkillMarketplaceRealTransactionTest {
                     .setName(p.name()).setDescription(p.description()).setStatus("DRAFT").setVersion(1L)
                     .setTenantId(ACTOR.tenantId()).setClientId(ACTOR.clientId()).setCreateTime(1L).setUpdateTime(1L));
             market.insertProductVersion(new SkillProductVersionEntity().setProductVersionId(p.productVersionId()).setProductId(p.productId())
-                    .setVersionSequence(1L).setSkillKey(p.skillKey()).setSkillVersion(p.skillVersion()).setPriceMicro(p.priceMicro())
+                    .setVersionSequence(1L).setSkillKey(p.skillKey()).setSkillVersion(p.skillVersion()).setPriceWen(p.priceWen())
                     .setPackageSha256(p.packageSha256()).setPackageSize(p.packageSize()).setApprovedPermissionsManifest(p.approvedPermissionsManifest())
                     .setApprovedPermissionsSha256(p.approvedPermissionsSha256()).setDeploymentRestriction(p.deploymentRestriction()).setReviewStatus("APPROVED")
                     .setTenantId(ACTOR.tenantId()).setClientId(ACTOR.clientId()).setCreateTime(1L));
             market.publishProductVersion(ACTOR.tenantId(),ACTOR.clientId(),p.productId(),p.productVersionId(),1,2);
         }
         ledger.insertAccountIfAbsent(new EconomyAccountEntity().setAccountId("wallet").setOwnerType("USER").setOwnerId(ACTOR.actorId()).setPurpose("AVAILABLE")
-                .setCurrency("SILVER").setBalanceMicro(100000000L).setAllowNegative(0).setStatus("ACTIVE").setVersion(0L)
+                .setCurrency("WEN").setBalanceWen(100000000L).setAllowNegative(0).setStatus("ACTIVE").setVersion(0L)
                 .setTenantId(ACTOR.tenantId()).setClientId(ACTOR.clientId()).setCreateTime(1L).setUpdateTime(1L));
     }
     @AfterEach protected void tearDown() throws SQLException {
@@ -340,7 +340,7 @@ public class SkillMarketplaceRealTransactionTest {
                 .setName("Dynamic PDF").setDescription("not classpath").setStatus("DRAFT").setVersion(1L)
                 .setTenantId(ACTOR.tenantId()).setClientId(ACTOR.clientId()).setCreateTime(1L).setUpdateTime(1L));
         market.insertProductVersion(new SkillProductVersionEntity().setProductVersionId("spv_dynamic_pdf_1").setProductId("sp_dynamic_pdf")
-                .setVersionSequence(1L).setSkillKey("pdf-export").setSkillVersion("1.0.0").setPriceMicro(0L)
+                .setVersionSequence(1L).setSkillKey("pdf-export").setSkillVersion("1.0.0").setPriceWen(0L)
                 .setPackageSha256(SkillPackageStore.sha256(packageBytes)).setPackageSize((long)packageBytes.length)
                 .setApprovedPermissionsManifest(seed.approvedPermissionsManifest()).setApprovedPermissionsSha256(seed.approvedPermissionsSha256())
                 .setDeploymentRestriction("NONE").setReviewStatus("APPROVED").setTenantId(ACTOR.tenantId()).setClientId(ACTOR.clientId()).setCreateTime(1L));
@@ -385,7 +385,7 @@ public class SkillMarketplaceRealTransactionTest {
         var success=result(i,"SUCCEEDED",null);results.accept(proof(),success);
         results.accept(proof(),success);
         assertEquals("ACTIVE",service.order(ACTOR,i.getOrderId()).get("status"));assertEquals(70000000L,wallet());
-        assertEquals(2,count("economy_transaction"));assertEquals(0L,jdbc.queryForObject("SELECT SUM(signed_amount_micro) FROM economy_entry",Long.class));
+        assertEquals(2,count("economy_transaction"));assertEquals(0L,jdbc.queryForObject("SELECT SUM(signed_amount_wen) FROM economy_entry",Long.class));
         assertEquals(receipt,service.purchase(ACTOR,idem,body,false));
         assertEquals("ACTIVE",service.entitlements(ACTOR,AGENT).getFirst().get("status"));
         assertThrows(SkillMarketplaceException.class,()->results.packageBytes(proof(),i.getInstallationId()));
@@ -503,10 +503,10 @@ public class SkillMarketplaceRealTransactionTest {
         assertEquals("ACTIVE",o.getStatus());
     }
     @Test void insufficientOrFailedPendingInsertRollsBackFundsCommandVersionAndAllBusinessRows() {
-        var body=purchaseBody("spv_repo_test_1_0_0");jdbc.update("UPDATE economy_account SET balance_micro=1 WHERE account_id='wallet'");
+        var body=purchaseBody("spv_repo_test_1_0_0");jdbc.update("UPDATE economy_account SET balance_wen=1 WHERE account_id='wallet'");
         assertThrows(RuntimeException.class,()->service.purchase(ACTOR,uuid(),body,false));
         assertEquals(1L,wallet());assertEquals(0,count("economy_transaction"));assertEquals(0,count("economy_skill_order"));assertEquals(0,count("agent_outbox_event"));
-        jdbc.update("UPDATE economy_account SET balance_micro=100000000 WHERE account_id='wallet'");
+        jdbc.update("UPDATE economy_account SET balance_wen=100000000 WHERE account_id='wallet'");
         doThrow(new IllegalStateException("fixture pending insert failure")).when(market).insertEntitlement(any());
         assertThrows(RuntimeException.class,()->service.purchase(ACTOR,uuid(),body,false));
         assertEquals(100000000L,wallet());assertEquals(0,count("economy_transaction"));assertEquals(0,count("economy_skill_order"));assertEquals(0,count("agent_command_delivery"));
@@ -685,7 +685,7 @@ public class SkillMarketplaceRealTransactionTest {
         String version=Long.toString(versions.requireOwned(ACTOR,AGENT,null,false));
         var quote=service.quote(ACTOR,uuid(),Map.of("productVersionId",product,"targetAgentId",AGENT,"expectedAgentVersion",version),false);
         return Map.of("quoteId",(String)quote.get("quoteId"),"productVersionId",product,"targetAgentId",AGENT,"expectedAgentVersion",version,
-                "expectedPriceMicro",((cn.jia.economy.common.Money)quote.get("price")).amountMinor(),"approvedPermissions","[]");
+                "expectedPriceWen",((cn.jia.economy.common.Money)quote.get("price")).amountMinor(),"approvedPermissions","[]");
     }
     private SkillInstallationEntity installation() { return app.installation(ACTOR.tenantId(),ACTOR.clientId(),jdbc.queryForObject("SELECT installation_id FROM agent_skill_installation",String.class)); }
     private void sent(SkillInstallationEntity i) { jdbc.update("UPDATE agent_command_delivery SET status='STARTED' WHERE command_id=?",i.getCommandId()); }
@@ -696,7 +696,7 @@ public class SkillMarketplaceRealTransactionTest {
         b.put("status",status);b.put("packageDigest",SkillMarketplaceService.digest(i.getPackageSha256()));b.put("skillKey",i.getSkillKey());b.put("skillVersion",i.getSkillVersion());
         b.put("installedAt",status.equals("SUCCEEDED")?Long.toString(System.currentTimeMillis()):null);b.put("failureCode",failure);return b;
     }
-    private long wallet() { return jdbc.queryForObject("SELECT balance_micro FROM economy_account WHERE account_id='wallet'",Long.class); }
+    private long wallet() { return jdbc.queryForObject("SELECT balance_wen FROM economy_account WHERE account_id='wallet'",Long.class); }
     private int count(String table) { return jdbc.queryForObject("SELECT COUNT(*) FROM "+table,Integer.class); }
     private static String uuid() { return UUID.randomUUID().toString(); }
     private void schema(String resource) throws Exception {

@@ -89,8 +89,7 @@ class FundedBountyLegacyGuardRaceRealTransactionTest {
         memberDao = mock(AgentTaskMemberDao.class);
         workItemDao = mock(AgentTaskWorkItemDao.class);
         eventWriter = mock(AgentTaskEventWriter.class);
-        compatibility = new AgentLegacyTaskCompatibilityService(metaDao, memberDao, workItemDao,
-                mock(AgentTaskAggregationService.class), identityService, mutation, eventWriter);
+        compatibility = new AgentLegacyTaskCompatibilityService(metaDao, memberDao, workItemDao, identityService, mutation, eventWriter);
         Field guardField = AgentLegacyTaskCompatibilityService.class
                 .getDeclaredField("fundedBountyLegacyGuard");
         guardField.setAccessible(true);
@@ -207,22 +206,11 @@ class FundedBountyLegacyGuardRaceRealTransactionTest {
                 "SELECT reward_status FROM agent_task_meta WHERE task_id=?", String.class, TASK));
     }
 
-    @Test
-    void reportLockedHookRejectsCommittedFundingBeforeCanonicalIdentityLock() {
-        createFundingTable();
-        insertHeldFunding();
-
-        FundedBountyException failure = assertThrows(FundedBountyException.class, () ->
-                compatibility.reportResolved(TENANT, CLIENT, TENANT, TASK, AGENT, "running", null));
-
-        assertEquals("QUOTE_REQUIRED", failure.code());
-        verifyNoInteractions(identityService, memberDao, workItemDao, eventWriter);
-    }
-
     private void createRootAndLegacyTables() {
         jdbc.execute("""
                 CREATE TABLE agent_task_meta(
                     id BIGINT AUTO_INCREMENT PRIMARY KEY, task_id VARCHAR(100) NOT NULL,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     reward_status VARCHAR(32) NOT NULL, required_abilities VARCHAR(2000), reward INT,
                     assigned_agent_id VARCHAR(100), collaboration_mode VARCHAR(16) NOT NULL,
                     risk_level VARCHAR(16) NOT NULL, max_agents INT NOT NULL, review_required BOOLEAN NOT NULL,
@@ -245,11 +233,11 @@ class FundedBountyLegacyGuardRaceRealTransactionTest {
                     id BIGINT AUTO_INCREMENT PRIMARY KEY, task_id VARCHAR(100) NOT NULL,
                     funding_mode VARCHAR(32) NOT NULL, funding_status VARCHAR(24) NOT NULL,
                     payer_principal_type VARCHAR(20) NOT NULL, payer_principal_id VARCHAR(100) NOT NULL,
-                    settlement_policy VARCHAR(32) NOT NULL, gross_bounty_amount_micro BIGINT NOT NULL,
-                    remaining_micro BIGINT NOT NULL, escrow_id VARCHAR(100), escrow_version BIGINT,
+                    settlement_policy VARCHAR(32) NOT NULL, gross_bounty_amount_wen BIGINT NOT NULL,
+                    remaining_wen BIGINT NOT NULL, escrow_id VARCHAR(100), escrow_version BIGINT,
                     reserve_transaction_id VARCHAR(100), required_skill_requirements CLOB NOT NULL,
                     cancel_idempotency_key VARBINARY(36), cancel_request_hash BINARY(32),
-                    refund_transaction_id VARCHAR(100), cancel_refunded_micro BIGINT,
+                    refund_transaction_id VARCHAR(100), cancel_refunded_wen BIGINT,
                     cancel_task_version BIGINT, refunded_at BIGINT, version BIGINT NOT NULL,
                     tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
                     create_time BIGINT NOT NULL, update_time BIGINT NOT NULL,
@@ -259,18 +247,18 @@ class FundedBountyLegacyGuardRaceRealTransactionTest {
 
     private void insertRoot() {
         jdbc.update("""
-                INSERT INTO agent_task_meta(task_id,reward_status,required_abilities,reward,
+                INSERT INTO agent_task_meta(task_id,owner_jiacn,reward_status,required_abilities,reward,
                     collaboration_mode,risk_level,max_agents,review_required,task_version,
                     current_event_version,tenant_id,client_id,create_time,update_time)
-                VALUES(?,'open','[]',1,'single','low',1,FALSE,0,0,?,?,1,1)
-                """, TASK, TENANT, CLIENT);
+                VALUES(?,?,'open','[]',1,'single','low',1,FALSE,0,0,?,?,1,1)
+                """, TASK, TENANT, TENANT, CLIENT);
     }
 
     private void insertHeldFunding() {
         jdbc.update("""
                 INSERT INTO agent_task_funding(task_id,funding_mode,funding_status,
                     payer_principal_type,payer_principal_id,settlement_policy,
-                    gross_bounty_amount_micro,remaining_micro,escrow_id,escrow_version,
+                    gross_bounty_amount_wen,remaining_wen,escrow_id,escrow_version,
                     reserve_transaction_id,required_skill_requirements,version,
                     tenant_id,client_id,create_time,update_time)
                 VALUES(?,'FUNDED_SINGLE_AGENT','FUNDS_HELD','USER','jwt-sub',

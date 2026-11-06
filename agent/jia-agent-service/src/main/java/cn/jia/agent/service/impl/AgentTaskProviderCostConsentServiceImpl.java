@@ -149,6 +149,28 @@ public class AgentTaskProviderCostConsentServiceImpl
     }
 
     @Override
+    @Transactional(propagation=org.springframework.transaction.annotation.Propagation.MANDATORY,
+            rollbackFor=Exception.class)
+    public void cancelForTask(Scope scope, String taskId) {
+        long now=System.currentTimeMillis();
+        for (var row:consents.lockUnconsumedForTask(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId)) {
+            long version=row.getVersion();
+            if (version<1 || version==Long.MAX_VALUE) throw failure(Reason.SOURCE_UNAVAILABLE);
+            String digest=sha256("TASK_CANCEL_CONSENT_V1\n"+taskId+"\n"+row.getConsentId()+"\n"+version);
+            row.setRevokeIdempotencyKey("task_cancel_"+digest).setRevokeRequestDigest(digest)
+                    .setRevokedAt(now); row.setUpdateTime(now);
+            String purpose=row.getConsentPurpose();
+            boolean changed;
+            if (purpose==null || "INITIAL_ASSIGN_AND_START".equals(purpose)) changed=consents.revoke(row,version);
+            else if ("FOLLOWUP_EXECUTE".equals(purpose) || "ORDINARY_ACTION".equals(purpose)) changed=consents.revokeFollowup(row,version);
+            else throw failure(Reason.SOURCE_UNAVAILABLE);
+            if (!changed) throw failure(Reason.CONFLICT);
+            row.setState("REVOKED").setVersion(version+1);
+        }
+        // CONSUMED is a paid-attempt fact, not permission for another attempt. Preserve it.
+    }
+
+    @Override
     public AgentTaskProviderCostConsentDTO revoke(Scope scope, String taskId, String consentId,
             String idempotencyKey, long expectedVersion) {
         validateScope(scope); exact(taskId,"taskId",100); exact(consentId,"consentId",100);
@@ -571,8 +593,9 @@ public class AgentTaskProviderCostConsentServiceImpl
             case BAD_REQUEST -> failure(Reason.BAD_REQUEST,failure);
             case NOT_FOUND -> failure(Reason.NOT_FOUND,failure);
             case CONFLICT, IDEMPOTENCY_CONFLICT, FORBIDDEN_OPERATION,
-                    PAID_EXECUTION_NOT_AUTHORIZED -> failure(Reason.CONFLICT,failure);
-            case UNAUTHENTICATED -> failure(Reason.FORBIDDEN,failure);
+                    PAID_EXECUTION_NOT_AUTHORIZED, TASK_QUOTE_UNAVAILABLE,
+                    TASK_FUNDS_INSUFFICIENT -> failure(Reason.CONFLICT,failure);
+            case UNAUTHENTICATED, TASK_QUOTE_PAYER_FORBIDDEN -> failure(Reason.FORBIDDEN,failure);
             case INVALID_PERSISTED_STATE -> failure(Reason.SOURCE_UNAVAILABLE,failure);
         };
     }

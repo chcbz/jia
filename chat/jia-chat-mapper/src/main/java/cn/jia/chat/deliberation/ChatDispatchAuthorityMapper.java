@@ -45,4 +45,23 @@ public interface ChatDispatchAuthorityMapper {
             @Param("clientId") String clientId, @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId, @Param("grantId") String grantId);
 
+    /** Cost-only historical authority. Never grants execution or checks current task/grant state. */
+    @Select("""
+            SELECT EXISTS (
+              SELECT 1 FROM agent_task_execution_grant g
+              JOIN agent_runtime r ON r.agent_id=g.target_agent_id AND r.binding_id=g.executor_binding_id
+                AND BINARY r.tenant_id=BINARY g.tenant_id AND BINARY r.client_id=BINARY g.client_id
+                AND BINARY r.owner_jiacn=BINARY g.executor_owner_jiacn
+                AND BINARY r.agent_id=BINARY g.target_agent_id
+              WHERE g.tenant_id=#{tenantId} AND g.client_id=#{clientId} AND g.grant_id=#{grantId}
+                AND BINARY g.tenant_id=BINARY #{tenantId} AND BINARY g.client_id=BINARY #{clientId}
+                AND BINARY g.owner_jiacn=BINARY #{ownerJiacn} AND BINARY g.task_id=BINARY #{taskId}
+                AND BINARY g.grant_id=BINARY #{grantId} AND BINARY g.target_agent_id=BINARY #{agentId}
+                AND BINARY g.executor_owner_jiacn=BINARY #{executorOwner})
+            """)
+    boolean hasOriginalUsageExecutor(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("ownerJiacn") String ownerJiacn,
+            @Param("taskId") String taskId, @Param("grantId") String grantId,
+            @Param("agentId") String agentId, @Param("executorOwner") String executorOwner);
+
 }

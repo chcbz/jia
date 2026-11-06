@@ -30,7 +30,7 @@ class AssigneeRecommendationControllerTest {
         mvc = MockMvcBuilders.standaloneSetup(new AssigneeRecommendationController(service))
                 .setMessageConverters(new JacksonJsonHttpMessageConverter()).setControllerAdvice(new ApiEnvelopeAdvice())
                 .addFilters(new RequestIdFilter()).build();
-        when(service.recommend(any(), eq("task"), any())).thenReturn(new Result("task", "7", 1000, "NO_MATCH", "资料不足", List.of(new Recommendation(new Agent("a", "Agent", "online", List.of(), true, true, null), "UNKNOWN", "尚无能力介绍", List.of(), List.of())), List.of(), true));
+        when(service.recommend(any(), eq("task"), any())).thenReturn(new Result("task", "7", 1000, "NO_MATCH", "资料不足", List.of(new Recommendation(new Agent("a", "Agent", "online", List.of(), true, true, null), "UNKNOWN", "尚无能力介绍", List.of(), List.of(), new Quotation("AVAILABLE", "quote-1", "recommendation-1", cn.jia.economy.common.Money.wen(13), null))), List.of(), true, new Workload(Workload.Kind.DOCUMENT, Workload.Complexity.STANDARD, 1)));
     }
     @AfterEach void cleanup() { EsContextHolder.clearContext(); }
     @Test void sameEndpointReturnsNewObjectInOneEnvelopeWithoutLegacyScores() throws Exception {
@@ -38,8 +38,20 @@ class AssigneeRecommendationControllerTest {
                 .header("X-Request-Id", "recommend-test"))
                 .andExpect(status().isOk()).andExpect(header().string("Cache-Control", "private, no-store"))
                 .andExpect(jsonPath("$.protocolVersion").value(1)).andExpect(jsonPath("$.code").value("E0"))
+                .andExpect(jsonPath("$.data.workload").doesNotExist())
+                .andExpect(jsonPath("$.data.recommendations[0].quote.amount.amountMinor").value("13"))
+                .andExpect(jsonPath("$.data.recommendations[0].quote.amount.currency").value("WEN"))
+                .andExpect(jsonPath("$.data.recommendations[0].quote.quoteId").value("quote-1"))
                 .andExpect(jsonPath("$.data.state").value("NO_MATCH")).andExpect(jsonPath("$.data.taskVersion").value("7"))
                 .andExpect(jsonPath("$.data.recommendations[0].recommendationLevel").value("UNKNOWN")).andExpect(jsonPath("$.data.score").doesNotExist());
+    }
+    @Test void responseMatchesSharedWebQuoteFixture() throws Exception {
+        var response = mvc.perform(post("/agent/tasks/task/recommend").principal(login).contentType(MediaType.APPLICATION_JSON).content(BODY)
+                .header("X-Request-Id", "recommend-test")).andExpect(status().isOk()).andReturn().getResponse();
+        var mapper = new tools.jackson.databind.ObjectMapper();
+        try (var fixture = getClass().getResourceAsStream("/billing/task-recommendation-quote.json")) {
+            org.junit.jupiter.api.Assertions.assertEquals(mapper.readTree(fixture), mapper.readTree(response.getContentAsString(java.nio.charset.StandardCharsets.UTF_8)));
+        }
     }
     @Test void missingIdentityAndMismatchedContextNeverInvokeModelService() throws Exception {
         mvc.perform(post("/agent/tasks/task/recommend").contentType(MediaType.APPLICATION_JSON).content(BODY)).andExpect(status().isUnauthorized());
@@ -57,6 +69,12 @@ class AssigneeRecommendationControllerTest {
         mvc.perform(post("/agent/tasks/task/recommend").principal(login).contentType(MediaType.APPLICATION_JSON).content("{"))
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("BAD_REQUEST"));
         verifyNoInteractions(service);
+    }
+    @Test void taskRootAccessLossIsNotDisclosedAsProviderFailure() throws Exception {
+        when(service.recommend(any(), anyString(), any())).thenThrow(new cn.jia.agent.exception.AgentTaskCollaborationException(
+                cn.jia.agent.exception.AgentTaskCollaborationException.Reason.NOT_FOUND, "internal"));
+        mvc.perform(post("/agent/tasks/task/recommend").principal(login).contentType(MediaType.APPLICATION_JSON).content(BODY))
+                .andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("RECOMMENDATION_NOT_FOUND"));
     }
     @Test void modelFailureUsesRealFailureNotEmptySuccessfulArray() throws Exception {
         when(service.recommend(any(), anyString(), any())).thenThrow(new Failure(503, "RECOMMENDATION_UNAVAILABLE"));

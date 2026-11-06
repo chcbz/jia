@@ -20,6 +20,8 @@ public class AgentTaskAssignDTO implements Serializable {
     private String businessAction;
     private Long expectedTaskVersion;
     private Long requirementRevision;
+    private String quoteId;
+    private String recommendationId;
     private List<String> requestedOperations;
     private String initialOperation;
     private List<AgentTaskGrantInputDTO> inputRefs;

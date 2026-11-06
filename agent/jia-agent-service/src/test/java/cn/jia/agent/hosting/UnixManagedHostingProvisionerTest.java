@@ -52,7 +52,7 @@ class UnixManagedHostingProvisionerTest {
                 "rti_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", host, generation, "a".repeat(64), 1, 0);
     }
     private UnixManagedHostingProvisioner adapter(Path socket, long uid, long gid, String owner) {
-        return new UnixManagedHostingProvisioner(new AgentHostingRentProperties(true, null, null, null),
+        return new UnixManagedHostingProvisioner(new AgentHostingRentProperties(true, "1", "1000000000", "2592000"),
                 new ManagedHostingAdapterProperties(socket.toString(), uid, "0", "fixture-client", owner, 1000, gid), credentials, sessions);
     }
     private UnixManagedHostingProvisioner adapter() { return spy(adapter(Path.of("/private/control.sock"), 0, 1000, "*")); }

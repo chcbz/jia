@@ -5,7 +5,7 @@ public record HostingRentQuoteReceipt(
         HostingRentQuotePurpose purpose,
         String planId,
         long planVersion,
-        long amountMicro,
+        long amountWen,
         long periodSeconds,
         String personaCode,
         String agentId,

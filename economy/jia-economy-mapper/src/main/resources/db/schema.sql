@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS economy_account (
     owner_id           VARCHAR(100) NOT NULL,
     purpose            VARCHAR(32) NOT NULL,
     currency           VARCHAR(16) NOT NULL,
-    balance_micro      BIGINT NOT NULL DEFAULT 0,
+    balance_wen      BIGINT NOT NULL DEFAULT 0,
     allow_negative     TINYINT NOT NULL DEFAULT 0,
     status             VARCHAR(16) NOT NULL DEFAULT 'ACTIVE',
     version            BIGINT NOT NULL DEFAULT 0,
@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS economy_account (
     UNIQUE KEY uk_economy_account_id (tenant_id, client_id, account_id),
     UNIQUE KEY uk_economy_account_key (tenant_id, client_id, currency, owner_type, owner_id, purpose),
     KEY idx_economy_account_owner (tenant_id, client_id, owner_type, owner_id, currency, purpose)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='SILVER account balance cache; ledger remains authoritative';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='WEN account balance cache; ledger remains authoritative';
 
 CREATE TABLE IF NOT EXISTS economy_transaction (
     id                  BIGINT NOT NULL AUTO_INCREMENT,
@@ -34,8 +34,8 @@ CREATE TABLE IF NOT EXISTS economy_transaction (
     currency            VARCHAR(16) NOT NULL,
     status              VARCHAR(16) NOT NULL DEFAULT 'POSTING',
     entry_count         INT NOT NULL DEFAULT 0,
-    debit_total_micro   BIGINT NOT NULL DEFAULT 0,
-    credit_total_micro  BIGINT NOT NULL DEFAULT 0,
+    debit_total_wen   BIGINT NOT NULL DEFAULT 0,
+    credit_total_wen  BIGINT NOT NULL DEFAULT 0,
     posted_at           BIGINT DEFAULT NULL,
     tenant_id           VARCHAR(50) NOT NULL,
     client_id           VARCHAR(50) NOT NULL,
@@ -53,8 +53,8 @@ CREATE TABLE IF NOT EXISTS economy_entry (
     transaction_id        VARCHAR(100) NOT NULL,
     account_id            VARCHAR(100) NOT NULL,
     entry_sequence        INT NOT NULL,
-    signed_amount_micro   BIGINT NOT NULL,
-    balance_after_micro   BIGINT NOT NULL,
+    signed_amount_wen   BIGINT NOT NULL,
+    balance_after_wen   BIGINT NOT NULL,
     currency              VARCHAR(16) NOT NULL,
     status                VARCHAR(16) NOT NULL DEFAULT 'POSTED',
     posted_at             BIGINT NOT NULL,
@@ -76,9 +76,9 @@ CREATE TABLE IF NOT EXISTS economy_escrow (
     payer_account_id      VARCHAR(100) NOT NULL,
     escrow_account_id     VARCHAR(100) NOT NULL,
     currency              VARCHAR(16) NOT NULL,
-    gross_micro           BIGINT NOT NULL,
-    captured_micro        BIGINT NOT NULL DEFAULT 0,
-    refunded_micro        BIGINT NOT NULL DEFAULT 0,
+    gross_wen           BIGINT NOT NULL,
+    captured_wen        BIGINT NOT NULL DEFAULT 0,
+    refunded_wen        BIGINT NOT NULL DEFAULT 0,
     status                VARCHAR(24) NOT NULL DEFAULT 'ACTIVE',
     version               BIGINT NOT NULL DEFAULT 1,
     tenant_id             VARCHAR(50) NOT NULL,
@@ -98,8 +98,8 @@ CREATE TABLE IF NOT EXISTS economy_escrow_funding_lot (
     funding_sequence           INT NOT NULL,
     reserve_transaction_id     VARCHAR(100) NOT NULL,
     payer_account_id           VARCHAR(100) NOT NULL,
-    amount_micro               BIGINT NOT NULL,
-    escrow_gross_after_micro   BIGINT NOT NULL,
+    amount_wen               BIGINT NOT NULL,
+    escrow_gross_after_wen   BIGINT NOT NULL,
     escrow_version_after       BIGINT NOT NULL,
     currency                   VARCHAR(16) NOT NULL,
     tenant_id                  VARCHAR(50) NOT NULL,
@@ -110,3 +110,40 @@ CREATE TABLE IF NOT EXISTS economy_escrow_funding_lot (
     UNIQUE KEY uk_economy_funding_transaction (tenant_id, client_id, reserve_transaction_id),
     KEY idx_economy_funding_escrow (tenant_id, client_id, escrow_id, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable initial and top-up escrow funding lots';
+
+-- Fixed task quotes and charges. Business state rules live in TaskBillingService, not CHECKs.
+CREATE TABLE IF NOT EXISTS economy_task_quote (
+    id                  BIGINT NOT NULL AUTO_INCREMENT,
+    quote_id            VARCHAR(100) NOT NULL,
+    binding_sha256      VARCHAR(64) NOT NULL,
+    tenant_id           VARCHAR(50) NOT NULL,
+    client_id           VARCHAR(50) NOT NULL,
+    owner_jiacn         VARCHAR(100) NOT NULL,
+    task_id             VARCHAR(100) NOT NULL,
+    payer_user_id       VARCHAR(100) NOT NULL,
+    amount_wen          BIGINT NOT NULL,
+    snapshot_json       LONGTEXT NOT NULL,
+    created_at          BIGINT NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_economy_task_quote_id (tenant_id, client_id, quote_id),
+    UNIQUE KEY uk_economy_task_quote_binding (tenant_id, client_id, owner_jiacn, task_id, binding_sha256)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Immutable whole-task quote and price snapshot';
+
+CREATE TABLE IF NOT EXISTS economy_task_charge (
+    id                      BIGINT NOT NULL AUTO_INCREMENT,
+    tenant_id               VARCHAR(50) NOT NULL,
+    client_id               VARCHAR(50) NOT NULL,
+    owner_jiacn             VARCHAR(100) NOT NULL,
+    task_id                 VARCHAR(100) NOT NULL,
+    quote_id                VARCHAR(100) DEFAULT NULL,
+    payer_user_id           VARCHAR(100) DEFAULT NULL,
+    amount_wen              BIGINT NOT NULL,
+    state                   VARCHAR(24) NOT NULL,
+    reserve_transaction_id  VARCHAR(100) DEFAULT NULL,
+    escrow_version          BIGINT DEFAULT NULL,
+    terminal_transaction_id VARCHAR(100) DEFAULT NULL,
+    created_at              BIGINT NOT NULL,
+    updated_at              BIGINT NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_economy_task_charge (tenant_id, client_id, owner_jiacn, task_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Fixed task reservation and terminal settlement';

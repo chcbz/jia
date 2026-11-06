@@ -44,7 +44,7 @@ import java.util.UUID;
 
 /** Durable, exact-scope admission and Agent callback boundary for Juyi Hall chat turns. */
 @Service
-public class ChatDeliberationService {
+public class ChatDeliberationService implements TaskDiscussionCancellation {
     private org.springframework.context.ApplicationEventPublisher outboxEvents;
     @org.springframework.beans.factory.annotation.Autowired
     public void setOutboxEvents(org.springframework.context.ApplicationEventPublisher value) { outboxEvents = value; }
@@ -943,6 +943,31 @@ public class ChatDeliberationService {
     public TurnView getTurn(String tenantId, String ownerJiacn, String clientId, String turnId) {
         ChatTurnEntity turn = requireVisibleTurn(tenantId, ownerJiacn, clientId, turnId);
         return turnView(turn);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
+    public void cancelTaskDiscussions(String tenantId, String clientId, String ownerJiacn, String taskId) {
+        // The task service owns authorization and the root lock. Chat owns the remaining
+        // conversation -> turn order and durable STOP delivery; no network I/O under locks.
+        var candidates = dao.findTaskDiscussions(tenantId, ownerJiacn, clientId, taskId);
+        String conversationId = null;
+        ChatConversationEntity conversation = null;
+        Set<String> requests = new LinkedHashSet<>();
+        long now = System.currentTimeMillis();
+        for (var candidate : candidates) {
+            if (!Objects.equals(conversationId, candidate.getConversationId())) {
+                conversationId = candidate.getConversationId();
+                conversation = conversationDao.lockScopedByIdIncludingDeleted(
+                        tenantId, ownerJiacn, clientId, conversationId);
+                if (conversation == null || !taskId.equals(conversation.getTaskId())) throw unavailable();
+            }
+            var turn = requireLockedTurn(tenantId, ownerJiacn, clientId, candidate.getTurnId());
+            if (terminal(turn.getState())) continue; // a final committed before the lock stays history
+            cancelLockedTurn(turn, "TASK_CANCELLED", now, conversation.getConversationType());
+            requests.add(turn.getRequestId());
+        }
+        for (String request : requests) refreshAggregate(tenantId, ownerJiacn, clientId, request, now);
     }
 
     @Transactional(rollbackFor = Exception.class)

@@ -35,6 +35,14 @@ class AgentProfileCapabilitiesServiceTest {
     void offline(ChatActionCapabilityService.SkillCandidate... items) {
         when(capabilities.inspectInstalledSkillsWithoutRuntime(scope)).thenReturn(new ChatActionCapabilityService.InstalledCatalog(null, List.of(items)));
     }
+    @Test void modelIsReportedConfigurationNotHardcodedAndSurvivesOfflineSkillRead() {
+        assertNull(service.read(actor, "agent").executionModel());
+        agent.setExecutionModel("fixture-model/v2");
+        assertEquals("fixture-model/v2", service.read(actor, "agent").executionModel());
+        assertFalse(cn.jia.core.util.JsonUtil.getMapper().convertValue(agent, java.util.Map.class).containsKey("executionModel"));
+        when(capabilities.inspectInstalledSkillsWithoutRuntime(scope)).thenThrow(new InstalledSkillDescriptorLookup.SourceUnavailable());
+        assertEquals("fixture-model/v2", service.read(actor, "agent").executionModel());
+    }
     @Test void emptyAndLiteralEmptyAbilitiesAreAuthoritativeAndNoVersionOrTaskWriteOccurs() {
         agent.setAbilities(List.of()); var result = service.read(actor, "agent");
         assertTrue(result.abilities().isEmpty()); assertEquals(10000, result.observedAt());

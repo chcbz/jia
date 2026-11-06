@@ -99,20 +99,20 @@ class EconomyReadOnlyPreviewSqlFixtureTest {
         Map<String, Integer> before = counts();
 
         Wallet wallet = service.wallet(A);
-        assertEquals("1000", wallet.availableMicro());
-        assertEquals("350", wallet.heldMicro());
+        assertEquals("1000", wallet.availableWen());
+        assertEquals("350", wallet.heldWen());
         assertEquals("6", wallet.version());
 
         LedgerPage ledger = service.ledger(A, null, 10);
         assertEquals(2, ledger.items().size());
         assertEquals("DEBIT", ledger.items().get(0).direction());
-        assertEquals("70", ledger.items().get(0).amountMicro());
+        assertEquals("70", ledger.items().get(0).amountWen());
         assertEquals("CREDIT", ledger.items().get(1).direction());
         assertNull(ledger.nextCursor());
 
         ProductPage products = service.products(A, 0, 10);
         assertEquals(1, products.items().size());
-        assertEquals("9007199254740993", products.items().getFirst().priceMicro());
+        assertEquals("9007199254740993", products.items().getFirst().priceWen());
         assertEquals(List.of("repo:read"), products.items().getFirst().permissions());
         assertEquals(products.items().getFirst(), service.product(A, "product-1"));
 
@@ -125,7 +125,7 @@ class EconomyReadOnlyPreviewSqlFixtureTest {
 
         HostingPlan plan = service.hostingPlan(A);
         assertEquals("PERSISTED_REFERENCE", plan.source());
-        assertEquals("1000000000", plan.amountMicro());
+        assertEquals("1000000000", plan.amountWen());
         assertFalse(plan.activationAllowed());
 
         HostingLease hosting = service.hostingLease(A, AGENT);
@@ -147,20 +147,20 @@ class EconomyReadOnlyPreviewSqlFixtureTest {
 
     @Test
     void domainScopesRemainByteExactAndSameClientIdentitiesStayIsolated() {
-        assertEquals("1000", service.wallet(A).availableMicro());
-        assertEquals("2200", service.wallet(C).availableMicro());
-        assertEquals("3300", service.wallet(SAME_OWNER_OTHER_SUB).availableMicro());
+        assertEquals("1000", service.wallet(A).availableWen());
+        assertEquals("2200", service.wallet(C).availableWen());
+        assertEquals("3300", service.wallet(SAME_OWNER_OTHER_SUB).availableWen());
 
         Principal lowerCaseOwner = principal("tenant-a", "actor-A");
-        assertEquals("9900", service.wallet(lowerCaseOwner).availableMicro(),
+        assertEquals("9900", service.wallet(lowerCaseOwner).availableWen(),
                 "case-insensitive fixture would leak Tenant-A without the mapper's binary fence");
         Principal trailingClient = new Principal("Tenant-A", "0", "0", "0",
                 "Client-A ", "Tenant-A", "actor-A");
         assertEquals("PREVIEW_SCOPE_UNAVAILABLE", assertThrows(EconomyReadOnlyPreviewException.class,
                 () -> service.wallet(trailingClient)).code());
-        assertEquals(0L, mapper.selectWallet("Tenant-A", "Client-A ", "actor-A").getAvailableMicro());
-        assertEquals(0L, mapper.selectWallet("Tenant-A", CLIENT, "actor-A ").getAvailableMicro());
-        assertEquals(0L, mapper.selectWallet("Tenant-A-prefix", CLIENT, "actor-A").getAvailableMicro());
+        assertEquals(0L, mapper.selectWallet("Tenant-A", "Client-A ", "actor-A").getAvailableWen());
+        assertEquals(0L, mapper.selectWallet("Tenant-A", CLIENT, "actor-A ").getAvailableWen());
+        assertEquals(0L, mapper.selectWallet("Tenant-A-prefix", CLIENT, "actor-A").getAvailableWen());
 
         assertEquals(service.products(A, 0, 10), service.products(C, 0, 10),
                 "marketplace is shared at tenant 0 only within the exact client");
@@ -193,7 +193,7 @@ class EconomyReadOnlyPreviewSqlFixtureTest {
         assertEquals("entry-credit", next.items().getFirst().entryId());
         assertNull(next.nextCursor());
         assertTrue(service.ledger(C, cursor, 10).items().isEmpty());
-        assertEquals("0", service.wallet(principal("New-Owner", "new-sub")).availableMicro());
+        assertEquals("0", service.wallet(principal("New-Owner", "new-sub")).availableWen());
         assertEquals(before, counts());
     }
 
@@ -228,15 +228,15 @@ class EconomyReadOnlyPreviewSqlFixtureTest {
         jdbc.update("""
                 INSERT INTO economy_escrow
                   (escrow_id,business_type,business_id,payer_account_id,escrow_account_id,currency,
-                   gross_micro,captured_micro,refunded_micro,status,version,tenant_id,client_id,create_time,update_time)
-                VALUES('escrow-a','HOSTING_RENT','lease-1','wallet-a','escrow-account','SILVER',
+                   gross_wen,captured_wen,refunded_wen,status,version,tenant_id,client_id,create_time,update_time)
+                VALUES('escrow-a','HOSTING_RENT','lease-1','wallet-a','escrow-account','WEN',
                        500,100,50,'ACTIVE',2,'Tenant-A',?,1,1)
                 """, CLIENT);
-        transaction("tx-credit", "ISSUE_SILVER", "issue-1", 100);
+        transaction("tx-credit", "ISSUE_WEN", "issue-1", 100);
         entry("entry-credit", "tx-credit", "wallet-a", 120, 100, 1_120);
         transaction("tx-debit", "HOSTING_RENT", "lease-1", 200);
         entry("entry-debit", "tx-debit", "wallet-a", 200, -70, 1_050);
-        transaction("tx-foreign", "ISSUE_SILVER", "foreign", 300, "Tenant-C", "actor-C");
+        transaction("tx-foreign", "ISSUE_WEN", "foreign", 300, "Tenant-C", "actor-C");
         entry("entry-foreign", "tx-foreign", "wallet-c", 300, 999, 3_199, "Tenant-C");
 
         jdbc.update("""
@@ -246,7 +246,7 @@ class EconomyReadOnlyPreviewSqlFixtureTest {
                 """, CLIENT);
         jdbc.update("""
                 INSERT INTO agent_skill_product_version
-                  (product_version_id,product_id,skill_key,skill_version,price_micro,
+                  (product_version_id,product_id,skill_key,skill_version,price_wen,
                    approved_permissions_manifest,deployment_restriction,review_status,tenant_id,client_id)
                 VALUES('version-1','product-1','repo-read','1.0.0',9007199254740993,
                        '[\"repo:read\"]','NONE','APPROVED','0',?)
@@ -258,7 +258,7 @@ class EconomyReadOnlyPreviewSqlFixtureTest {
                 """);
         jdbc.update("""
                 INSERT INTO agent_skill_product_version
-                  (product_version_id,product_id,skill_key,skill_version,price_micro,
+                  (product_version_id,product_id,skill_key,skill_version,price_wen,
                    approved_permissions_manifest,deployment_restriction,review_status,tenant_id,client_id)
                 VALUES('case-version','case-collision','wrong','1.0.0',1,'[]','NONE','APPROVED','0','client-a')
                 """);
@@ -285,14 +285,14 @@ class EconomyReadOnlyPreviewSqlFixtureTest {
                 """, AGENT, CLIENT);
         jdbc.update("""
                 INSERT INTO economy_hosting_rent_plan
-                  (plan_id,plan_version,amount_micro,period_seconds,quote_ttl_seconds,currency,status,
+                  (plan_id,plan_version,amount_wen,period_seconds,quote_ttl_seconds,currency,status,
                    tenant_id,client_id,create_time)
-                VALUES('hosting-default',3,1000000000,2592000,300,'SILVER','ACTIVE','0',?,1)
+                VALUES('hosting-default',3,1000000000,2592000,300,'WEN','ACTIVE','0',?,1)
                 """, CLIENT);
         jdbc.update("""
                 INSERT INTO economy_hosting_lease
                   (lease_id,principal_type,principal_id,persona_code,agent_id,binding_id,plan_id,plan_version,
-                   amount_micro,period_seconds,status,paid_from,paid_through,latest_intent_id,version,
+                   amount_wen,period_seconds,status,paid_from,paid_through,latest_intent_id,version,
                    tenant_id,client_id,create_time,update_time)
                 VALUES('lease-1','USER','actor-A','wuyong',?,'7','hosting-default',3,
                        1000000000,2592000,'ACTIVE',100,2592100,'intent-1',4,'0',?,1,2)
@@ -307,9 +307,9 @@ class EconomyReadOnlyPreviewSqlFixtureTest {
     private void account(String accountId, String tenant, String actor, long balance, long version, String client) {
         jdbc.update("""
                 INSERT INTO economy_account
-                  (account_id,owner_type,owner_id,purpose,currency,balance_micro,allow_negative,status,
+                  (account_id,owner_type,owner_id,purpose,currency,balance_wen,allow_negative,status,
                    version,tenant_id,client_id,create_time,update_time)
-                VALUES(?,'USER',?,'AVAILABLE','SILVER',?,0,'ACTIVE',?,?,?,1,1)
+                VALUES(?,'USER',?,'AVAILABLE','WEN',?,0,'ACTIVE',?,?,?,1,1)
                 """, accountId, actor, balance, version, tenant, client);
     }
 
@@ -323,7 +323,7 @@ class EconomyReadOnlyPreviewSqlFixtureTest {
                 INSERT INTO economy_transaction
                   (transaction_id,principal_type,principal_id,business_type,business_id,currency,status,
                    posted_at,tenant_id,client_id,create_time,update_time)
-                VALUES(?,'USER',?,?,?,'SILVER','POSTED',?,?,?,1,1)
+                VALUES(?,'USER',?,?,?,'WEN','POSTED',?,?,?,1,1)
                 """, id, actor, type, ref, postedAt, tenant, CLIENT);
     }
 
@@ -335,9 +335,9 @@ class EconomyReadOnlyPreviewSqlFixtureTest {
             long balance, String tenant) {
         jdbc.update("""
                 INSERT INTO economy_entry
-                  (entry_id,transaction_id,account_id,entry_sequence,signed_amount_micro,balance_after_micro,
+                  (entry_id,transaction_id,account_id,entry_sequence,signed_amount_wen,balance_after_wen,
                    currency,status,posted_at,tenant_id,client_id,create_time)
-                VALUES(?,?,?,1,?,?,'SILVER','POSTED',?,?,?,1)
+                VALUES(?,?,?,1,?,?,'WEN','POSTED',?,?,?,1)
                 """, id, transaction, account, signed, balance, postedAt, tenant, CLIENT);
     }
 

@@ -50,7 +50,7 @@ import static cn.jia.agent.preview.EconomyReadOnlyPreviewDtos.*;
 public class EconomyReadOnlyPreviewService {
     public static final String CONTRACT_VERSION = "economy-readonly-v1";
     private static final String MODE = "READ_ONLY_PREVIEW";
-    private static final String CURRENCY = "SILVER";
+    private static final String CURRENCY = "WEN";
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
     private final EconomyReadOnlyPreviewMapper mapper;
@@ -102,9 +102,9 @@ public class EconomyReadOnlyPreviewService {
             EconomyWalletSnapshotRow row = mapper.selectWallet(
                     principal.walletTenantId(), principal.clientId(), principal.actorId());
             if (row == null) throw unavailable("Wallet snapshot is unavailable");
-            long available = nonNegative(row.getAvailableMicro(), "availableMicro");
-            long held = nonNegative(row.getHeldMicro(), "heldMicro");
-            nonNegative(row.getMinimumHeldComponentMicro(), "minimumHeldComponentMicro");
+            long available = nonNegative(row.getAvailableWen(), "availableWen");
+            long held = nonNegative(row.getHeldWen(), "heldWen");
+            nonNegative(row.getMinimumHeldComponentWen(), "minimumHeldComponentWen");
             long version = nonNegative(row.getVersion(), "version");
             return new Wallet(CURRENCY, number(available), number(held), number(version));
         });
@@ -216,7 +216,7 @@ public class EconomyReadOnlyPreviewService {
         requireEnabled();
         try {
             if (hosting.descriptorConfigured()) {
-                return new HostingPlan("CONFIGURATION_REFERENCE", hosting.planVersion(), hosting.amountMicro(),
+                return new HostingPlan("CONFIGURATION_REFERENCE", hosting.planVersion(), hosting.amountWen(),
                         hosting.periodSeconds(), CURRENCY, false);
             }
             EconomyHostingRentPlanEntity row = mapper.selectLatestPlan(principal.hostingTenantId(), principal.clientId());
@@ -226,7 +226,7 @@ public class EconomyReadOnlyPreviewService {
                 throw planUnavailable();
             }
             return new HostingPlan("PERSISTED_REFERENCE", number(positive(row.getPlanVersion(), "planVersion")),
-                    number(positive(row.getAmountMicro(), "amountMicro")),
+                    number(positive(row.getAmountWen(), "amountWen")),
                     number(positive(row.getPeriodSeconds(), "periodSeconds")), CURRENCY, false);
         } catch (EconomyReadOnlyPreviewException exception) {
             throw exception;
@@ -257,7 +257,7 @@ public class EconomyReadOnlyPreviewService {
             return new HostingLease(agentId, "APPLICABLE", new Lease(lease.getLeaseId(),
                     number(nonNegative(lease.getVersion(), "leaseVersion")), lease.getStatus(),
                     number(positive(lease.getPlanVersion(), "planVersion")),
-                    number(positive(lease.getAmountMicro(), "amountMicro")),
+                    number(positive(lease.getAmountWen(), "amountWen")),
                     number(positive(lease.getPeriodSeconds(), "periodSeconds")),
                     nullableNumber(lease.getPaidFrom()), nullableNumber(lease.getPaidThrough())));
         });
@@ -272,13 +272,13 @@ public class EconomyReadOnlyPreviewService {
             FundedBountyPreviewPriceBook.TokenClasses estimated = tokens(input.estimatedTokens());
             FundedBountyPreviewPriceBook.TokenClasses worst = tokens(input.worstTokens());
             FundedBountyQuoteCalculator.QuoteAmounts quote = FundedBountyQuoteCalculator.calculate(
-                    input.grossBountyAmountMicro(), input.minimumAcceptedPayoutMicro(), estimated, worst);
+                    input.grossBountyAmountWen(), input.minimumAcceptedPayoutWen(), estimated, worst);
             return new BountyEstimate("SIMULATION", false, false, CURRENCY,
                     FundedBountyPreviewPriceBook.VERSION, FundedBountyPreviewPriceBook.RATE_PROVENANCE,
                     wire(input.estimatedTokens()), wire(input.worstTokens()),
-                    number(quote.estimatedComputeMicro()), number(quote.worstComputeMicro()),
-                    number(quote.platformFeeMicro()), number(quote.estimatedAgentPayoutMicro()),
-                    number(quote.worstAgentPayoutMicro()), number(quote.budgetHeadroomMicro()),
+                    number(quote.estimatedComputeWen()), number(quote.worstComputeWen()),
+                    number(quote.platformFeeWen()), number(quote.estimatedAgentPayoutWen()),
+                    number(quote.worstAgentPayoutWen()), number(quote.budgetHeadroomWen()),
                     quote.budgetCovered());
         } catch (IllegalArgumentException | ArithmeticException exception) {
             throw badRequest();
@@ -311,13 +311,13 @@ public class EconomyReadOnlyPreviewService {
         if (row == null || !exact(row.getProductId(), 100) || !exact(row.getName(), 255)
                 || row.getDescription() == null || !exact(row.getProductVersionId(), 100)
                 || !exact(row.getSkillKey(), 100) || !exact(row.getSkillVersion(), 100)
-                || row.getPriceMicro() == null || row.getPriceMicro() < 0
+                || row.getPriceWen() == null || row.getPriceWen() < 0
                 || !Set.of("NONE", "ADMIN_ONLY").contains(row.getDeploymentRestriction())) {
             throw unavailable("Skill product row is invalid");
         }
         return new Product(row.getProductId(), row.getName(), row.getDescription(),
                 row.getProductVersionId(), row.getSkillKey(), row.getSkillVersion(),
-                number(row.getPriceMicro()), permissions(row.getApprovedPermissionsManifest()),
+                number(row.getPriceWen()), permissions(row.getApprovedPermissionsManifest()),
                 row.getDeploymentRestriction(), "CATALOG", false);
     }
 
@@ -345,10 +345,10 @@ public class EconomyReadOnlyPreviewService {
         if (row == null || !exact(row.getTransactionId(), 100) || !exact(row.getEntryId(), 140)
                 || !exact(row.getBusinessType(), 32) || !exact(row.getBusinessRef(), 100)
                 || !"POSTED".equals(row.getStatus()) || row.getPostedAt() == null || row.getPostedAt() < 0
-                || row.getSignedAmountMicro() == null || row.getSignedAmountMicro() == 0) {
+                || row.getSignedAmountWen() == null || row.getSignedAmountWen() == 0) {
             throw unavailable("Wallet ledger row is invalid");
         }
-        long signed = row.getSignedAmountMicro();
+        long signed = row.getSignedAmountWen();
         long amount;
         try { amount = signed > 0 ? signed : Math.negateExact(signed); }
         catch (ArithmeticException exception) { throw unavailable("Wallet ledger amount is invalid"); }

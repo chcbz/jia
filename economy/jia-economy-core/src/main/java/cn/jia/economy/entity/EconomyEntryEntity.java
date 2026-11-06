@@ -11,8 +11,8 @@ public class EconomyEntryEntity {
     private String transactionId;
     private String accountId;
     private Integer entrySequence;
-    private Long signedAmountMicro;
-    private Long balanceAfterMicro;
+    private Long signedAmountWen;
+    private Long balanceAfterWen;
     private String currency;
     private String status;
     private Long postedAt;

@@ -21,7 +21,7 @@ public class ConversationDeliverableReadAdapter {
     private static final Pattern MIME = Pattern.compile(
             "[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}");
     private static final Set<String> EXECUTION_STATES = Set.of(
-            "QUEUED", "INPUTS_REVOKED", "OUTPUT_STAGED", "OUTPUT_COMMITTED", "FAILED");
+            "QUEUED", "INPUTS_REVOKED", "CANCELLED", "OUTPUT_STAGED", "OUTPUT_COMMITTED", "FAILED");
 
     private final WorkspaceConversationAccessService conversations;
     private final JdbcTemplate jdbc;
@@ -101,7 +101,8 @@ public class ConversationDeliverableReadAdapter {
             if (!Set.of("STAGED", "COMMITTED").contains(outputState)) throw corrupt();
             if ("STAGED".equals(outputState)) {
                 if ("OUTPUT_STAGED".equals(executionState)) pending = true;
-                else if (!"FAILED".equals(executionState)) throw corrupt();
+                else if (!"FAILED".equals(executionState)
+                        && !("TASK".equals(executionMode) && "CANCELLED".equals(executionState))) throw corrupt();
                 continue;
             }
             if (!"OUTPUT_COMMITTED".equals(executionState)) throw corrupt();

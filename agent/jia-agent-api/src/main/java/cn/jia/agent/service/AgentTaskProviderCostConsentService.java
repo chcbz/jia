@@ -8,6 +8,9 @@ import cn.jia.agent.entity.AgentTaskProviderCostConsentIssueDTO;
  * This core does not populate execution grants or invoke a Provider.
  */
 public interface AgentTaskProviderCostConsentService {
+    /** Internal owner cancellation; caller holds the task root and owns the transaction. */
+    void cancelForTask(Scope scope, String taskId);
+
     Result issue(Scope scope, String taskId, String idempotencyKey,
             AgentTaskProviderCostConsentIssueDTO request);
     AgentTaskProviderCostConsentDTO get(Scope scope, String taskId, String consentId);

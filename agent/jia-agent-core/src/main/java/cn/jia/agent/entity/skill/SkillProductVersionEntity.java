@@ -12,7 +12,7 @@ public class SkillProductVersionEntity {
     private Long versionSequence;
     private String skillKey;
     private String skillVersion;
-    private Long priceMicro;
+    private Long priceWen;
     private byte[] packageSha256;
     private Long packageSize;
     private String approvedPermissionsManifest;

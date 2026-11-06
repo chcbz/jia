@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS agent_runtime (
     persona_name        VARCHAR(50) DEFAULT NULL COMMENT '关联人设名称',
     abilities           TEXT COMMENT '能力列表(JSON数组)',
     endpoint            VARCHAR(500) DEFAULT NULL COMMENT 'Agent回调或WebSocket地址',
+    execution_model     VARCHAR(200) DEFAULT NULL COMMENT 'Reported default execution model',
     token_hash          VARCHAR(200) DEFAULT NULL COMMENT 'Agent token摘要',
     status              VARCHAR(20) NOT NULL DEFAULT 'offline' COMMENT 'online/busy/offline/error',
     current_task_id     VARCHAR(100) DEFAULT NULL COMMENT '当前任务ID',

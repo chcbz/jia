@@ -35,11 +35,12 @@ class WorkspaceProjectionQueryMySqlTest extends SkillManagementMySqlFixture {
         jdbc.update("INSERT INTO agent_personal_workspace_execution VALUES ('0','client','owner',?,'CONVERSATION',?,?)",id,state,protocol);
     }
     @Test void exactLookupAndCompensationShareTerminalPredicate() {
-        row("ok","RESULT_COMMITTED",5);row("failed","FAILED",5);row("revoked","INPUTS_REVOKED",5);
+        row("ok","RESULT_COMMITTED",5);row("failed","FAILED",5);row("revoked","INPUTS_REVOKED",5);row("cancelled","CANCELLED",5);
         row("queued","QUEUED",5);row("retired","RESULT_COMMITTED",4);
         var hint=new WorkspaceExecutionProjectionHint("0","client","owner","ok");
         assertEquals(List.of("ok"),projector.pendingExecution(hint).stream().map(ChatBountyAssetProjector.Candidate::executionId).toList());
-        assertEquals(Set.of("ok","failed","revoked"),new HashSet<>(projector.pending(null,64).stream().map(ChatBountyAssetProjector.Candidate::executionId).toList()));
+        assertEquals(Set.of("ok","failed","revoked","cancelled"),new HashSet<>(projector.pending(null,64).stream().map(ChatBountyAssetProjector.Candidate::executionId).toList()));
+        assertEquals(List.of("cancelled"),projector.pendingExecution(new WorkspaceExecutionProjectionHint("0","client","owner","cancelled")).stream().map(ChatBountyAssetProjector.Candidate::executionId).toList());
         assertEquals(1,projector.pending(null,1).size());
         jdbc.update("UPDATE chat_step_execution_link SET state='RESULT_COMMITTED' WHERE execution_id='ok'");
         assertTrue(projector.pendingExecution(hint).isEmpty());

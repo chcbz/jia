@@ -8,6 +8,7 @@ dependencies {
 	api project(':chat:jia-chat-api')
 	implementation project(':chat:jia-chat-mapper')
 	implementation project(':agent:jia-agent-api')
+    implementation project(':economy:jia-economy-api')
 	implementation project(':agent:jia-agent-service')
 	implementation project(':user:jia-user-api')
 	compileOnly project(':oauth:jia-oauth-api')

@@ -72,7 +72,7 @@ class SkillMarketplaceMapperH2Test {
         var p=mapper.selectProductForUpdate(TENANT,CLIENT,"sp-1");
         assertEquals("新标题",p.getName());assertEquals("新用途",p.getDescription());assertEquals(3,p.getVersion());
         assertEquals("PUBLISHED",p.getStatus());assertEquals("spv-1",p.getCurrentProductVersionId());
-        assertEquals(0L,mapper.selectPurchasableProductVersion(TENANT,CLIENT,"spv-1").getPriceMicro());
+        assertEquals(0L,mapper.selectPurchasableProductVersion(TENANT,CLIENT,"spv-1").getPriceWen());
         assertEquals(0,mapper.updateProductMetadata(TENANT,CLIENT,"sp-1","旧标题","旧用途",2,4));
     }
 
@@ -81,7 +81,7 @@ class SkillMarketplaceMapperH2Test {
         assertEquals(1, mapper.insertProduct(product()));
         assertEquals(1, mapper.insertProductVersion(productVersion()));
         assertEquals(1, mapper.publishProductVersion(TENANT, CLIENT, "sp-1", "spv-1", 1, 2));
-        assertEquals(0L, mapper.selectPurchasableProductVersion(TENANT, CLIENT, "spv-1").getPriceMicro());
+        assertEquals(0L, mapper.selectPurchasableProductVersion(TENANT, CLIENT, "spv-1").getPriceWen());
         assertNull(mapper.selectPurchasableProductVersion("tenant-a", CLIENT, "spv-1"));
 
         assertEquals(1, trade.insertPurchaseQuote(quote()));
@@ -141,7 +141,7 @@ class SkillMarketplaceMapperH2Test {
     private SkillProductVersionEntity productVersion() {
         return new SkillProductVersionEntity()
                 .setProductVersionId("spv-1").setProductId("sp-1").setVersionSequence(1L)
-                .setSkillKey("repo-inspector").setSkillVersion("1.0.0").setPriceMicro(0L)
+                .setSkillKey("repo-inspector").setSkillVersion("1.0.0").setPriceWen(0L)
                 .setPackageSha256(PACKAGE_HASH).setPackageSize(123L)
                 .setApprovedPermissionsManifest("[]").setApprovedPermissionsSha256(PERMISSIONS_HASH)
                 .setDeploymentRestriction("NONE").setReviewStatus("APPROVED")
@@ -153,7 +153,7 @@ class SkillMarketplaceMapperH2Test {
                 .setQuoteId("sq-1").setActorType("USER").setActorId(USER)
                 .setIdempotencyKey(IDEMPOTENCY_KEY).setRequestHash(REQUEST_HASH)
                 .setProductVersionId("spv-1").setTargetAgentId(AGENT)
-                .setExpectedAgentVersion(7L).setExpectedPriceMicro(0L)
+                .setExpectedAgentVersion(7L).setExpectedPriceWen(0L)
                 .setApprovedPermissionsManifest("[]").setApprovedPermissionsSha256(PERMISSIONS_HASH)
                 .setDeploymentRestriction("NONE").setExpiresAt(100L)
                 .setTenantId(TENANT).setClientId(CLIENT).setCreateTime(2L);
@@ -164,7 +164,7 @@ class SkillMarketplaceMapperH2Test {
                 .setOrderId("so-1").setQuoteId("sq-1").setProductVersionId("spv-1")
                 .setTargetAgentId(AGENT).setBuyerType("USER").setBuyerId(USER)
                 .setSellerType("SYSTEM").setSellerId("SKILL_STORE")
-                .setPriceMicro(0L).setExpectedAgentVersion(7L).setPermissionGrantVersion(1L)
+                .setPriceWen(0L).setExpectedAgentVersion(7L).setPermissionGrantVersion(1L)
                 .setApprovedPermissionsManifest("[]").setApprovedPermissionsSha256(PERMISSIONS_HASH)
                 .setStatus("FUNDS_HELD").setVersion(1L).setTenantId(TENANT).setClientId(CLIENT)
                 .setHeldAt(2L).setUpdateTime(2L);
@@ -174,7 +174,7 @@ class SkillMarketplaceMapperH2Test {
         return new SkillOrderReceipt()
                 .setOrderId("so-1").setActorType("USER").setActorId(USER)
                 .setIdempotencyKey(IDEMPOTENCY_KEY).setRequestHash(REQUEST_HASH)
-                .setOrderVersion(1L).setOrderStatus("FUNDS_HELD").setPriceMicro(0L)
+                .setOrderVersion(1L).setOrderStatus("FUNDS_HELD").setPriceWen(0L)
                 .setPermissionGrantVersion(1L).setApprovedPermissionsSha256(PERMISSIONS_HASH)
                 .setTenantId(TENANT).setClientId(CLIENT).setCreateTime(2L);
     }
@@ -224,7 +224,7 @@ class SkillMarketplaceMapperH2Test {
         jdbc.execute("""
                 CREATE TABLE agent_skill_product_version(
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,product_version_id VARCHAR(100),product_id VARCHAR(100),
-                    version_sequence BIGINT,skill_key VARCHAR(100),skill_version VARCHAR(64),price_micro BIGINT,
+                    version_sequence BIGINT,skill_key VARCHAR(100),skill_version VARCHAR(64),price_wen BIGINT,
                     package_sha256 BINARY(32),package_size BIGINT,approved_permissions_manifest TEXT,
                     approved_permissions_sha256 BINARY(32),deployment_restriction VARCHAR(20),review_status VARCHAR(16),
                     tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,
@@ -234,7 +234,7 @@ class SkillMarketplaceMapperH2Test {
                 CREATE TABLE economy_skill_purchase_quote(
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,quote_id VARCHAR(100),actor_type VARCHAR(16),actor_id VARCHAR(100),
                     idempotency_key VARBINARY(36),request_hash BINARY(32),product_version_id VARCHAR(100),
-                    target_agent_id VARCHAR(100),expected_agent_version BIGINT,expected_price_micro BIGINT,
+                    target_agent_id VARCHAR(100),expected_agent_version BIGINT,expected_price_wen BIGINT,
                     approved_permissions_manifest TEXT,approved_permissions_sha256 BINARY(32),
                     deployment_restriction VARCHAR(20),expires_at BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),
                     create_time BIGINT,UNIQUE(tenant_id,client_id,quote_id),
@@ -244,7 +244,7 @@ class SkillMarketplaceMapperH2Test {
                 CREATE TABLE economy_skill_order(
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,order_id VARCHAR(100),quote_id VARCHAR(100),
                     product_version_id VARCHAR(100),target_agent_id VARCHAR(100),buyer_type VARCHAR(16),buyer_id VARCHAR(100),
-                    seller_type VARCHAR(16),seller_id VARCHAR(100),price_micro BIGINT,expected_agent_version BIGINT,
+                    seller_type VARCHAR(16),seller_id VARCHAR(100),price_wen BIGINT,expected_agent_version BIGINT,
                     permission_grant_version BIGINT,approved_permissions_manifest TEXT,
                     approved_permissions_sha256 BINARY(32),escrow_id VARCHAR(100),reserve_transaction_id VARCHAR(100),
                     capture_transaction_id VARCHAR(100),refund_transaction_id VARCHAR(100),status VARCHAR(16),version BIGINT,
@@ -256,7 +256,7 @@ class SkillMarketplaceMapperH2Test {
                 CREATE TABLE economy_skill_order_receipt(
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,order_id VARCHAR(100),actor_type VARCHAR(16),actor_id VARCHAR(100),
                     idempotency_key VARBINARY(36),request_hash BINARY(32),order_version BIGINT,order_status VARCHAR(16),
-                    price_micro BIGINT,permission_grant_version BIGINT,approved_permissions_sha256 BINARY(32),
+                    price_wen BIGINT,permission_grant_version BIGINT,approved_permissions_sha256 BINARY(32),
                     escrow_id VARCHAR(100),tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,
                     UNIQUE(tenant_id,client_id,order_id),
                     UNIQUE(tenant_id,client_id,actor_type,actor_id,idempotency_key))

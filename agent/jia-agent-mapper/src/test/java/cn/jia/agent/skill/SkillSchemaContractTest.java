@@ -48,7 +48,7 @@ class SkillSchemaContractTest {
         assertFalse(normalized.contains("drop "));
         assertFalse(normalized.contains("alter table"));
         assertFalse(normalized.contains("create trigger"));
-        assertTrue(normalized.contains("price_micro bigint not null"));
+        assertTrue(normalized.contains("price_wen bigint not null"));
         assertTrue(normalized.contains("target_agent_id varchar(100) not null"));
         assertTrue(normalized.contains("idempotency_key varbinary(36) not null"));
         assertTrue(normalized.contains("request_hash binary(32) not null"));

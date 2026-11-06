@@ -61,16 +61,16 @@ class AgentTaskSettlementSchemaInitializerMySqlTest {
         jdbc.execute("""
                 INSERT INTO agent_task_bounty_settlement SET tenant_id='T',client_id='C',principal_type='USER',principal_id='u',
                   idempotency_key=REPEAT(0x31,36),request_hash=REPEAT(0x01,32),task_id='t',quote_id='q',agent_id='a',escrow_id='e',
-                  status='SETTLED',gross_micro=10,actual_compute_micro=1,platform_fee_micro=1,agent_payout_micro=8,refunded_micro=0,
+                  status='SETTLED',gross_wen=10,actual_compute_wen=1,platform_fee_wen=1,agent_payout_wen=8,refunded_wen=0,
                   task_version=2,funding_version=2,escrow_version=4,settled_at=1,transaction_ids='["tx1","tx2","tx3"]'
                 """);
-        for (String column : List.of("actual_compute_micro", "platform_fee_micro", "agent_payout_micro", "task_version",
+        for (String column : List.of("actual_compute_wen", "platform_fee_wen", "agent_payout_wen", "task_version",
                 "funding_version", "escrow_version", "settled_at")) {
             assertThrows(DataAccessException.class, () -> jdbc.execute("UPDATE agent_task_bounty_settlement SET " + column + "=NULL"));
         }
         jdbc.execute("""
                 INSERT INTO agent_task_funding(task_id,funding_mode,funding_status,payer_principal_type,payer_principal_id,
-                  settlement_policy,gross_bounty_amount_micro,remaining_micro,escrow_id,escrow_version,reserve_transaction_id,
+                  settlement_policy,gross_bounty_amount_wen,remaining_wen,escrow_id,escrow_version,reserve_transaction_id,
                   required_skill_requirements,version,tenant_id,client_id,owner_jiacn,create_time,update_time)
                 VALUES('t','FUNDED_SINGLE_AGENT','SETTLED','USER','u','GROSS_INCLUSIVE',10,0,'e',4,'reserve','[]',2,'T','C','u',1,1)
                 """);

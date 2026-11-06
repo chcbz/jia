@@ -62,7 +62,7 @@
           "$ref": "#/definitions/Revision"
         },
         "currency": {
-          "const": "SILVER"
+          "const": "WEN"
         }
       }
     },

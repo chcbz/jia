@@ -14,6 +14,15 @@ import java.util.List;
 @Named
 public class AgentRuntimeDaoImpl extends BaseDaoImpl<AgentRuntimeMapper, AgentRuntimeEntity> implements AgentRuntimeDao {
     @Override
+    public int updateRegistration(AgentRuntimeEntity entity) {
+        // The service holds the authorized runtime row lock. Include nullable model in this
+        // existing write; ordinary updateById deliberately does not update that field.
+        return baseMapper.update(entity, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<AgentRuntimeEntity>()
+                .eq(AgentRuntimeEntity::getId, entity.getId())
+                .set(AgentRuntimeEntity::getExecutionModel, entity.getExecutionModel()));
+    }
+
+    @Override
     public AgentRuntimeEntity findInScope(String tenantId, String clientId, String agentId) {
         requireExactId(tenantId, "tenantId"); requireExactId(clientId, "clientId"); requireExactId(agentId, "agentId");
         return baseMapper.findInScope(tenantId, clientId, agentId);

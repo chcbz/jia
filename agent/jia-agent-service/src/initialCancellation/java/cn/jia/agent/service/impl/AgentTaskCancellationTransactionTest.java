@@ -1,6 +1,7 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.dao.*;
+import cn.jia.economy.task.TaskBillingService;
 import cn.jia.agent.api.AgentTaskCancellationController;
 import cn.jia.agent.entity.*;
 import cn.jia.agent.exception.AgentTaskStateException;
@@ -89,7 +90,7 @@ class AgentTaskCancellationTransactionTest {
             jdbc.queryForList("SELECT * FROM bootstrap FOR UPDATE");
             return List.of(AgentTaskCancellationServiceImplTest.bootstrap(text("bootstrap","status"))
                     .setVersion(number("bootstrap","version"))); });
-        when(dao.cancelRetryBootstrap(anyString(),anyString(),anyString(),anyString(),anyLong(),anyLong(),anyLong()))
+        when(dao.cancelUnadmittedBootstrap(anyString(),anyString(),anyString(),anyString(),anyLong(),anyLong(),anyLong()))
                 .thenAnswer(i -> jdbc.update("UPDATE bootstrap SET status='DEAD',error='TASK_CANCELLED',version=version+1 WHERE id=? AND version=? AND status='RETRY'",
                         new Object[]{i.getArgument(4),i.getArgument(5)}));
         when(grants.revoke(anyString(),anyString(),anyString(),anyString(),anyString(),anyLong(),anyString(),anyString(),anyLong()))
@@ -104,7 +105,12 @@ class AgentTaskCancellationTransactionTest {
                 .thenAnswer(i -> jdbc.update("UPDATE occupation SET task=NULL WHERE task=?",new Object[]{i.getArgument(3)}));
         tx=new AgentTaskMutationTransactionImpl(roots,new DataSourceTransactionManager(ds));
         states=new AgentTaskStateServiceImpl(roots,members,items,tx,events);
-        service=new AgentTaskCancellationServiceImpl(tx,states,items,grants,dao);
+        var billing=mock(TaskBillingService.class);
+        service=new AgentTaskCancellationServiceImpl(tx,states,items,grants,dao,billing,
+                mock(cn.jia.agent.service.TaskExecutionCancellationService.class),
+                mock(cn.jia.chat.service.TaskDiscussionCancellation.class),
+                mock(cn.jia.agent.service.AgentWorkItemLeaseService.class),
+                mock(cn.jia.agent.service.AgentTaskProviderCostConsentService.class));
     }
     AgentTaskMetaEntity readRoot(String owner,String task,boolean lock) {
         var rows=jdbc.query("SELECT * FROM root WHERE owner=? AND task_id=?"+(lock ? " FOR UPDATE" : ""),(rs,n) -> {
@@ -217,11 +223,14 @@ class AgentTaskCancellationTransactionTest {
             assertInstanceOf(AgentTaskStateException.class,failure.getCause()); assertEquals("cancelled",text("root","status"));
         } finally { release.countDown(); pool.shutdownNow(); }
     }
-    @Test void startWinsCancelDoesNotFakeTerminalSuccess() {
+    @Test void startWinsStaleCancelFailsButCurrentVersionCancelsRunningTask() {
         var request=new AgentTaskStateTransitionDTO(); request.setTargetStatus("running"); request.setExpectedVersion(1L);
         states.transitionTask("0","client","owner","417",request);
-        assertThrows(AgentTaskStateException.class,() -> service.cancel("0","client","owner","actor","417",2));
+        assertThrows(AgentTaskStateException.class,() -> service.cancel("0","client","owner","actor","417",1));
         assertEquals("running",text("root","status")); assertEquals("accepted",text("member","status"));
+        var cancelled=service.cancel("0","client","owner","actor","417",2);
+        assertEquals(3,cancelled.taskVersion());
+        assertEquals("cancelled",text("root","status")); assertEquals("left",text("member","status"));
     }
     @Test void cancelledTaskRejectsLeaseAdmissionAndChildStateResurrection() {
         cancel();

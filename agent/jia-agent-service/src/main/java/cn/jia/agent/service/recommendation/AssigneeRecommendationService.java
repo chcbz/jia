@@ -23,8 +23,9 @@ public final class AssigneeRecommendationService {
     private final SkillManagementService skills;
     private final AgentAssigneeRecommendationModel model;
     private final RecommendationMaterials materials;
-    public AssigneeRecommendationService(AgentService agents, SkillManagementService skills, AgentAssigneeRecommendationModel model, RecommendationMaterials materials) {
-        this.agents = agents; this.skills = skills; this.model = model; this.materials = materials;
+    private final AssigneeRecommendationQuotes quotes;
+    public AssigneeRecommendationService(AgentService agents, SkillManagementService skills, AgentAssigneeRecommendationModel model, RecommendationMaterials materials, AssigneeRecommendationQuotes quotes) {
+        this.agents = agents; this.skills = skills; this.model = model; this.materials = materials; this.quotes = quotes;
     }
     public Result recommend(HostingRentHttp.Actor actor, String taskId, Request request) {
         long started = System.nanoTime(), modelStarted = 0, modelEnded = 0;
@@ -41,7 +42,7 @@ public final class AssigneeRecommendationService {
             if (candidates.isEmpty()) {
                 outcome = "no_candidates";
                 return new Result(taskId, task.getTaskVersion(), observedAt,
-                        "NO_CANDIDATES", "当前没有可承办候选", List.of(), List.of(), true);
+                        "NO_CANDIDATES", "当前没有可承办候选", List.of(), List.of(), true, null);
             }
             var materialObservation = materials.observe(actor, taskId);
             String raw;
@@ -55,24 +56,27 @@ public final class AssigneeRecommendationService {
                 String inputJson = JSON.writeValueAsString(input);
                 String schema = outputSchema(candidates);
                 modelStarted = System.nanoTime();
-                try { raw = model.judge(inputJson, schema); }
+                try { raw = model.judge(new AgentAssigneeRecommendationModel.Context(
+                        actor.tenantId(), actor.clientId(), actor.ownerJiacn(), taskId), inputJson, schema); }
                 finally { modelEnded = System.nanoTime(); }
             } catch (Failure error) { throw error; }
             catch (Exception unavailable) { throw new Failure(503, "RECOMMENDATION_UNAVAILABLE"); }
             // A response is advice on exactly these facts, not an indefinitely valid admission token.
-            AgentTaskDTO current = agents.getTaskRecommendationInput(taskId);
-            if (!Objects.equals(task.getTaskVersion(), current.getTaskVersion())
-                    || !Objects.equals(taskInput(task), taskInput(current))
-                    || !Objects.equals(task.getStatus(), current.getStatus())) throw stale("TASK");
-            var after = observe(actor, taskId);
-            verifyCandidates(observation, after);
-            try { materials.verifyUnchanged(actor, taskId, materialObservation); }
-            catch (Failure failure) { if (failure.status() == 409) throw stale("MATERIAL"); throw failure; }
-            // Display current status/name; recommendation is not execution admission.
-            var judgedCandidates = new ArrayList<Candidate>();
-            for (int i = 0; i < observation.candidates().size(); i++)
-                judgedCandidates.add(new Candidate(after.candidates().get(i).agent(), observation.candidates().get(i).evidence()));
-            var result = refreshAvailability(decode(taskId, task.getTaskVersion(), observedAt, judgedCandidates, raw), after.candidates());
+            var result = quotes.prepare(actor, taskId, () -> {
+                AgentTaskDTO current = agents.getTaskRecommendationInput(taskId);
+                if (!Objects.equals(task.getTaskVersion(), current.getTaskVersion())
+                        || !Objects.equals(taskInput(task), taskInput(current))
+                        || !Objects.equals(task.getStatus(), current.getStatus())) throw stale("TASK");
+                var after = observe(actor, taskId);
+                verifyCandidates(observation, after);
+                try { materials.verifyUnchanged(actor, taskId, materialObservation); }
+                catch (Failure failure) { if (failure.status() == 409) throw stale("MATERIAL"); throw failure; }
+                // Display current status/name; recommendation is not execution admission.
+                var judgedCandidates = new ArrayList<Candidate>();
+                for (int i = 0; i < observation.candidates().size(); i++)
+                    judgedCandidates.add(new Candidate(after.candidates().get(i).agent(), observation.candidates().get(i).evidence()));
+                return refreshAvailability(decode(taskId, task.getTaskVersion(), observedAt, judgedCandidates, raw), after.candidates());
+            });
             outcome = "success";
             return result;
         } catch (Failure failure) {
@@ -190,10 +194,10 @@ public final class AssigneeRecommendationService {
             var gaps = new ArrayList<>(old.gaps());
             boolean unavailable = evidence.stream().anyMatch(e -> !e.available());
             if (unavailable) gaps.add("所引用技能当前未就绪；本次建议不代表可以立即执行，请以实际承办准入为准。");
-            return new Recommendation(now.agent(), unavailable ? "UNKNOWN" : old.recommendationLevel(), old.reason(), evidence.stream().filter(Evidence::available).toList(), List.copyOf(gaps));
+            return new Recommendation(now.agent(), unavailable ? "UNKNOWN" : old.recommendationLevel(), old.reason(), evidence.stream().filter(Evidence::available).toList(), List.copyOf(gaps), old.quote());
         }).toList();
         String state = rows.stream().anyMatch(r -> Set.of("HIGH", "MEDIUM").contains(r.recommendationLevel())) ? "READY" : "NO_MATCH";
-        return new Result(result.taskId(), result.taskVersion(), result.observedAt(), state, result.requirementSummary(), rows, result.questions(), true);
+        return new Result(result.taskId(), result.taskVersion(), result.observedAt(), state, result.requirementSummary(), rows, result.questions(), true, result.workload());
     }
     // Business-specific output contract belongs to API; the model adapter only transports it.
     static String outputSchema(List<Candidate> candidates) throws com.fasterxml.jackson.core.JsonProcessingException {
@@ -209,6 +213,11 @@ public final class AssigneeRecommendationService {
         }
         var root = new LinkedHashMap<String,Object>();
         root.put("requirementSummary", string); root.put("recommendations", objectSchema(rows));
+        var workload = new LinkedHashMap<String, Object>();
+        workload.put("kind", Map.of("type", "string", "enum", Arrays.stream(Workload.Kind.values()).map(Enum::name).toList()));
+        workload.put("complexity", Map.of("type", "string", "enum", Arrays.stream(Workload.Complexity.values()).map(Enum::name).toList()));
+        workload.put("deliverables", Map.of("type", "integer", "minimum", 1));
+        root.put("workload", objectSchema(workload));
         return JSON.writeValueAsString(objectSchema(root));
     }
     private static Map<String,Object> objectSchema(Map<String,Object> properties) {
@@ -219,6 +228,7 @@ public final class AssigneeRecommendationService {
             JsonNode root = JSON.readTree(raw);
             if (root == null || !root.isObject()) throw invalid("JSON_OBJECT");
             String summary = text(root, "requirementSummary");
+            Workload workload = workload(root.get("workload"));
             // Questions are not part of the model contract; HTTP keeps its fixed empty array.
             if (root.has("questions")) throw invalid("QUESTIONS_NOT_SUPPORTED");
             JsonNode rows = root.get("recommendations");
@@ -254,13 +264,25 @@ public final class AssigneeRecommendationService {
                 }
                 var gaps = new ArrayList<>(strings(row.get("gaps")));
                 if (!"online".equalsIgnoreCase(candidate.agent().status())) gaps.add("当前运行状态：" + candidate.agent().status() + "；确认承办不代表已开始运行。");
-                recommendations.add(new Recommendation(candidate.agent(), level, text(row, "reason"), List.copyOf(evidence), List.copyOf(gaps)));
+                recommendations.add(new Recommendation(candidate.agent(), level, text(row, "reason"), List.copyOf(evidence), List.copyOf(gaps), null));
             }
             String state = recommendations.stream().anyMatch(r -> Set.of("HIGH", "MEDIUM").contains(r.recommendationLevel()))
                     ? "READY" : "NO_MATCH";
-            return new Result(taskId, taskVersion, observedAt, state, summary, List.copyOf(recommendations), List.of(), true);
+            return new Result(taskId, taskVersion, observedAt, state, summary, List.copyOf(recommendations), List.of(), true, workload);
         } catch (Failure failure) { throw failure; }
         catch (Exception invalid) { throw invalid("JSON_DECODE"); }
+    }
+    private static Workload workload(JsonNode node) {
+        // This boundary owns model-output validation. No inferred default means a broken
+        // judgement cannot silently select a cheaper rule or become a free quote.
+        if (node == null || !node.isObject()) throw invalid("WORKLOAD_OBJECT");
+        JsonNode count = node.get("deliverables");
+        if (count == null || !count.isIntegralNumber() || !count.canConvertToLong() || count.longValue() < 1)
+            throw invalid("WORKLOAD_DELIVERABLES");
+        try {
+            return new Workload(Workload.Kind.valueOf(text(node, "kind")),
+                    Workload.Complexity.valueOf(text(node, "complexity")), count.longValue());
+        } catch (IllegalArgumentException unknown) { throw invalid("WORKLOAD_CLASSIFICATION"); }
     }
     private static List<String> strings(JsonNode node) {
         if (node == null || !node.isArray()) throw invalid("STRING_ARRAY");

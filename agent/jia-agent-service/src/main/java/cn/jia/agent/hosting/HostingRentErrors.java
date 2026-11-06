@@ -32,7 +32,7 @@ public final class HostingRentErrors {
             };
         } else if (exception instanceof EconomyPostingException posting) {
             switch (posting.reason()) {
-                case INSUFFICIENT_FUNDS, ACCOUNT_NOT_FOUND -> { status = 409; code = "INSUFFICIENT_SILVER"; }
+                case INSUFFICIENT_FUNDS, ACCOUNT_NOT_FOUND -> { status = 409; code = "INSUFFICIENT_WEN"; }
                 case IDEMPOTENCY_CONFLICT -> { status = 409; code = "IDEMPOTENCY_CONFLICT"; }
                 case CONCURRENCY_CONFLICT, ESCROW_CONFLICT -> { status = 409; code = "HOSTING_RENT_CONFLICT"; }
                 case FEATURE_DISABLED -> { status = 403; code = "ECONOMY_PREVIEW_DISABLED"; }

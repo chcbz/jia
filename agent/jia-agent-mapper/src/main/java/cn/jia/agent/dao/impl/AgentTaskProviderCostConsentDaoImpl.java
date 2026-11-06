@@ -18,6 +18,12 @@ public final class AgentTaskProviderCostConsentDaoImpl
         this.mapper = Objects.requireNonNull(mapper, "mapper");
     }
 
+    @Override public java.util.List<AgentTaskProviderCostConsentEntity> lockUnconsumedForTask(
+            String tenant, String client, String owner, String task) {
+        scope(tenant,client,owner); id(task,"taskId",100);
+        return mapper.lockUnconsumedForTask(tenant,client,owner,task);
+    }
+
     @Override public AgentTaskProviderCostConsentEntity findByIdempotencyKey(
             String tenantId, String clientId, String ownerJiacn, String taskId,
             String idempotencyKey) {
@@ -108,7 +114,7 @@ public final class AgentTaskProviderCostConsentDaoImpl
         id(row.getTaskId(), "taskId", 100); id(row.getConsentId(), "consentId", 100);
     }
     private static void scope(String tenant,String client,String owner) {
-        if (!"0".equals(tenant)) throw new IllegalArgumentException("tenantId");
+        cn.jia.core.security.TenantClaimPolicy.exact(tenant);
         id(client,"clientId",50); id(owner,"ownerJiacn",50);
         if ("0".equals(owner)) throw new IllegalArgumentException("ownerJiacn");
     }

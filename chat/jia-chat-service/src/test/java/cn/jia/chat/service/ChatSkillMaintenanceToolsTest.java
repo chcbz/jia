@@ -51,10 +51,10 @@ class ChatSkillMaintenanceToolsTest {
     @Test void publicationPassesActualFilesAndDoesNotTrustModelDigest() {
         cn.jia.agent.api.SkillConversationTools.call(service,context,boundary,"skill_publish",json.readTree("""
             {"productId":"p","productVersionId":"v","name":"名称","description":"描述",
-             "skillKey":"example","skillVersion":"1.0.0","priceMicro":"0","approvedPermissionsManifest":"[]",
+             "skillKey":"example","skillVersion":"1.0.0","priceWen":"0","approvedPermissionsManifest":"[]",
              "expectedProductVersion":"0","files":[{"path":"SKILL.md","content":"real content","encoding":"utf8"}]}
             """));
-        verify(service).publish(eq(context),eq(boundary),argThat(c->c.packageSha256()==null&&c.manifestSha256()==null&&c.priceMicro()==0),
+        verify(service).publish(eq(context),eq(boundary),argThat(c->c.packageSha256()==null&&c.manifestSha256()==null&&c.priceWen()==0),
                 argThat(files->files.size()==1&&files.getFirst().content().equals("real content")));
     }
 }

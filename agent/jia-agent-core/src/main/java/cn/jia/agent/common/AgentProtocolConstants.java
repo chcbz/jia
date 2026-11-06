@@ -47,8 +47,6 @@ public final class AgentProtocolConstants {
     public static final String LEGACY_AGENT_DIRECT_MESSAGE = "agent_direct_message";
     public static final String LEGACY_AGENT_ACTION = "agent.action";
     public static final String LEGACY_TASK_EVENT = "task_event";
-    public static final String LEGACY_TASK_REPORT = "task.report";
-    public static final String LEGACY_TASK_REPORT_ALIAS = "task_report";
     public static final String LEGACY_CODEX_RESULT = "codex.result";
 
     public static final String COMMAND_TASK_INVITE = "TASK_INVITE";

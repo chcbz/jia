@@ -104,7 +104,7 @@ public final class SkillPackages {
                 && approved.getPackageSha256()!=null && approved.getPackageSha256().length==32
                 && approved.getPackageSize()!=null && approved.getPackageSize()>0
                 && approved.getPackageSize()<=SkillPackageStore.MAX_PACKAGE_BYTES
-                && approved.getPriceMicro()!=null && approved.getPriceMicro()>=0
+                && approved.getPriceWen()!=null && approved.getPriceWen()>=0
                 && approved.getApprovedPermissionsSha256()!=null && approved.getApprovedPermissionsSha256().length==32
                 && approved.getApprovedPermissionsManifest()!=null
                 && Arrays.equals(SkillPackageStore.sha256(approved.getApprovedPermissionsManifest().getBytes(java.nio.charset.StandardCharsets.UTF_8)),approved.getApprovedPermissionsSha256())
@@ -113,7 +113,7 @@ public final class SkillPackages {
                 && approved.getDeploymentRestriction()!=null
                 && Set.of("NONE","ADMIN_ONLY").contains(approved.getDeploymentRestriction()),503,"SKILL_PACKAGE_UNAVAILABLE");
         return new PlatformSkillProduct(approved.getProductId(),approved.getProductVersionId(),approved.getSkillKey(),
-                approved.getSkillVersion(),approved.getSkillKey(),"",approved.getPriceMicro(),approved.getDeploymentRestriction(),
+                approved.getSkillVersion(),approved.getSkillKey(),"",approved.getPriceWen(),approved.getDeploymentRestriction(),
                 null,approved.getPackageSha256(),approved.getPackageSize(),approved.getApprovedPermissionsManifest(),approved.getApprovedPermissionsSha256());
     }
     /** Trusted maintenance: validate archive before immutable promotion. No DB publication. */
@@ -138,7 +138,7 @@ public final class SkillPackages {
         require(p.productId().equals(approved.getProductId()) && p.productVersionId().equals(approved.getProductVersionId())
                 && p.skillKey().equals(approved.getSkillKey()) && p.skillVersion().equals(approved.getSkillVersion())
                 && Objects.equals(p.packageSize(),approved.getPackageSize()) && Arrays.equals(p.packageSha256(),approved.getPackageSha256())
-                && Objects.equals(p.priceMicro(),approved.getPriceMicro())
+                && Objects.equals(p.priceWen(),approved.getPriceWen())
                 && p.approvedPermissionsManifest().equals(approved.getApprovedPermissionsManifest())
                 && Arrays.equals(p.approvedPermissionsSha256(),approved.getApprovedPermissionsSha256())
                 && p.deploymentRestriction().equals(approved.getDeploymentRestriction()),503,"SKILL_PACKAGE_UNAVAILABLE");

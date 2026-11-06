@@ -18,6 +18,7 @@ dependencies {
     compileOnly 'org.springframework.security:spring-security-web'
     testImplementation 'org.springframework.security:spring-security-config'
     testImplementation 'org.springframework.security:spring-security-web'
+    testImplementation 'org.apache.tomcat.embed:tomcat-embed-core'
     compileOnly 'org.springframework.security:spring-security-oauth2-resource-server'
     compileOnly 'org.springframework.security:spring-security-oauth2-jose'
     implementation project(':common:jia-common-service')
@@ -46,6 +47,8 @@ dependencies {
     testImplementation project(':economy:jia-economy-service')
     testImplementation project(':economy:jia-economy-mapper')
     testImplementation project(':oauth:jia-oauth-api')
+    testImplementation project(':oauth:jia-oauth-resource')
+    testImplementation project(':chat:jia-chat-service')
     testImplementation 'org.springframework.security:spring-security-oauth2-resource-server'
     testImplementation 'org.springframework.security:spring-security-oauth2-jose'
     testImplementation platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}")
@@ -1008,4 +1011,11 @@ tasks.register('positionSecurityTest', Test) {
     useJUnitPlatform()
     maxParallelForks = 1
     maxHeapSize = '384m'
+}
+
+// Real HTTP billing fixtures resolve the same Servlet/Spring generation as the application.
+gradle.projectsEvaluated {
+    def applicationRuntime = project(':starter').configurations.runtimeClasspath
+    configurations.testCompileClasspath.shouldResolveConsistentlyWith(applicationRuntime)
+    configurations.testRuntimeClasspath.shouldResolveConsistentlyWith(applicationRuntime)
 }

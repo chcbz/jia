@@ -28,7 +28,7 @@ class FundedBountyLedgerTemplateTest {
     void refundUsesExactBountyTaskEscrowToAuthenticatedUserAvailableTemplate() {
         EconomyPostingService posting = mock(EconomyPostingService.class);
         when(posting.post(any())).thenReturn(new EconomyPostingResult(
-                "etx-refund", "POSTED", "SILVER", 100L, 50L, 50L, List.of(), null));
+                "etx-refund", "POSTED", "WEN", 100L, 50L, 50L, List.of(), null));
         FundedBountyLedgerServiceImpl service = new FundedBountyLedgerServiceImpl(
                 mock(EconomyLedgerMapper.class), posting);
         byte[] hash = new byte[32];

@@ -9,7 +9,7 @@ public record FundedBountyReserveCommand(
         String idempotencyKey,
         byte[] requestHash,
         String taskId,
-        long amountMicro) {
+        long amountWen) {
     public FundedBountyReserveCommand {
         requestHash = requestHash == null ? null : requestHash.clone();
     }

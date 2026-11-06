@@ -88,7 +88,7 @@ public final class SkillMarketplaceService {
         Map<String,Object> dto=new LinkedHashMap<>();
         dto.put("productId",p.getProductId()); dto.put("name",p.getName()); dto.put("description",p.getDescription());
         dto.put("productVersionId",v.getProductVersionId()); dto.put("skillKey",v.getSkillKey()); dto.put("skillVersion",v.getSkillVersion());
-        dto.put("price",cn.jia.economy.common.Money.silver(v.getPriceMicro())); dto.put("permissions",SkillMarketplaceHttp.permissions(v.getApprovedPermissionsManifest()));
+        dto.put("price",cn.jia.economy.common.Money.wen(v.getPriceWen())); dto.put("permissions",SkillMarketplaceHttp.permissions(v.getApprovedPermissionsManifest()));
         boolean positionOnly=policy.positionOnly(v.getSkillKey());
         boolean allowed=!positionOnly && (admin || "NONE".equals(v.getDeploymentRestriction()));
         dto.put("canPurchase",allowed); dto.put("denialReason",allowed?null:positionOnly?"POSITION_MANAGED_SKILL":"SKILL_ADMIN_REQUIRED");
@@ -117,7 +117,7 @@ public final class SkillMarketplaceService {
             long now=System.currentTimeMillis();
             var q=new SkillPurchaseQuote().setQuoteId(id("sq_")).setActorType("USER").setActorId(a.actorId())
                     .setIdempotencyKey(bytes(key)).setRequestHash(hash).setProductVersionId(productVersion).setTargetAgentId(agent)
-                    .setExpectedAgentVersion(version).setExpectedPriceMicro(v.getPriceMicro())
+                    .setExpectedAgentVersion(version).setExpectedPriceWen(v.getPriceWen())
                     .setApprovedPermissionsManifest(v.getApprovedPermissionsManifest()).setApprovedPermissionsSha256(v.getApprovedPermissionsSha256())
                     .setDeploymentRestriction(v.getDeploymentRestriction()).setExpiresAt(Math.addExact(now,300000L))
                     .setTenantId(a.tenantId()).setClientId(a.clientId()).setCreateTime(now);
@@ -151,18 +151,18 @@ public final class SkillMarketplaceService {
             require(q.getExpiresAt()>System.currentTimeMillis(),409,"SKILL_QUOTE_EXPIRED");
             require(q.getProductVersionId().equals(body.get("productVersionId")) && q.getTargetAgentId().equals(body.get("targetAgentId"))
                     && q.getExpectedAgentVersion().toString().equals(body.get("expectedAgentVersion"))
-                    && q.getExpectedPriceMicro().toString().equals(body.get("expectedPriceMicro")),409,"SKILL_QUOTE_MISMATCH");
+                    && q.getExpectedPriceWen().toString().equals(body.get("expectedPriceWen")),409,"SKILL_QUOTE_MISMATCH");
             versions.requireOwned(a,q.getTargetAgentId(),q.getExpectedAgentVersion(),true);
             requireReady(a,q.getTargetAgentId(),proof);
             var v=productLocked(a,q.getProductVersionId(),admin,prepared);
-            require(v.getPriceMicro().equals(q.getExpectedPriceMicro()) && Arrays.equals(v.getApprovedPermissionsSha256(),q.getApprovedPermissionsSha256())
+            require(v.getPriceWen().equals(q.getExpectedPriceWen()) && Arrays.equals(v.getApprovedPermissionsSha256(),q.getApprovedPermissionsSha256())
                     && v.getApprovedPermissionsManifest().equals(body.get("approvedPermissions")),409,"SKILL_PERMISSIONS_MISMATCH");
             require(application.lockSkillKey(a.tenantId(),a.clientId(),q.getTargetAgentId(),v.getSkillKey()).isEmpty(),409,"SKILL_ALREADY_ORDERED");
             long now=System.currentTimeMillis(); String orderId=id("so_"),installId=id("si_");
-            var reserve=reserve(a,orderId,v.getPriceMicro(),now);
+            var reserve=reserve(a,orderId,v.getPriceWen(),now);
             var order=new SkillOrder().setOrderId(orderId).setQuoteId(q.getQuoteId()).setProductVersionId(v.getProductVersionId())
                     .setTargetAgentId(q.getTargetAgentId()).setBuyerType("USER").setBuyerId(a.actorId()).setSellerType("SYSTEM").setSellerId("SKILL_STORE")
-                    .setPriceMicro(v.getPriceMicro()).setExpectedAgentVersion(q.getExpectedAgentVersion()).setPermissionGrantVersion(1L)
+                    .setPriceWen(v.getPriceWen()).setExpectedAgentVersion(q.getExpectedAgentVersion()).setPermissionGrantVersion(1L)
                     .setApprovedPermissionsManifest(v.getApprovedPermissionsManifest()).setApprovedPermissionsSha256(v.getApprovedPermissionsSha256())
                     .setEscrowId(reserve==null?null:reserve.escrow().escrowId()).setReserveTransactionId(reserve==null?null:reserve.transactionId())
                     .setStatus("FUNDS_HELD").setVersion(1L).setTenantId(a.tenantId()).setClientId(a.clientId()).setHeldAt(now).setUpdateTime(now);
@@ -192,7 +192,7 @@ public final class SkillMarketplaceService {
                     .setStatus("PENDING_INSTALLATION").setVersion(1L).setTenantId(a.tenantId()).setClientId(a.clientId()).setCreateTime(now).setUpdateTime(now);
             one(market.insertEntitlement(entitlement));
             one(trade.insertOrderReceipt(new SkillOrderReceipt().setOrderId(orderId).setActorType("USER").setActorId(a.actorId())
-                    .setIdempotencyKey(bytes(key)).setRequestHash(hash).setOrderVersion(1L).setOrderStatus("FUNDS_HELD").setPriceMicro(v.getPriceMicro())
+                    .setIdempotencyKey(bytes(key)).setRequestHash(hash).setOrderVersion(1L).setOrderStatus("FUNDS_HELD").setPriceWen(v.getPriceWen())
                     .setPermissionGrantVersion(1L).setApprovedPermissionsSha256(v.getApprovedPermissionsSha256()).setEscrowId(order.getEscrowId())
                     .setTenantId(a.tenantId()).setClientId(a.clientId()).setCreateTime(now)));
             versions.consume(a,q.getTargetAgentId(),q.getExpectedAgentVersion());
@@ -268,12 +268,12 @@ public final class SkillMarketplaceService {
     }
     String settle(HostingRentHttp.Actor a,SkillOrder o,SkillDeliveryBindingEntity binding,boolean capture,long now) {
         // Preserve the skill HTTP error for missing execution binding evidence.
-        if(o.getPriceMicro()!=0) require(binding!=null && binding.getEscrowVersion()!=null,503,"SKILL_STATE_UNAVAILABLE");
+        if(o.getPriceWen()!=0) require(binding!=null && binding.getEscrowVersion()!=null,503,"SKILL_STATE_UNAVAILABLE");
         return trade.settle(a.scope(),a.principal(),o,binding==null?null:binding.getEscrowVersion(),capture,now);
     }
     static Map<String,Object> quoteDto(SkillPurchaseQuote q) {
         return Map.of("quoteId",q.getQuoteId(),"productVersionId",q.getProductVersionId(),"targetAgentId",q.getTargetAgentId(),
-                "expectedAgentVersion",q.getExpectedAgentVersion().toString(),"price",cn.jia.economy.common.Money.silver(q.getExpectedPriceMicro()),"expiresAt",q.getExpiresAt());
+                "expectedAgentVersion",q.getExpectedAgentVersion().toString(),"price",cn.jia.economy.common.Money.wen(q.getExpectedPriceWen()),"expiresAt",q.getExpiresAt());
     }
     static Map<String,Object> orderDto(SkillOrder o,String status) {
         return Map.of("orderId",o.getOrderId(),"productVersionId",o.getProductVersionId(),"targetAgentId",o.getTargetAgentId(),

@@ -68,8 +68,8 @@ public interface SkillExecutionMapper {
                  OR (phase='WAITING_PROVIDER' AND #{row.phase} IN
                      ('WAITING_PROVIDER','RESULT_UNKNOWN','RESULT_READY','FAILED','CANCELLED'))
                  OR (phase='RESULT_UNKNOWN' AND #{row.phase} IN
-                     ('RESULT_UNKNOWN','WAITING_PROVIDER','RESULT_READY','FAILED'))
-                 OR (phase='RESULT_READY' AND #{row.phase} IN ('RESULT_READY','ARCHIVING'))
+                     ('RESULT_UNKNOWN','WAITING_PROVIDER','RESULT_READY','FAILED','CANCELLED'))
+                 OR (phase='RESULT_READY' AND #{row.phase} IN ('RESULT_READY','ARCHIVING','CANCELLED'))
                  OR (phase='ARCHIVING' AND #{row.phase} IN ('ARCHIVING','COMPLETE'))
                )
             """)

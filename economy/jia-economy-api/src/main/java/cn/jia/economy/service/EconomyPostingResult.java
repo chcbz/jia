@@ -7,8 +7,8 @@ public record EconomyPostingResult(
         String status,
         String currency,
         long postedAt,
-        long debitTotalMicro,
-        long creditTotalMicro,
+        long debitTotalWen,
+        long creditTotalWen,
         List<EconomyPostedLine> lines,
         EconomyEscrowResult escrow) {
 

@@ -76,8 +76,8 @@ class EconomyHostingRentSchemaInitializerMySqlTest {
     @Test
     void fullCatalogWithSameColumnNamesButIncompatibleDefinitionsFailsWithoutRepair() {
         for (CatalogChange change : List.of(
-                new CatalogChange("type", "plan", "amount_micro       BIGINT NOT NULL",
-                        "amount_micro       DECIMAL(20,0) NOT NULL", "columns"),
+                new CatalogChange("type", "plan", "amount_wen       BIGINT NOT NULL",
+                        "amount_wen       DECIMAL(20,0) NOT NULL", "columns"),
                 new CatalogChange("signedness", "plan", "plan_version       BIGINT NOT NULL",
                         "plan_version       BIGINT UNSIGNED NOT NULL", "columns"),
                 new CatalogChange("nullable", "plan", "create_time        BIGINT NOT NULL",
@@ -157,7 +157,7 @@ class EconomyHostingRentSchemaInitializerMySqlTest {
         jdbc.update("""
                 INSERT INTO economy_hosting_lease(
                     lease_id,principal_type,principal_id,persona_code,agent_id,live_slot,plan_id,plan_version,
-                    amount_micro,period_seconds,status,latest_intent_id,version,tenant_id,client_id,create_time,update_time)
+                    amount_wen,period_seconds,status,latest_intent_id,version,tenant_id,client_id,create_time,update_time)
                 VALUES(?,'USER','fixture-user','fixture-persona','fixture-agent',?,'fixture-only',1,
                        1000000000,2592000,?,?,1,'Tenant-A','Client-A',1,1)
                 """, leaseId, liveSlot, status, "intent-" + leaseId);
@@ -221,12 +221,12 @@ class EconomyHostingRentSchemaInitializerMySqlTest {
         new EconomyHostingRentSchemaInitializer(immutable).afterPropertiesSet();
         immutable.update("""
                 INSERT INTO economy_hosting_rent_plan(
-                    plan_id,plan_version,amount_micro,period_seconds,quote_ttl_seconds,
+                    plan_id,plan_version,amount_wen,period_seconds,quote_ttl_seconds,
                     currency,status,tenant_id,client_id,create_time)
-                VALUES('fixture-only',1,1000000000,2592000,30,'SILVER','ACTIVE','Tenant-A','Client-A',1)
+                VALUES('fixture-only',1,1000000000,2592000,30,'WEN','ACTIVE','Tenant-A','Client-A',1)
                 """);
         assertThrows(RuntimeException.class, () -> immutable.update(
-                "UPDATE economy_hosting_rent_plan SET amount_micro=1000000001 WHERE plan_id='fixture-only'"));
+                "UPDATE economy_hosting_rent_plan SET amount_wen=1000000001 WHERE plan_id='fixture-only'"));
         assertThrows(RuntimeException.class, () -> immutable.update(
                 "DELETE FROM economy_hosting_rent_plan WHERE plan_id='fixture-only'"));
     }

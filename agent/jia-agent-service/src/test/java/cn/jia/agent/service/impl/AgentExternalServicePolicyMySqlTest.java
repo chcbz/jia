@@ -610,6 +610,7 @@ class AgentExternalServicePolicyMySqlTest {
                 """);
         jdbc.execute("""
                 CREATE TABLE agent_runtime (
+                    execution_model VARCHAR(200) DEFAULT NULL,
                   id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY, agent_id VARCHAR(100) NOT NULL,
                   name VARCHAR(100), owner_jiacn VARCHAR(50), binding_id BIGINT, status VARCHAR(20),
                   tenant_id VARCHAR(50), client_id VARCHAR(50), UNIQUE KEY uk_fixture_runtime (agent_id)

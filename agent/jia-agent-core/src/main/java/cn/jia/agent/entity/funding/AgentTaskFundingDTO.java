@@ -13,6 +13,6 @@ public class AgentTaskFundingDTO implements Serializable {
     private String mode;
     private String status;
     private String escrowId;
-    private String grossBountyAmountMicro;
-    private String remainingMicro;
+    private String grossBountyAmountWen;
+    private String remainingWen;
 }

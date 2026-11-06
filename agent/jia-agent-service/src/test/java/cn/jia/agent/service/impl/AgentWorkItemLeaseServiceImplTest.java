@@ -82,6 +82,60 @@ class AgentWorkItemLeaseServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void taskCancellationRevokesCurrentLeaseWithoutLiveAgentOrMemberAndPreservesFacts() {
+        var current = item("claimed", 4L, AGENT, TOKEN, NOW + 100L, 1, 3);
+        current.setDescription("history");
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, OWNER, TASK, WORK)).thenReturn(current);
+        when(workItemDao.updateByVersion(eq(TENANT), eq(CLIENT), eq(OWNER), eq(WORK), eq(4L), any())).thenReturn(1);
+        var result = service.cancelForTask(TENANT, CLIENT, OWNER, TASK, WORK, 4L);
+        assertEquals("cancelled", result.getStatus());
+        assertEquals(5L, result.getVersion());
+        assertEquals(1, result.getAttemptCount());
+        assertNull(result.getLeaseToken()); assertNull(result.getLeaseUntil());
+        var update = ArgumentCaptor.forClass(AgentTaskWorkItemDTO.class);
+        verify(workItemDao).updateByVersion(eq(TENANT), eq(CLIENT), eq(OWNER), eq(WORK), eq(4L), update.capture());
+        assertNull(update.getValue().getAssigneeAgentId());
+        assertEquals("history", update.getValue().getDescription());
+        verifyNoInteractions(memberDao);
+        verify(eventWriter).append(any());
+    }
+
+    @Test
+    void taskCancellationRevokesExpiredLeaseWithoutRetryOrRequeue() {
+        var current = item("running", 4L, AGENT, TOKEN, NOW - 1L, 2, 3);
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, OWNER, TASK, WORK)).thenReturn(current);
+        when(workItemDao.updateByVersion(eq(TENANT), eq(CLIENT), eq(OWNER), eq(WORK), eq(4L), any())).thenReturn(1);
+        var result = service.cancelForTask(TENANT, CLIENT, OWNER, TASK, WORK, 4L);
+        assertEquals("cancelled", result.getStatus()); assertEquals(2, result.getAttemptCount());
+        verifyNoInteractions(memberDao);
+        verify(eventWriter).append(any());
+    }
+
+    @Test
+    void taskCancellationRejectsReplacementVersionAndDoesNotWriteEvent() {
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, OWNER, TASK, WORK))
+                .thenReturn(item("running", 5L, AGENT, "replacement", NOW + 100L, 1, 3));
+        assertEquals(Reason.VERSION_CONFLICT, assertThrows(AgentTaskStateException.class,
+                () -> service.cancelForTask(TENANT, CLIENT, OWNER, TASK, WORK, 4L)).getReason());
+        verify(workItemDao, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any());
+        verifyNoInteractions(eventWriter, memberDao);
+    }
+
+    @Test
+    void taskCancellationDoesNotRewriteTerminalWorkOrIgnoreCasFailure() {
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, OWNER, TASK, WORK))
+                .thenReturn(item("completed", 4L, null, null, null, 1, 3));
+        assertThrows(AgentTaskStateException.class,
+                () -> service.cancelForTask(TENANT, CLIENT, OWNER, TASK, WORK, 4L));
+        verify(workItemDao, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any());
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, OWNER, TASK, WORK))
+                .thenReturn(item("running", 4L, AGENT, TOKEN, NOW + 100L, 1, 3));
+        assertEquals(Reason.VERSION_CONFLICT, assertThrows(AgentTaskStateException.class,
+                () -> service.cancelForTask(TENANT, CLIENT, OWNER, TASK, WORK, 4L)).getReason());
+        verifyNoInteractions(eventWriter, memberDao);
+    }
+
+    @Test
     void claimReadyUsesScopedCasAndPreservesCompleteSnapshot() {
         AgentTaskWorkItemEntity current = item("ready", 3L, null, null, null, 1, 3);
         current.setDescription("preserve-description");

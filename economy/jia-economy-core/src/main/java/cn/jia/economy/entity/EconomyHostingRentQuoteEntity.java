@@ -11,7 +11,7 @@ public class EconomyHostingRentQuoteEntity {
     private String quotePurpose;
     private String planId;
     private Long planVersion;
-    private Long amountMicro;
+    private Long amountWen;
     private Long periodSeconds;
     private String principalType;
     private String principalId;

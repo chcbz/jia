@@ -212,23 +212,15 @@ class AgentProtocolMessageNormalizerTest {
     }
 
     @Test
-    void legacyTaskReportUsesOnlyTheLegacyResultAdapter() {
-        AgentProtocolMessageNormalizer.NormalizedMessage normalized = normalizer.normalizeInbound(Map.of(
-                "type", AgentProtocolConstants.LEGACY_TASK_REPORT,
-                "taskId", "task-001",
-                "agentId", "agent-001"));
-
-        assertEquals(AgentProtocolConstants.TYPE_WORK_RESULT, normalized.canonicalType());
-        assertEquals(AgentProtocolConstants.CATEGORY_RESULT, normalized.category());
-        assertTrue(normalized.legacyTaskReport());
-        assertFalse(normalized.executionTrigger());
-
-        AgentProtocolMessageNormalizer.NormalizedMessage codexResult = normalizer.normalizeInbound(Map.of(
-                "type", AgentProtocolConstants.LEGACY_CODEX_RESULT,
-                "taskId", "task-001",
-                "agentId", "agent-001"));
-        assertEquals(AgentProtocolConstants.TYPE_WORK_RESULT, codexResult.canonicalType());
-        assertFalse(codexResult.legacyTaskReport());
+    void retiredTaskReportsAreNotNormalizedIntoExecutionResults() {
+        for (String type : new String[] {"task.report", "task_report"}) {
+            var failure = assertThrows(AgentProtocolMessageNormalizer.AgentProtocolException.class,
+                    () -> normalizer.normalizeInbound(Map.of("type", type, "taskId", "task-001", "agentId", "agent-001")));
+            assertEquals("UNSUPPORTED_MESSAGE_TYPE", failure.getCode());
+        }
+        var result = normalizer.normalizeInbound(Map.of("type", AgentProtocolConstants.LEGACY_CODEX_RESULT,
+                "taskId", "task-001", "agentId", "agent-001"));
+        assertEquals(AgentProtocolConstants.TYPE_WORK_RESULT, result.canonicalType());
     }
 
     @Test

@@ -128,6 +128,35 @@ class AgentRuntimePersistentSessionFenceTest {
         assertFalse(entered.get());verify(manager).rollback(status);verify(manager,never()).commit(any());
     }
 
+    @Test void publicRuntimeBoundaryKeepsProxyTransactionAndCannotUseRevokedAdmissionOrBrowserIdentity() {
+        var session=auth.issue(installation,request("host","boot"),1000);
+        var admitted=auth.authenticate(headers(session),false);
+        var manager=mock(org.springframework.transaction.PlatformTransactionManager.class);
+        var status=mock(org.springframework.transaction.TransactionStatus.class);
+        when(manager.getTransaction(any())).thenReturn(status);
+        var advice=new org.springframework.transaction.interceptor.TransactionInterceptor();
+        advice.setTransactionManager(manager);
+        advice.setTransactionAttributeSource(new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource());
+        var factory=new org.springframework.aop.framework.ProxyFactory(auth);factory.setProxyTargetClass(true);factory.addAdvice(advice);
+        var proxy=(cn.jia.agent.service.AuthenticatedRuntimeOperation)factory.getProxy();
+        clearInvocations(installations,rows);
+        var scope=proxy.withAuthenticatedRuntime(admitted,value->value);
+        assertEquals(new cn.jia.agent.service.AuthenticatedRuntimeOperation.Scope("0","client","owner",AGENT),scope);
+        var ordered=inOrder(manager,installations,rows);
+        ordered.verify(manager).getTransaction(any());ordered.verify(installations).lock(ID);
+        ordered.verify(rows).lockInScope("0","client",AGENT);ordered.verify(manager).commit(status);
+        auth.issue(installation,request("host","replacement"),1001);clearInvocations(manager);
+        AtomicBoolean entered=new AtomicBoolean();
+        assertThrows(RuntimeException.class,()->proxy.withAuthenticatedRuntime(admitted,value->entered.compareAndSet(false,true)));
+        assertFalse(entered.get());verify(manager).rollback(status);verify(manager,never()).commit(any());
+        assertThrows(RuntimeException.class,()->proxy.withAuthenticatedRuntime(
+                new org.springframework.security.authentication.UsernamePasswordAuthenticationToken("owner","ignored",List.of()),
+                value->entered.compareAndSet(false,true)));
+        assertThrows(RuntimeException.class,()->proxy.withAuthenticatedRuntime((java.security.Principal)()->"owner",
+                value->entered.compareAndSet(false,true)));
+        assertFalse(entered.get());
+    }
+
     @Test void ordinaryFenceLocksIdentityBeforeRuntimeAndDoesNotActivatePendingIdentity() {
         var session = auth.issue(installation, request("host", "boot"), 1000);
         var proof = auth.verify(headers(session));

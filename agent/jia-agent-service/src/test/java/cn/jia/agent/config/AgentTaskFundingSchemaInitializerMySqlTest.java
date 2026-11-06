@@ -122,9 +122,9 @@ class AgentTaskFundingSchemaInitializerMySqlTest {
             String amount, String taskVersion, String refundedAt) {
         jdbc.execute("INSERT INTO agent_task_funding("
                 + "task_id,funding_mode,funding_status,payer_principal_type,payer_principal_id,"
-                + "settlement_policy,gross_bounty_amount_micro,remaining_micro,escrow_id,escrow_version,"
+                + "settlement_policy,gross_bounty_amount_wen,remaining_wen,escrow_id,escrow_version,"
                 + "reserve_transaction_id,required_skill_requirements,cancel_idempotency_key,"
-                + "cancel_request_hash,refund_transaction_id,cancel_refunded_micro,cancel_task_version,"
+                + "cancel_request_hash,refund_transaction_id,cancel_refunded_wen,cancel_task_version,"
                 + "refunded_at,version,tenant_id,client_id,create_time,update_time) VALUES('"
                 + taskId + "','FUNDED_SINGLE_AGENT','REFUNDED','USER','u','GROSS_INCLUSIVE',10,0,"
                 + "'esc-1',2,'etx-reserve','[]'," + key + "," + hash + ",'etx-refund',"

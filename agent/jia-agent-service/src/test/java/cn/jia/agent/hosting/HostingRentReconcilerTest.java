@@ -58,7 +58,7 @@ class HostingRentReconcilerTest {
         ObjectProvider<ManagedHostingProvisioner> providers = mock(ObjectProvider.class);
         when(providers.getIfAvailable()).thenReturn(provider);
         when(provider.available()).thenReturn(true);
-        worker = new HostingRentReconciler(new AgentHostingRentProperties(true, null, null, null),
+        worker = new HostingRentReconciler(new AgentHostingRentProperties(true, "1", "1000000000", "2592000"),
                 new EconomyPreviewGate(new EconomyPreviewProperties(true, List.of(
                         new EconomyPreviewProperties.AllowedScope(TENANT, CLIENT)))), mapper, ledger, identities,
                 owners, providers, credentials, manager, bindings, true);

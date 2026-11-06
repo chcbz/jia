@@ -64,13 +64,13 @@ class EconomyReadOnlyPreviewServiceTest {
     @Test
     void walletAndLedgerKeepTenantClientActorExactAcrossABAndDoNotCreateAccounts() {
         when(mapper.selectWallet("Tenant-A", "Client-A", "actor-A"))
-                .thenReturn(new EconomyWalletSnapshotRow().setAvailableMicro(12L).setHeldMicro(3L)
-                        .setMinimumHeldComponentMicro(3L).setVersion(9L));
+                .thenReturn(new EconomyWalletSnapshotRow().setAvailableWen(12L).setHeldWen(3L)
+                        .setMinimumHeldComponentWen(3L).setVersion(9L));
         when(mapper.selectWallet("Tenant-B", "Client-B", "actor-B"))
-                .thenReturn(new EconomyWalletSnapshotRow().setAvailableMicro(0L).setHeldMicro(0L)
-                        .setMinimumHeldComponentMicro(0L).setVersion(0L));
-        assertEquals("12", service.wallet(A).availableMicro());
-        assertEquals("0", service.wallet(B).availableMicro());
+                .thenReturn(new EconomyWalletSnapshotRow().setAvailableWen(0L).setHeldWen(0L)
+                        .setMinimumHeldComponentWen(0L).setVersion(0L));
+        assertEquals("12", service.wallet(A).availableWen());
+        assertEquals("0", service.wallet(B).availableWen());
 
         when(mapper.selectLedger("Tenant-A", "Client-A", "actor-A", null, null, 2))
                 .thenReturn(List.of(row(3, 100, 9), row(2, -40, 8)));
@@ -89,21 +89,21 @@ class EconomyReadOnlyPreviewServiceTest {
     void sameClientMarketplaceUsesSharedWriteScopeWhileWalletUsesExactJiacnAndActor() {
         var product = new EconomyReadOnlyPreviewRows.ProductRow().setProductId("p1").setName("Skill")
                 .setDescription("desc").setProductVersionId("pv1").setSkillKey("read")
-                .setSkillVersion("1.0.0").setPriceMicro(1L)
+                .setSkillVersion("1.0.0").setPriceWen(1L)
                 .setApprovedPermissionsManifest("[]").setDeploymentRestriction("NONE");
         when(mapper.selectProducts("0", "Client-A", 0, 2)).thenReturn(List.of(product));
         when(mapper.selectWallet("Tenant-A", "Client-A", "actor-A"))
-                .thenReturn(new EconomyWalletSnapshotRow().setAvailableMicro(11L).setHeldMicro(0L)
-                        .setMinimumHeldComponentMicro(0L).setVersion(1L));
+                .thenReturn(new EconomyWalletSnapshotRow().setAvailableWen(11L).setHeldWen(0L)
+                        .setMinimumHeldComponentWen(0L).setVersion(1L));
         when(mapper.selectWallet("Tenant-C", "Client-A", "actor-C"))
-                .thenReturn(new EconomyWalletSnapshotRow().setAvailableMicro(22L).setHeldMicro(0L)
-                        .setMinimumHeldComponentMicro(0L).setVersion(2L));
+                .thenReturn(new EconomyWalletSnapshotRow().setAvailableWen(22L).setHeldWen(0L)
+                        .setMinimumHeldComponentWen(0L).setVersion(2L));
 
         assertEquals(service.products(A, 0, 1), service.products(C, 0, 1));
         assertNotEquals(service.capabilities(A).principalScopeFingerprint(),
                 service.capabilities(C).principalScopeFingerprint());
-        assertEquals("11", service.wallet(A).availableMicro());
-        assertEquals("22", service.wallet(C).availableMicro());
+        assertEquals("11", service.wallet(A).availableWen());
+        assertEquals("22", service.wallet(C).availableWen());
         verify(mapper, times(2)).selectProducts("0", "Client-A", 0, 2);
         verify(mapper).selectWallet("Tenant-A", "Client-A", "actor-A");
         verify(mapper).selectWallet("Tenant-C", "Client-A", "actor-C");
@@ -142,12 +142,12 @@ class EconomyReadOnlyPreviewServiceTest {
     void catalogFiltersThroughReadMapperAndNeverExposesPackageOrPurchase() {
         var row = new EconomyReadOnlyPreviewRows.ProductRow().setProductId("p1").setName("Skill")
                 .setDescription("desc").setProductVersionId("pv1").setSkillKey("read")
-                .setSkillVersion("1.0.0").setPriceMicro(9007199254740993L)
+                .setSkillVersion("1.0.0").setPriceWen(9007199254740993L)
                 .setApprovedPermissionsManifest("[\"repo:read\"]").setDeploymentRestriction("NONE");
         when(mapper.selectProducts("0", "Client-A", 0, 2)).thenReturn(List.of(row));
         when(mapper.selectProduct("0", "Client-A", "p1")).thenReturn(List.of(row));
         Product product = service.products(A, 0, 1).items().getFirst();
-        assertEquals("9007199254740993", product.priceMicro());
+        assertEquals("9007199254740993", product.priceWen());
         assertEquals(List.of("repo:read"), product.permissions());
         assertEquals("CATALOG", product.priceSource());
         assertFalse(product.purchaseAllowed());
@@ -192,20 +192,20 @@ class EconomyReadOnlyPreviewServiceTest {
         when(mapper.selectLatestLease("0", "Client-A", "actor-A", AGENT))
                 .thenReturn(new EconomyHostingLeaseEntity().setLeaseId("lease-1").setAgentId(AGENT)
                         .setPrincipalType("USER").setPrincipalId("actor-A").setVersion(3L).setStatus("ACTIVE")
-                        .setPlanVersion(1L).setAmountMicro(1000000000L).setPeriodSeconds(2592000L)
+                        .setPlanVersion(1L).setAmountWen(1000000000L).setPeriodSeconds(2592000L)
                         .setPaidFrom(100L).setPaidThrough(200L)
                         .setTenantId("0").setClientId("Client-A"));
         HostingLease hosted = service.hostingLease(A, AGENT);
         assertEquals("APPLICABLE", hosted.applicability());
         assertEquals("lease-1", hosted.lease().leaseId());
-        assertEquals("1000000000", hosted.lease().amountMicro());
+        assertEquals("1000000000", hosted.lease().amountWen());
     }
 
     @Test
     void referencePlanDoesNotRequireOrEnablePaidHostingGate() {
         HostingPlan plan = service.hostingPlan(A);
         assertEquals("CONFIGURATION_REFERENCE", plan.source());
-        assertEquals(AgentHostingRentProperties.PREVIEW_AMOUNT_MICRO, plan.amountMicro());
+        assertEquals(AgentHostingRentProperties.PREVIEW_AMOUNT_WEN, plan.amountWen());
         assertFalse(plan.activationAllowed());
         verifyNoInteractions(mapper);
     }
@@ -216,7 +216,7 @@ class EconomyReadOnlyPreviewServiceTest {
         var expected = FundedBountyQuoteCalculator.calculate(1_000_000_000L, 0L,
                 FundedBountyPreviewPriceBook.ESTIMATED_TOKENS,
                 FundedBountyPreviewPriceBook.WORST_TOKENS);
-        assertEquals(Long.toString(expected.estimatedComputeMicro()), result.estimatedComputeMicro());
+        assertEquals(Long.toString(expected.estimatedComputeWen()), result.estimatedComputeWen());
         assertEquals(FundedBountyPreviewPriceBook.RATE_PROVENANCE, result.rateProvenance());
         assertEquals("4000", result.estimatedTokens().cachedInput());
         assertFalse(result.charged());
@@ -276,7 +276,7 @@ class EconomyReadOnlyPreviewServiceTest {
 
     private static EconomyWalletLedgerRow row(long id, long signed, long posted) {
         return new EconomyWalletLedgerRow().setRowId(id).setTransactionId("tx-" + id).setEntryId("en-" + id)
-                .setBusinessType("ISSUE_SILVER").setBusinessRef("fixture").setSignedAmountMicro(signed)
+                .setBusinessType("ISSUE_WEN").setBusinessRef("fixture").setSignedAmountWen(signed)
                 .setStatus("POSTED").setPostedAt(posted);
     }
 

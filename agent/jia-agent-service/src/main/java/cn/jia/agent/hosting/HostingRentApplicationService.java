@@ -111,7 +111,7 @@ public final class HostingRentApplicationService {
         if ("REPROVISION".equals(body.get("hostingAction"))) return reprovision(actor, personaCode, idempotencyKey, body);
         if (!"INITIAL".equals(body.get("hostingAction"))) throw badRequest();
         if (!Set.of("mode", "hostingAction", "agentId", "quoteId", "expectedPlanVersion",
-                "expectedAmountMicro", "expectedPeriodSeconds").containsAll(body.keySet())) throw badRequest();
+                "expectedAmountWen", "expectedPeriodSeconds").containsAll(body.keySet())) throw badRequest();
         requireCanonicalShape(required(body, "agentId"));
         byte[] hash = hash("INITIAL-CONFIRM:" + personaCode, body);
         MutationView replay = initialReplay(actor, personaCode, idempotencyKey, body, hash);
@@ -243,7 +243,7 @@ public final class HostingRentApplicationService {
                     : "REFUNDED".equals(lease.getStatus()) ? "INITIAL_REQUIRED" : "PENDING";
             return new LeaseView(true, new LeaseSnapshot(lease.getLeaseId(), agentId, lease.getPersonaCode(),
                     lease.getBindingId(), number(lease.getVersion()), lease.getStatus(), number(lease.getPlanVersion()),
-                    number(lease.getAmountMicro()), number(lease.getPeriodSeconds()), number(lease.getPaidFrom()), number(lease.getPaidThrough())),
+                    number(lease.getAmountWen()), number(lease.getPeriodSeconds()), number(lease.getPaidFrom()), number(lease.getPaidThrough())),
                     new IntentSnapshot(intent.getIntentId(), number(intent.getVersion()), intent.getStatus(),
                             number(intent.getServiceReadyAt()), intent.getReserveTransactionId(), intent.getCaptureTransactionId(),
                             intent.getRefundTransactionId()), admission, reprovisionSnapshot(rent.selectLatestReprovision(
@@ -305,7 +305,7 @@ public final class HostingRentApplicationService {
     private static ReprovisionView reprovisionReceipt(EconomyHostingReprovisionEntity row, byte[] hash) {
         if (!java.security.MessageDigest.isEqual(row.getRequestHash(), hash)) throw conflict("IDEMPOTENCY_CONFLICT");
         return new ReprovisionView(row.getRequestId(), row.getAgentId(), row.getLeaseId(), "REPROVISION", "ACCEPTED",
-                "SILVER", "0", number(row.getLeaseVersion()), number(row.getPaidThrough()), number(row.getRequestedAt()));
+                "WEN", "0", number(row.getLeaseVersion()), number(row.getPaidThrough()), number(row.getRequestedAt()));
     }
 
     private static ReprovisionSnapshot reprovisionSnapshot(EconomyHostingReprovisionEntity row) {
@@ -378,15 +378,15 @@ public final class HostingRentApplicationService {
         EconomyHostingRentPlanEntity plan = rent.selectPlanForUpdate(actor.tenantId(), actor.clientId(), PLAN_ID, version);
         if (plan == null) {
             EconomyHostingRentPlanEntity proposed = new EconomyHostingRentPlanEntity().setPlanId(PLAN_ID)
-                    .setPlanVersion(version).setAmountMicro(positive(properties.amountMicro()))
+                    .setPlanVersion(version).setAmountWen(positive(properties.amountWen()))
                     .setPeriodSeconds(positive(properties.periodSeconds())).setQuoteTtlSeconds(300L)
-                    .setCurrency("SILVER").setStatus("ACTIVE").setTenantId(actor.tenantId()).setClientId(actor.clientId())
+                    .setCurrency("WEN").setStatus("ACTIVE").setTenantId(actor.tenantId()).setClientId(actor.clientId())
                     .setCreateTime(System.currentTimeMillis());
             try { rent.insertPlanVersion(proposed); }
             catch (DataIntegrityViolationException concurrent) { /* Compare immutable winner below, never rewrite it. */ }
             plan = rent.selectPlanForUpdate(actor.tenantId(), actor.clientId(), PLAN_ID, version);
         }
-        if (plan == null || plan.getAmountMicro() != positive(properties.amountMicro())
+        if (plan == null || plan.getAmountWen() != positive(properties.amountWen())
                 || plan.getPeriodSeconds() != positive(properties.periodSeconds()) || !"ACTIVE".equals(plan.getStatus())) {
             throw conflict("HOSTING_RENT_PLAN_VERSION_CONFLICT");
         }
@@ -397,7 +397,7 @@ public final class HostingRentApplicationService {
         if (!purpose.equals(quote.getQuotePurpose()) || !persona.equals(quote.getPersonaCode())
                 || !quote.getAgentId().equals(required(body, "agentId"))
                 || quote.getPlanVersion() != positive(required(body, "expectedPlanVersion"))
-                || quote.getAmountMicro() != positive(required(body, "expectedAmountMicro"))
+                || quote.getAmountWen() != positive(required(body, "expectedAmountWen"))
                 || quote.getPeriodSeconds() != positive(required(body, "expectedPeriodSeconds"))) throw badRequest();
     }
 
@@ -414,32 +414,32 @@ public final class HostingRentApplicationService {
     private static String number(Long value) { return value == null ? null : value.toString(); }
     private static QuoteView quoteView(HostingRentQuoteReceipt quote) {
         return new QuoteView(quote.quoteId(), quote.purpose().name(), quote.personaCode(), quote.agentId(), quote.leaseId(),
-                number(quote.expectedLeaseVersion()), quote.planId(), number(quote.planVersion()), "SILVER",
-                number(quote.amountMicro()), number(quote.periodSeconds()), number(quote.expiresAt()));
+                number(quote.expectedLeaseVersion()), quote.planId(), number(quote.planVersion()), "WEN",
+                number(quote.amountWen()), number(quote.periodSeconds()), number(quote.expiresAt()));
     }
     private static MutationView mutationView(String agent, HostingRentMutationReceipt receipt) {
         return new MutationView(agent, receipt.intentId(), receipt.leaseId(), receipt.quoteId(), receipt.transactionId(),
-                receipt.status(), "SILVER", number(receipt.amountMicro()), number(receipt.periodSeconds()), number(receipt.occurredAt()));
+                receipt.status(), "WEN", number(receipt.amountWen()), number(receipt.periodSeconds()), number(receipt.occurredAt()));
     }
     public record QuoteView(String quoteId, String purpose, String personaCode, String agentId, String leaseId,
                             String expectedLeaseVersion, String planId, String planVersion, String currency,
-                            String amountMicro, String periodSeconds, String expiresAt) { }
+                            String amountWen, String periodSeconds, String expiresAt) { }
     public sealed interface BindView permits MutationView, ReprovisionView {
         String status();
-        String amountMicro();
+        String amountWen();
     }
     public record ReprovisionView(String requestId, String agentId, String leaseId, String operation, String status,
-                                 String currency, String amountMicro, String leaseVersion, String paidThrough, String occurredAt) implements BindView { }
+                                 String currency, String amountWen, String leaseVersion, String paidThrough, String occurredAt) implements BindView { }
     public record ReprovisionSnapshot(String requestId, String version, String status, String requestedAt, String serviceReadyAt) { }
     public record MutationView(String agentId, String intentId, String leaseId, String quoteId, String transactionId,
-                               String status, String currency, String amountMicro, String periodSeconds, String occurredAt) implements BindView { }
+                               String status, String currency, String amountWen, String periodSeconds, String occurredAt) implements BindView { }
     public record LeaseView(boolean managed, LeaseSnapshot lease, IntentSnapshot intent, String admission, ReprovisionSnapshot reprovision) {
         public LeaseView(boolean managed, LeaseSnapshot lease, IntentSnapshot intent, String admission) {
             this(managed, lease, intent, admission, null);
         }
     }
     public record LeaseSnapshot(String leaseId, String agentId, String personaCode, String bindingId, String version,
-                                String status, String planVersion, String amountMicro, String periodSeconds,
+                                String status, String planVersion, String amountWen, String periodSeconds,
                                 String paidFrom, String paidThrough) { }
     public record IntentSnapshot(String intentId, String version, String status, String serviceReadyAt,
                                  String reserveTransactionId, String captureTransactionId, String refundTransactionId) { }

@@ -61,7 +61,7 @@ class SkillPackagePublicationServiceTest {
     }
     SkillPackagePublicationService.Publish covered(String version,long expected,String source) {
         var c=request(version,expected);
-        return new SkillPackagePublicationService.Publish(c.productId(),c.productVersionId(),c.name(),c.description(),c.skillKey(),c.skillVersion(),c.priceMicro(),c.deploymentRestriction(),c.approvedPermissionsManifest(),c.packageSha256(),c.manifestSha256(),c.expectedProductVersion(),source);
+        return new SkillPackagePublicationService.Publish(c.productId(),c.productVersionId(),c.name(),c.description(),c.skillKey(),c.skillVersion(),c.priceWen(),c.deploymentRestriction(),c.approvedPermissionsManifest(),c.packageSha256(),c.manifestSha256(),c.expectedProductVersion(),source);
     }
     @Test void explicitCoveredUpgradeUsesSameProductAndReplaysWithoutAnotherPolicyWrite() {
         service.publish(actor,grant,request("v1",0),original.bytes());
@@ -100,7 +100,7 @@ class SkillPackagePublicationServiceTest {
         try(var files=Files.list(root)){assertEquals(0,files.count());}catch(java.io.IOException e){throw new AssertionError(e);}
     }
     @Test void transactionUsesPreparedDescriptionWithoutRetainingPackageBytes() {
-        var p=original.product();var approved=new SkillProductVersionEntity().setProductId(p.productId()).setProductVersionId(p.productVersionId()).setSkillKey(p.skillKey()).setSkillVersion(p.skillVersion()).setPackageSha256(p.packageSha256()).setPackageSize(p.packageSize()).setPriceMicro(p.priceMicro()).setApprovedPermissionsManifest(p.approvedPermissionsManifest()).setApprovedPermissionsSha256(p.approvedPermissionsSha256()).setDeploymentRestriction(p.deploymentRestriction()).setReviewStatus("APPROVED");
+        var p=original.product();var approved=new SkillProductVersionEntity().setProductId(p.productId()).setProductVersionId(p.productVersionId()).setSkillKey(p.skillKey()).setSkillVersion(p.skillVersion()).setPackageSha256(p.packageSha256()).setPackageSize(p.packageSize()).setPriceWen(p.priceWen()).setApprovedPermissionsManifest(p.approvedPermissionsManifest()).setApprovedPermissionsSha256(p.approvedPermissionsSha256()).setDeploymentRestriction(p.deploymentRestriction()).setReviewStatus("APPROVED");
         TransactionSynchronizationManager.setActualTransactionActive(true);assertThrows(SkillMarketplaceException.class,()->packages.prepare(approved));
         TransactionSynchronizationManager.setActualTransactionActive(false);var prepared=packages.describe(approved);
         TransactionSynchronizationManager.setActualTransactionActive(true);
@@ -118,7 +118,7 @@ class SkillPackagePublicationServiceTest {
         assertEquals("UPDATED",updated.disposition());assertEquals(3,updated.productVersion());
         assertEquals("RECORDED",service.updateMetadata(actor,grant,command).disposition());
         assertEquals("v1",products.get("product").getCurrentProductVersionId());assertEquals(1,versions.size());
-        assertEquals(0,versions.get("v1").getPriceMicro());
+        assertEquals(0,versions.get("v1").getPriceWen());
         verify(mapper,times(1)).updateProductMetadata(anyString(),anyString(),anyString(),anyString(),anyString(),anyLong(),anyLong());
         assertThrows(SkillMarketplaceException.class,()->service.updateMetadata(actor,grant,new SkillPackagePublicationService.UpdateMetadata("product","stale","stale",2)));
     }

@@ -9,7 +9,7 @@ public record FundedBountyRefundCommand(
         String idempotencyKey,
         byte[] requestHash,
         String taskId,
-        long amountMicro,
+        long amountWen,
         long expectedEscrowVersion,
         String reserveTransactionId) {
     public FundedBountyRefundCommand {

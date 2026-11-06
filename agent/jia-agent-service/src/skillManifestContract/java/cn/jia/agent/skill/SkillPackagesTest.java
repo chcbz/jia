@@ -25,7 +25,7 @@ class SkillPackagesTest {
         String permissions="{}";
         return new SkillProductVersionEntity().setProductId("sp_pdf").setProductVersionId("spv_pdf_1")
                 .setSkillKey("pdf-export").setSkillVersion("1.0.0").setPackageSize((long)bytes.length)
-                .setPackageSha256(SkillPackageStore.sha256(bytes)).setReviewStatus("APPROVED").setPriceMicro(0L)
+                .setPackageSha256(SkillPackageStore.sha256(bytes)).setReviewStatus("APPROVED").setPriceWen(0L)
                 .setDeploymentRestriction("NONE").setApprovedPermissionsManifest(permissions)
                 .setApprovedPermissionsSha256(SkillPackageStore.sha256(permissions.getBytes(StandardCharsets.UTF_8)))
                 .setTenantId("tenant").setClientId("client");
@@ -50,8 +50,8 @@ class SkillPackagesTest {
     }
     @Test void downloadsAreIsolatedAndDescriptionsNeverSharePriceOrPermissionIdentity() {
         byte[] bytes=archive("same content");new SkillPackageStore(root).publish(bytes);var packages=new SkillPackages(root);
-        var first=packages.describe(approved(bytes));var second=packages.describe(approved(bytes).setPriceMicro(5L).setProductVersionId("spv_2"));
-        assertEquals(0L,first.product().priceMicro());assertEquals(5L,second.product().priceMicro());
+        var first=packages.describe(approved(bytes));var second=packages.describe(approved(bytes).setPriceWen(5L).setProductVersionId("spv_2"));
+        assertEquals(0L,first.product().priceWen());assertEquals(5L,second.product().priceWen());
         byte[] copy=packages.prepare(approved(bytes)).bytes();copy[0]^=1;assertArrayEquals(bytes,packages.prepare(approved(bytes)).bytes());
     }
     @Test void operationPreparationSurvivesZeroCacheBudgetAndTransactionWithoutFiles() throws Exception {
@@ -131,7 +131,7 @@ class SkillPackagesTest {
     }
     @Test void approvedFactDriftRejectedInsideTransaction() {
         byte[] bytes=archive("facts");new SkillPackageStore(root).publish(bytes);var packages=new SkillPackages(root);var prepared=packages.prepare(approved(bytes));
-        assertThrows(SkillMarketplaceException.class,()->SkillPackages.revalidate(approved(bytes).setPriceMicro(1L),prepared));
+        assertThrows(SkillMarketplaceException.class,()->SkillPackages.revalidate(approved(bytes).setPriceWen(1L),prepared));
         assertThrows(SkillMarketplaceException.class,()->SkillPackages.revalidate(approved(bytes).setProductVersionId("other"),prepared));
         assertThrows(SkillMarketplaceException.class,()->SkillPackages.revalidate(approved(bytes).setSkillKey("other"),prepared));
         assertThrows(SkillMarketplaceException.class,()->SkillPackages.revalidate(approved(bytes).setReviewStatus("REJECTED"),prepared));

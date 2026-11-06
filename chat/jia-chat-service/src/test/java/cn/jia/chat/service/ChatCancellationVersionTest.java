@@ -40,6 +40,53 @@ class ChatCancellationVersionTest {
     }
 
     @Test
+    void taskCancellationLocksConversationBeforeTurnAndPersistsStopExactlyOnce() {
+        var turn = turn().setLastDeltaSeq(0L);
+        var conversation = new ChatConversationEntity().setTaskId("task").setConversationType("PRIVATE");
+        when(dao.findTaskDiscussions("0", "owner", "client", "task")).thenReturn(List.of(turn));
+        when(conversations.lockScopedByIdIncludingDeleted("0", "owner", "client", "1001"))
+                .thenReturn(conversation);
+        when(dao.lockTurn("0", "owner", "client", "turn")).thenReturn(turn);
+        when(dao.updateTurnState(eq(turn), eq("CANCELLED"), eq("TASK_CANCELLED"), anyLong())).thenReturn(1);
+        when(dao.insertOutbox(any())).thenReturn(1); journal();
+        when(dao.findRequest("0", "owner", "client", "request"))
+                .thenReturn(new ChatRequestEntity().setAggregateState("CANCELLED"));
+        when(dao.findTurnsByRequest("0", "owner", "client", "request")).thenReturn(List.of(turn));
+        service.cancelTaskDiscussions("0", "client", "owner", "task");
+        var order = inOrder(conversations, dao);
+        order.verify(dao).findTaskDiscussions("0", "owner", "client", "task");
+        order.verify(conversations).lockScopedByIdIncludingDeleted("0", "owner", "client", "1001");
+        order.verify(dao).lockTurn("0", "owner", "client", "turn");
+        assertEquals("CANCELLED", turn.getState()); assertEquals(8L, turn.getStateVersion());
+        var stop = org.mockito.ArgumentCaptor.forClass(ChatDispatchOutboxEntity.class);
+        verify(dao).insertOutbox(stop.capture());
+        assertEquals("CANCEL_REQUESTED", stop.getValue().getEventType());
+        assertEquals("dispatch", stop.getValue().getDispatchId());
+        assertEquals("turn", stop.getValue().getTurnId());
+        service.cancelTaskDiscussions("0", "client", "owner", "task");
+        verify(dao, times(1)).insertOutbox(any());
+        verifyNoInteractions(messages);
+    }
+
+    @Test
+    void taskCancellationPreservesFinalWonBeforeLockAndRejectsChangedTaskBinding() {
+        var turn = turn().setState("FINAL_PERSISTED").setFinalDigest("existing").setFinalMessageId(9L);
+        var conversation = new ChatConversationEntity().setTaskId("task");
+        when(dao.findTaskDiscussions("0", "owner", "client", "task")).thenReturn(List.of(turn));
+        when(conversations.lockScopedByIdIncludingDeleted("0", "owner", "client", "1001"))
+                .thenReturn(conversation);
+        when(dao.lockTurn("0", "owner", "client", "turn")).thenReturn(turn);
+        service.cancelTaskDiscussions("0", "client", "owner", "task");
+        assertEquals("existing", turn.getFinalDigest()); assertEquals(9L, turn.getFinalMessageId());
+        conversation.setTaskId("other-task");
+        assertThrows(ChatDeliberationException.class,
+                () -> service.cancelTaskDiscussions("0", "client", "owner", "task"));
+        verify(dao, never()).updateTurnState(any(), any(), any(), anyLong());
+        verify(dao, never()).insertOutbox(any());
+        verifyNoInteractions(messages);
+    }
+
+    @Test
     void replyEventsCarryExactTurnVersionNotJournalVersion() throws Exception {
         journal();
         ChatTurnEntity turn = turn().setStateVersion(9007199254740993L);

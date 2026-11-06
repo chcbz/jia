@@ -58,14 +58,14 @@ import static cn.jia.economy.exception.EconomyPostingException.Reason.JOURNAL_ID
 @Service
 public class EconomyPostingServiceImpl implements EconomyPostingService {
     private static final Set<EconomyJournalType> V0_ENABLED_TYPES = Set.of(
-            EconomyJournalType.ISSUE_SILVER,
+            EconomyJournalType.ISSUE_WEN,
             EconomyJournalType.RESERVE_BOUNTY,
             EconomyJournalType.RESERVE_SKILL,
             EconomyJournalType.RESERVE_HOSTING_RENT,
             EconomyJournalType.CAPTURE_HOSTING_RENT,
             EconomyJournalType.REFUND_HOSTING_RENT,
             EconomyJournalType.REFUND_BOUNTY,
-            EconomyJournalType.CAPTURE_COMPUTE, EconomyJournalType.CAPTURE_FEE, EconomyJournalType.PAY_AGENT,
+            EconomyJournalType.CAPTURE_TASK, EconomyJournalType.CAPTURE_COMPUTE, EconomyJournalType.CAPTURE_FEE, EconomyJournalType.PAY_AGENT,
             EconomyJournalType.CAPTURE_SKILL, EconomyJournalType.REFUND_SKILL);
 
     private final EconomyLedgerMapper mapper;
@@ -131,11 +131,11 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                 .setRequestHash(posting.command().requestHash())
                 .setBusinessType(posting.command().journalType().name())
                 .setBusinessId(posting.command().businessId())
-                .setCurrency(EconomyConstants.CURRENCY_SILVER)
+                .setCurrency(EconomyConstants.CURRENCY_WEN)
                 .setStatus("POSTING")
                 .setEntryCount(0)
-                .setDebitTotalMicro(0L)
-                .setCreditTotalMicro(0L)
+                .setDebitTotalWen(0L)
+                .setCreditTotalWen(0L)
                 .setTenantId(posting.command().scope().tenantId())
                 .setClientId(posting.command().scope().clientId())
                 .setCreateTime(now)
@@ -186,9 +186,9 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                     .setTransactionId(transactionId)
                     .setAccountId(locked.entity().getAccountId())
                     .setEntrySequence(sequence)
-                    .setSignedAmountMicro(locked.signedAmount())
-                    .setBalanceAfterMicro(locked.balanceAfter())
-                    .setCurrency(EconomyConstants.CURRENCY_SILVER)
+                    .setSignedAmountWen(locked.signedAmount())
+                    .setBalanceAfterWen(locked.balanceAfter())
+                    .setCurrency(EconomyConstants.CURRENCY_WEN)
                     .setStatus("POSTED")
                     .setPostedAt(now)
                     .setTenantId(reservation.getTenantId())
@@ -206,7 +206,7 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                 "journal POSTED finalize");
 
         return new EconomyPostingResult(
-                transactionId, "POSTED", EconomyConstants.CURRENCY_SILVER, now,
+                transactionId, "POSTED", EconomyConstants.CURRENCY_WEN, now,
                 posting.debitTotal(), posting.creditTotal(), postedLines,
                 escrow == null ? null : escrow.result());
     }
@@ -225,14 +225,14 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
             if (!"ACTIVE".equals(account.getStatus())) {
                 throw new EconomyPostingException(ACCOUNT_NOT_ACTIVE, "economy account is not active");
             }
-            long balanceAfter = checkedAdd(account.getBalanceMicro(), line.signedAmountMicro());
+            long balanceAfter = checkedAdd(account.getBalanceWen(), line.signedAmountWen());
             boolean negativeCapable = isNegativeCapableSystemAccount(key);
             if (balanceAfter < 0
                     && (!negativeCapable || !Integer.valueOf(1).equals(account.getAllowNegative()))) {
-                throw new EconomyPostingException(INSUFFICIENT_FUNDS, "insufficient SILVER balance");
+                throw new EconomyPostingException(INSUFFICIENT_FUNDS, "insufficient WEN balance");
             }
             long versionAfter = checkedAdd(account.getVersion(), 1L);
-            locked.put(key, new LockedAccount(account, line.signedAmountMicro(), balanceAfter, versionAfter));
+            locked.put(key, new LockedAccount(account, line.signedAmountWen(), balanceAfter, versionAfter));
         }
         return locked;
     }
@@ -269,10 +269,10 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                     .setBusinessId(posting.command().businessId())
                     .setPayerAccountId(payer.entity().getAccountId())
                     .setEscrowAccountId(held.entity().getAccountId())
-                    .setCurrency(EconomyConstants.CURRENCY_SILVER)
-                    .setGrossMicro(funding.amountMicro())
-                    .setCapturedMicro(0L)
-                    .setRefundedMicro(0L)
+                    .setCurrency(EconomyConstants.CURRENCY_WEN)
+                    .setGrossWen(funding.amountWen())
+                    .setCapturedWen(0L)
+                    .setRefundedWen(0L)
                     .setStatus("ACTIVE")
                     .setVersion(1L)
                     .setTenantId(posting.command().scope().tenantId())
@@ -301,9 +301,9 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                     .setPayerAccountId(current.getPayerAccountId())
                     .setEscrowAccountId(current.getEscrowAccountId())
                     .setCurrency(current.getCurrency())
-                    .setGrossMicro(checkedAdd(current.getGrossMicro(), funding.amountMicro()))
-                    .setCapturedMicro(current.getCapturedMicro())
-                    .setRefundedMicro(current.getRefundedMicro())
+                    .setGrossWen(checkedAdd(current.getGrossWen(), funding.amountWen()))
+                    .setCapturedWen(current.getCapturedWen())
+                    .setRefundedWen(current.getRefundedWen())
                     .setStatus(current.getStatus())
                     .setVersion(checkedAdd(current.getVersion(), 1L))
                     .setTenantId(current.getTenantId())
@@ -317,16 +317,16 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                 .setFundingSequence(fundingSequence)
                 .setReserveTransactionId(transactionId)
                 .setPayerAccountId(target.getPayerAccountId())
-                .setAmountMicro(funding.amountMicro())
-                .setEscrowGrossAfterMicro(target.getGrossMicro())
+                .setAmountWen(funding.amountWen())
+                .setEscrowGrossAfterWen(target.getGrossWen())
                 .setEscrowVersionAfter(target.getVersion())
-                .setCurrency(EconomyConstants.CURRENCY_SILVER)
+                .setCurrency(EconomyConstants.CURRENCY_WEN)
                 .setTenantId(target.getTenantId())
                 .setClientId(target.getClientId())
                 .setCreatedAt(now);
         return new EscrowPlan(current, target, lot, insert,
                 new EconomyEscrowResult(target.getEscrowId(), fundingSequence,
-                        funding.amountMicro(), target.getGrossMicro(), target.getVersion()));
+                        funding.amountWen(), target.getGrossWen(), target.getVersion()));
     }
 
     private void persistEscrow(EscrowPlan escrow) {
@@ -335,7 +335,7 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
         } else {
             requireOne(mapper.updateEscrowGross(
                     escrow.current(), escrow.target().getTenantId(), escrow.target().getClientId(),
-                    escrow.target().getGrossMicro(), escrow.target().getVersion(),
+                    escrow.target().getGrossWen(), escrow.target().getVersion(),
                     escrow.target().getUpdateTime()), "escrow root CAS");
         }
         requireOne(mapper.insertFundingLot(escrow.lot()), "escrow funding lot insert");
@@ -352,8 +352,8 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                 posting.command().scope().tenantId(), posting.command().scope().clientId(),
                 settlement.escrowType().name(), posting.command().businessId());
         if (current == null || current.getId() == null || current.getVersion() == null
-                || current.getGrossMicro() == null || current.getCapturedMicro() == null
-                || current.getRefundedMicro() == null
+                || current.getGrossWen() == null || current.getCapturedWen() == null
+                || current.getRefundedWen() == null
                 || current.getVersion() != settlement.expectedEscrowVersion()
                 || !settlement.escrowType().name().equals(current.getBusinessType())
                 || !posting.command().businessId().equals(current.getBusinessId())
@@ -366,7 +366,7 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                             .equals(current.getPayerAccountId()))
                 || !("ACTIVE".equals(current.getStatus())
                     || isBountyCapture(posting.command().journalType()) && "PARTIALLY_CAPTURED".equals(current.getStatus()))
-                || !EconomyConstants.CURRENCY_SILVER.equals(current.getCurrency())) {
+                || !EconomyConstants.CURRENCY_WEN.equals(current.getCurrency())) {
             throw new EconomyPostingException(ESCROW_CONFLICT, "escrow settlement root is incompatible");
         }
         EconomyEscrowFundingLotEntity fundingLot = mapper.selectFundingLotByTransaction(
@@ -375,24 +375,24 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
             throw new EconomyPostingException(ESCROW_CONFLICT,
                     "escrow settlement does not reference its immutable reserve transaction");
         }
-        long remaining = checkedAdd(checkedAdd(current.getGrossMicro(), -current.getCapturedMicro()),
-                -current.getRefundedMicro());
-        if (settlement.amountMicro() > remaining) {
+        long remaining = checkedAdd(checkedAdd(current.getGrossWen(), -current.getCapturedWen()),
+                -current.getRefundedWen());
+        if (settlement.amountWen() > remaining) {
             throw new EconomyPostingException(ESCROW_CONFLICT, "escrow settlement exceeds remaining funds");
         }
         boolean capture = posting.command().journalType() == EconomyJournalType.CAPTURE_HOSTING_RENT
                 || isBountyCapture(posting.command().journalType())
                 || posting.command().journalType() == EconomyJournalType.CAPTURE_SKILL;
         long capturedAfter = capture
-                ? checkedAdd(current.getCapturedMicro(), settlement.amountMicro())
-                : current.getCapturedMicro();
+                ? checkedAdd(current.getCapturedWen(), settlement.amountWen())
+                : current.getCapturedWen();
         long refundedAfter = capture
-                ? current.getRefundedMicro()
-                : checkedAdd(current.getRefundedMicro(), settlement.amountMicro());
-        long remainingAfter = checkedAdd(checkedAdd(current.getGrossMicro(), -capturedAfter), -refundedAfter);
+                ? current.getRefundedWen()
+                : checkedAdd(current.getRefundedWen(), settlement.amountWen());
+        long remainingAfter = checkedAdd(checkedAdd(current.getGrossWen(), -capturedAfter), -refundedAfter);
         String status;
-        if (remainingAfter == 0 && capturedAfter == current.getGrossMicro()) status = "CAPTURED";
-        else if (remainingAfter == 0 && refundedAfter == current.getGrossMicro()) status = "REFUNDED";
+        if (remainingAfter == 0 && capturedAfter == current.getGrossWen()) status = "CAPTURED";
+        else if (remainingAfter == 0 && refundedAfter == current.getGrossWen()) status = "REFUNDED";
         else if (capturedAfter > 0) status = "PARTIALLY_CAPTURED";
         else status = "ACTIVE";
         return new EscrowSettlementPlan(current, capturedAfter, refundedAfter, status,
@@ -412,7 +412,7 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                 || !MessageDigest.isEqual(posting.command().requestHash(), transaction.getRequestHash())
                 || !transaction.getBusinessType().equals(posting.command().journalType().name())
                 || !transaction.getBusinessId().equals(posting.command().businessId())
-                || !transaction.getCurrency().equals(EconomyConstants.CURRENCY_SILVER)) {
+                || !transaction.getCurrency().equals(EconomyConstants.CURRENCY_WEN)) {
             throw new EconomyPostingException(IDEMPOTENCY_CONFLICT,
                     "idempotency key is already bound to a different or incomplete operation");
         }
@@ -431,22 +431,22 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
             if (!Integer.valueOf(expectedSequence).equals(entry.getEntrySequence())
                     || !"POSTED".equals(entry.getStatus())
                     || !transaction.getTransactionId().equals(entry.getTransactionId())
-                    || !EconomyConstants.CURRENCY_SILVER.equals(entry.getCurrency())
-                    || entry.getSignedAmountMicro() == null || entry.getSignedAmountMicro() == 0
-                    || entry.getBalanceAfterMicro() == null) {
+                    || !EconomyConstants.CURRENCY_WEN.equals(entry.getCurrency())
+                    || entry.getSignedAmountWen() == null || entry.getSignedAmountWen() == 0
+                    || entry.getBalanceAfterWen() == null) {
                 throw new EconomyPostingException(JOURNAL_CORRUPT, "POSTED entry is inconsistent");
             }
-            signedTotal = checkedAdd(signedTotal, entry.getSignedAmountMicro());
-            if (entry.getSignedAmountMicro() < 0) {
-                debit = checkedAdd(debit, checkedNegate(entry.getSignedAmountMicro()));
+            signedTotal = checkedAdd(signedTotal, entry.getSignedAmountWen());
+            if (entry.getSignedAmountWen() < 0) {
+                debit = checkedAdd(debit, checkedNegate(entry.getSignedAmountWen()));
             } else {
-                credit = checkedAdd(credit, entry.getSignedAmountMicro());
+                credit = checkedAdd(credit, entry.getSignedAmountWen());
             }
             lines.add(new EconomyPostedLine(entry.getAccountId(), entry.getEntrySequence(),
-                    entry.getSignedAmountMicro(), entry.getBalanceAfterMicro()));
+                    entry.getSignedAmountWen(), entry.getBalanceAfterWen()));
         }
-        if (signedTotal != 0 || debit != transaction.getDebitTotalMicro()
-                || credit != transaction.getCreditTotalMicro() || debit != credit) {
+        if (signedTotal != 0 || debit != transaction.getDebitTotalWen()
+                || credit != transaction.getCreditTotalWen() || debit != credit) {
             throw new EconomyPostingException(JOURNAL_CORRUPT, "POSTED transaction is not balanced");
         }
         EconomyEscrowResult escrowResult = null;
@@ -457,7 +457,7 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                 throw new EconomyPostingException(JOURNAL_CORRUPT, "POSTED reserve lacks immutable funding lot");
             }
             escrowResult = new EconomyEscrowResult(lot.getEscrowId(), lot.getFundingSequence(),
-                    lot.getAmountMicro(), lot.getEscrowGrossAfterMicro(), lot.getEscrowVersionAfter());
+                    lot.getAmountWen(), lot.getEscrowGrossAfterWen(), lot.getEscrowVersionAfter());
         }
         return new EconomyPostingResult(transaction.getTransactionId(), transaction.getStatus(),
                 transaction.getCurrency(), transaction.getPostedAt(), debit, credit, lines, escrowResult);
@@ -491,18 +491,18 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
         long debit = 0;
         long credit = 0;
         for (EconomyPostingLine line : command.lines()) {
-            if (line == null || line.account() == null || line.signedAmountMicro() == 0) {
+            if (line == null || line.account() == null || line.signedAmountWen() == 0) {
                 throw new EconomyPostingException(INVALID_COMMAND, "journal lines must be non-zero and complete");
             }
             validateAccountKey(line.account());
             if (sorted.put(line.account(), line) != null) {
                 throw new EconomyPostingException(INVALID_COMMAND, "duplicate account line is forbidden");
             }
-            signedTotal = checkedAdd(signedTotal, line.signedAmountMicro());
-            if (line.signedAmountMicro() < 0) {
-                debit = checkedAdd(debit, checkedNegate(line.signedAmountMicro()));
+            signedTotal = checkedAdd(signedTotal, line.signedAmountWen());
+            if (line.signedAmountWen() < 0) {
+                debit = checkedAdd(debit, checkedNegate(line.signedAmountWen()));
             } else {
-                credit = checkedAdd(credit, line.signedAmountMicro());
+                credit = checkedAdd(credit, line.signedAmountWen());
             }
         }
         if (signedTotal != 0 || debit == 0 || debit != credit) {
@@ -518,17 +518,17 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
             EconomyPostingCommand command,
             List<EconomyPostingLine> lines,
             boolean treasuryAuthority) {
-        if (command.journalType() == EconomyJournalType.ISSUE_SILVER) {
+        if (command.journalType() == EconomyJournalType.ISSUE_WEN) {
             if (!treasuryAuthority) {
                 throw new EconomyPostingException(INVALID_COMMAND,
-                        "ISSUE_SILVER requires the internal treasury authority");
+                        "ISSUE_WEN requires the internal treasury authority");
             }
             if (command.escrowFunding() != null || command.escrowSettlement() != null || lines.size() != 2
                     || !matches(lines, EconomyAccountOwnerType.SYSTEM,
-                            EconomyAccountPurpose.SILVER_ISSUANCE, true)
+                            EconomyAccountPurpose.WEN_ISSUANCE, true)
                     || !matches(lines, EconomyAccountOwnerType.USER,
                             EconomyAccountPurpose.AVAILABLE, false)) {
-                throw new EconomyPostingException(INVALID_COMMAND, "ISSUE_SILVER journal template mismatch");
+                throw new EconomyPostingException(INVALID_COMMAND, "ISSUE_WEN journal template mismatch");
             }
             return;
         }
@@ -544,7 +544,7 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
         EconomyEscrowFunding funding = command.escrowFunding();
         if (funding == null || command.escrowSettlement() != null || funding.escrowType() == null
                 || funding.payerAccount() == null || funding.escrowAccount() == null
-                || funding.amountMicro() <= 0 || lines.size() != 2) {
+                || funding.amountWen() <= 0 || lines.size() != 2) {
             throw new EconomyPostingException(INVALID_COMMAND, "reserve journal requires exact escrow funding data");
         }
         validateAccountKey(funding.payerAccount());
@@ -562,7 +562,7 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
             expectedOwner = EconomyAccountOwnerType.LEASE;
         }
         Map<EconomyAccountKey, Long> amounts = new HashMap<>();
-        lines.forEach(line -> amounts.put(line.account(), line.signedAmountMicro()));
+        lines.forEach(line -> amounts.put(line.account(), line.signedAmountWen()));
         if (command.principal().type() != EconomyPrincipalType.USER
                 || !exactIdentityEquals(funding.payerAccount().ownerId(), command.principal().id())
                 || funding.escrowType() != expectedType
@@ -571,15 +571,15 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                 || funding.escrowAccount().ownerType() != expectedOwner
                 || funding.escrowAccount().purpose() != EconomyAccountPurpose.ESCROW
                 || !funding.escrowAccount().ownerId().equals(command.businessId())
-                || !Long.valueOf(-funding.amountMicro()).equals(amounts.get(funding.payerAccount()))
-                || !Long.valueOf(funding.amountMicro()).equals(amounts.get(funding.escrowAccount()))) {
+                || !Long.valueOf(-funding.amountWen()).equals(amounts.get(funding.payerAccount()))
+                || !Long.valueOf(funding.amountWen()).equals(amounts.get(funding.escrowAccount()))) {
             throw new EconomyPostingException(INVALID_COMMAND, "reserve journal template mismatch");
         }
     }
 
 
     private static boolean isBountyCapture(EconomyJournalType type) {
-        return type == EconomyJournalType.CAPTURE_COMPUTE || type == EconomyJournalType.CAPTURE_FEE
+        return type == EconomyJournalType.CAPTURE_TASK || type == EconomyJournalType.CAPTURE_COMPUTE || type == EconomyJournalType.CAPTURE_FEE
                 || type == EconomyJournalType.PAY_AGENT;
     }
 
@@ -588,14 +588,14 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
         EconomyEscrowSettlement settlement = command.escrowSettlement();
         if (command.escrowFunding() != null || settlement == null || lines.size() != 2
                 || settlement.escrowAccount() == null || settlement.destinationAccount() == null
-                || settlement.amountMicro() <= 0 || settlement.expectedEscrowVersion() <= 0) {
+                || settlement.amountWen() <= 0 || settlement.expectedEscrowVersion() <= 0) {
             throw new EconomyPostingException(INVALID_COMMAND, "escrow settlement data is incomplete");
         }
         requireExact(settlement.reserveTransactionId(), "reserveTransactionId", 100);
         validateAccountKey(settlement.escrowAccount());
         validateAccountKey(settlement.destinationAccount());
         Map<EconomyAccountKey, Long> amounts = new HashMap<>();
-        lines.forEach(line -> amounts.put(line.account(), line.signedAmountMicro()));
+        lines.forEach(line -> amounts.put(line.account(), line.signedAmountWen()));
         boolean capture = command.journalType() == EconomyJournalType.CAPTURE_HOSTING_RENT;
         boolean bountyRefund = command.journalType() == EconomyJournalType.REFUND_BOUNTY
                 || isBountyCapture(command.journalType());
@@ -616,6 +616,9 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
         if (isBountyCapture(command.journalType())) {
             EconomyAccountKey destination = settlement.destinationAccount();
             destinationMatches = switch (command.journalType()) {
+                case CAPTURE_TASK -> destination.ownerType() == EconomyAccountOwnerType.SYSTEM
+                        && destination.purpose() == EconomyAccountPurpose.TASK_FEE
+                        && "TASK_FEE".equals(destination.ownerId());
                 case CAPTURE_COMPUTE -> destination.ownerType() == EconomyAccountOwnerType.SYSTEM
                         && destination.purpose() == EconomyAccountPurpose.MODEL_COST
                         && "MODEL_COST".equals(destination.ownerId());
@@ -639,8 +642,8 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                 || settlement.escrowAccount().purpose() != EconomyAccountPurpose.ESCROW
                 || !settlement.escrowAccount().ownerId().equals(command.businessId())
                 || !destinationMatches
-                || !Long.valueOf(-settlement.amountMicro()).equals(amounts.get(settlement.escrowAccount()))
-                || !Long.valueOf(settlement.amountMicro()).equals(amounts.get(settlement.destinationAccount()))) {
+                || !Long.valueOf(-settlement.amountWen()).equals(amounts.get(settlement.escrowAccount()))
+                || !Long.valueOf(settlement.amountWen()).equals(amounts.get(settlement.destinationAccount()))) {
             throw new EconomyPostingException(INVALID_COMMAND, "escrow settlement template mismatch");
         }
     }
@@ -652,20 +655,20 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
             boolean negative) {
         return lines.stream().anyMatch(line -> line.account().ownerType() == ownerType
                 && line.account().purpose() == purpose
-                && (negative ? line.signedAmountMicro() < 0 : line.signedAmountMicro() > 0));
+                && (negative ? line.signedAmountWen() < 0 : line.signedAmountWen() > 0));
     }
 
     private void validateAccountKey(EconomyAccountKey key) {
-        if (!EconomyConstants.CURRENCY_SILVER.equals(key.currency())
+        if (!EconomyConstants.CURRENCY_WEN.equals(key.currency())
                 || key.ownerType() == null || key.purpose() == null) {
-            throw new EconomyPostingException(INVALID_COMMAND, "only typed SILVER accounts are supported");
+            throw new EconomyPostingException(INVALID_COMMAND, "only typed WEN accounts are supported");
         }
         requireExact(key.ownerId(), "account ownerId", 100);
     }
 
     private void requireAccountMatches(
             EconomyAccountKey key, EconomyAccountEntity account, EconomyPostingCommand command) {
-        if (account.getId() == null || account.getBalanceMicro() == null || account.getVersion() == null
+        if (account.getId() == null || account.getBalanceWen() == null || account.getVersion() == null
                 || account.getAllowNegative() == null || account.getAccountId() == null
                 || !command.scope().tenantId().equals(account.getTenantId())
                 || !command.scope().clientId().equals(account.getClientId())
@@ -681,7 +684,7 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                     "only approved SYSTEM contra/variance accounts may allow negative balances");
         }
         if ((!negativeCapable || !Integer.valueOf(1).equals(account.getAllowNegative()))
-                && account.getBalanceMicro() < 0) {
+                && account.getBalanceWen() < 0) {
             throw new EconomyPostingException(JOURNAL_CORRUPT,
                     "non-negative economy account contains a negative balance");
         }
@@ -689,7 +692,7 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
 
     private boolean isNegativeCapableSystemAccount(EconomyAccountKey key) {
         return key.ownerType() == EconomyAccountOwnerType.SYSTEM
-                && (key.purpose() == EconomyAccountPurpose.SILVER_ISSUANCE
+                && (key.purpose() == EconomyAccountPurpose.WEN_ISSUANCE
                 || key.purpose() == EconomyAccountPurpose.PROVIDER_VARIANCE);
     }
 
@@ -704,9 +707,9 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                 || !posting.command().businessId().equals(escrow.getBusinessId())
                 || !payer.getAccountId().equals(escrow.getPayerAccountId())
                 || !held.getAccountId().equals(escrow.getEscrowAccountId())
-                || !EconomyConstants.CURRENCY_SILVER.equals(escrow.getCurrency())
-                || escrow.getGrossMicro() == null || escrow.getGrossMicro() <= 0
-                || escrow.getCapturedMicro() == null || escrow.getRefundedMicro() == null
+                || !EconomyConstants.CURRENCY_WEN.equals(escrow.getCurrency())
+                || escrow.getGrossWen() == null || escrow.getGrossWen() <= 0
+                || escrow.getCapturedWen() == null || escrow.getRefundedWen() == null
                 || escrow.getVersion() == null || escrow.getVersion() <= 0) {
             throw new EconomyPostingException(ESCROW_CONFLICT, "existing escrow root is incompatible");
         }
@@ -781,7 +784,7 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
         try {
             return Math.addExact(left, right);
         } catch (ArithmeticException exception) {
-            throw new EconomyPostingException(AMOUNT_RANGE_EXCEEDED, "micro-silver BIGINT overflow", exception);
+            throw new EconomyPostingException(AMOUNT_RANGE_EXCEEDED, "wen BIGINT overflow", exception);
         }
     }
 
@@ -789,7 +792,7 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
         try {
             return Math.negateExact(value);
         } catch (ArithmeticException exception) {
-            throw new EconomyPostingException(AMOUNT_RANGE_EXCEEDED, "micro-silver BIGINT overflow", exception);
+            throw new EconomyPostingException(AMOUNT_RANGE_EXCEEDED, "wen BIGINT overflow", exception);
         }
     }
 

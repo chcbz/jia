@@ -17,8 +17,8 @@ public final class FundedBountyQuoteCalculator {
         nonNegative(gross, "gross");
         nonNegative(minimumAcceptedPayout, "minimumAcceptedPayout");
         long estimatedCompute = tokenCost(estimated, 0L);
-        long worstCompute = tokenCost(worst, FundedBountyPreviewPriceBook.WORST_RISK_RESERVE_MICRO);
-        long platformFee = minimum(FundedBountyPreviewPriceBook.FEE_CAP_MICRO,
+        long worstCompute = tokenCost(worst, FundedBountyPreviewPriceBook.WORST_RISK_RESERVE_WEN);
+        long platformFee = minimum(FundedBountyPreviewPriceBook.FEE_CAP_WEN,
                 ceilProduct(gross, FundedBountyPreviewPriceBook.FEE_BPS, BPS, "platform fee"));
         long estimatedPayout = subtractFloorZero(gross, estimatedCompute, platformFee);
         long worstPayout = subtractFloorZero(gross, worstCompute, platformFee);
@@ -43,7 +43,7 @@ public final class FundedBountyQuoteCalculator {
                 FundedBountyPreviewPriceBook.OUTPUT_RATE_PER_MILLION, MILLION, "output token cost")));
         total = total.add(BigInteger.valueOf(ceilProduct(tokens.reasoning(),
                 FundedBountyPreviewPriceBook.REASONING_RATE_PER_MILLION, MILLION, "reasoning token cost")));
-        total = total.add(BigInteger.valueOf(FundedBountyPreviewPriceBook.FIXED_REQUEST_FEE_MICRO));
+        total = total.add(BigInteger.valueOf(FundedBountyPreviewPriceBook.FIXED_REQUEST_FEE_WEN));
         total = total.add(BigInteger.valueOf(extraReserve));
         return exactLong(total, "token cost");
     }
@@ -77,8 +77,8 @@ public final class FundedBountyQuoteCalculator {
         return value.longValueExact();
     }
 
-    public record QuoteAmounts(long estimatedComputeMicro, long worstComputeMicro,
-            long platformFeeMicro, long estimatedAgentPayoutMicro, long worstAgentPayoutMicro,
-            long budgetHeadroomMicro, boolean budgetCovered) {
+    public record QuoteAmounts(long estimatedComputeWen, long worstComputeWen,
+            long platformFeeWen, long estimatedAgentPayoutWen, long worstAgentPayoutWen,
+            long budgetHeadroomWen, boolean budgetCovered) {
     }
 }

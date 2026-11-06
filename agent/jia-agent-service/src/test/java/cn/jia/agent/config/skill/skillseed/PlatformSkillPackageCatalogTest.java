@@ -28,7 +28,7 @@ class PlatformSkillPackageCatalogTest {
         assertEquals(List.of("repo-inspector", "code-reviewer", "repo-test", "code-editor", "web-builder", "deploy-runner"),
                 products.stream().map(PlatformSkillPackageCatalog.PlatformSkillProduct::skillKey).toList());
         assertEquals(List.of(0L, 20_000_000L, 30_000_000L, 50_000_000L, 60_000_000L, 100_000_000L),
-                products.stream().map(PlatformSkillPackageCatalog.PlatformSkillProduct::priceMicro).toList());
+                products.stream().map(PlatformSkillPackageCatalog.PlatformSkillProduct::priceWen).toList());
         assertEquals(List.of("NONE", "NONE", "NONE", "NONE", "NONE", "ADMIN_ONLY"),
                 products.stream().map(PlatformSkillPackageCatalog.PlatformSkillProduct::deploymentRestriction).toList());
 

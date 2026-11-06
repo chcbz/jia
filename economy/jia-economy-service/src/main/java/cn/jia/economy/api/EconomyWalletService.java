@@ -1,7 +1,7 @@
 package cn.jia.economy.api;
 
 import cn.jia.economy.common.EconomyAccountOwnerType;
-import cn.jia.economy.config.EconomyOnboardingGrantProperties;
+import cn.jia.economy.config.EconomyCampaignProperties;
 import cn.jia.economy.config.EconomyPreviewGate;
 import cn.jia.economy.common.EconomyAccountPurpose;
 import cn.jia.economy.common.EconomyConstants;
@@ -33,29 +33,29 @@ import java.util.UUID;
 /** Narrow W03 application service; it has no generic posting authority. */
 @Service
 public final class EconomyWalletService {
-    private static final String ISSUANCE_OWNER_ID = "silver";
-    private static final String ISSUANCE_ACCOUNT_ID = "system_silver_issuance";
+    private static final String ISSUANCE_OWNER_ID = "wen";
+    private static final String ISSUANCE_ACCOUNT_ID = "system_wen_issuance";
 
     private final EconomyLedgerMapper mapper;
     private final EconomyTreasuryPostingService treasury;
     private final Environment environment;
     private final EconomyPreviewGate gate;
-    private final EconomyOnboardingGrantProperties onboardingGrant;
+    private final EconomyCampaignProperties campaigns;
 
     @org.springframework.beans.factory.annotation.Autowired
     public EconomyWalletService(EconomyLedgerMapper mapper, EconomyTreasuryPostingService treasury, Environment environment,
-            EconomyPreviewGate gate, EconomyOnboardingGrantProperties onboardingGrant) {
+            EconomyPreviewGate gate, EconomyCampaignProperties campaigns) {
         this.mapper = Objects.requireNonNull(mapper, "mapper");
         this.treasury = Objects.requireNonNull(treasury, "treasury");
         this.environment = Objects.requireNonNull(environment, "environment");
         this.gate = Objects.requireNonNull(gate, "gate");
-        this.onboardingGrant = Objects.requireNonNull(onboardingGrant, "onboardingGrant");
+        this.campaigns = Objects.requireNonNull(campaigns, "campaigns");
     }
 
-    /** Compatibility constructor for focused tests and non-Spring callers. */
+    /** Non-Spring construction with no configured campaigns. */
     public EconomyWalletService(EconomyLedgerMapper mapper, EconomyTreasuryPostingService treasury, Environment environment,
             EconomyPreviewGate gate) {
-        this(mapper, treasury, environment, gate, EconomyOnboardingGrantProperties.disabled());
+        this(mapper, treasury, environment, gate, EconomyCampaignProperties.disabled());
     }
 
     public WalletSnapshot wallet(EconomyScope scope, String actorId) {
@@ -65,9 +65,9 @@ public final class EconomyWalletService {
             throw new EconomyPostingException(EconomyPostingException.Reason.JOURNAL_CORRUPT,
                     "wallet snapshot query returned no result");
         }
-        long available = requiredNonNegative(row.getAvailableMicro(), "available balance");
-        long held = requiredNonNegative(row.getHeldMicro(), "held balance");
-        requiredNonNegative(row.getMinimumHeldComponentMicro(), "held balance component");
+        long available = requiredNonNegative(row.getAvailableWen(), "available balance");
+        long held = requiredNonNegative(row.getHeldWen(), "held balance");
+        requiredNonNegative(row.getMinimumHeldComponentWen(), "held balance component");
         long version = requiredNonNegative(row.getVersion(), "wallet version");
         return new WalletSnapshot(available, held, version);
     }
@@ -88,49 +88,56 @@ public final class EconomyWalletService {
 
     public EconomyPostingResult issue(
             EconomyScope scope, String actorId, String idempotencyKey, byte[] requestHash,
-            long amountMicro, String campaignRef) {
+            long amountWen, String campaignRef) {
         gate.requireMutationAllowed(scope.tenantId(), scope.clientId());
         if (!gate.testIssuanceEnabled() || !isExplicitPreviewEnvironment()) {
             throw new EconomyPostingException(EconomyPostingException.Reason.FEATURE_DISABLED,
                     "test issuance is only available in the explicit dev/test preview environment");
         }
         provisionIssuanceAccounts(scope, actorId);
-        EconomyAccountKey user = new EconomyAccountKey(EconomyConstants.CURRENCY_SILVER,
+        EconomyAccountKey user = new EconomyAccountKey(EconomyConstants.CURRENCY_WEN,
                 EconomyAccountOwnerType.USER, actorId, EconomyAccountPurpose.AVAILABLE);
-        EconomyAccountKey issuance = new EconomyAccountKey(EconomyConstants.CURRENCY_SILVER,
-                EconomyAccountOwnerType.SYSTEM, ISSUANCE_OWNER_ID, EconomyAccountPurpose.SILVER_ISSUANCE);
+        EconomyAccountKey issuance = new EconomyAccountKey(EconomyConstants.CURRENCY_WEN,
+                EconomyAccountOwnerType.SYSTEM, ISSUANCE_OWNER_ID, EconomyAccountPurpose.WEN_ISSUANCE);
         return treasury.issue(new EconomyPostingCommand(
                 scope, new EconomyPrincipal(EconomyPrincipalType.USER, actorId), idempotencyKey, requestHash,
-                EconomyJournalType.ISSUE_SILVER, campaignRef, List.of(
-                new EconomyPostingLine(user, amountMicro),
-                new EconomyPostingLine(issuance, Math.negateExact(amountMicro))), null));
+                EconomyJournalType.ISSUE_WEN, campaignRef, List.of(
+                new EconomyPostingLine(user, amountWen),
+                new EconomyPostingLine(issuance, Math.negateExact(amountWen))), null));
     }
 
-    public OnboardingGrantReceipt claimOnboardingGrant(EconomyScope scope, String actorId) {
+    /** Authenticated business event. Each campaign posts atomically; retry replays committed facts. */
+    public List<CampaignReceipt> observeEvent(EconomyScope scope, String actorId,
+            EconomyCampaignProperties.Event event) {
         gate.requireMutationAllowed(scope.tenantId(), scope.clientId());
-        if (!onboardingGrant.enabled()) {
-            throw new EconomyPostingException(EconomyPostingException.Reason.FEATURE_DISABLED,
-                    "onboarding grant is disabled");
-        }
+        Objects.requireNonNull(event, "event");
+        long now = System.currentTimeMillis();
+        var eligible = campaigns.grants().stream().filter(c -> c.eligible(event, now)).toList();
+        if (eligible.isEmpty()) return List.of();
         provisionIssuanceAccounts(scope, actorId);
-        long amountMicro = onboardingGrant.amountMicro();
-        String campaignRef = onboardingGrant.campaignRef();
-        String idempotencyKey = deterministicUuid(scope, actorId, campaignRef);
-        byte[] requestHash = sha256(canonicalGrant(scope, actorId, campaignRef, amountMicro));
-        EconomyAccountKey user = new EconomyAccountKey(EconomyConstants.CURRENCY_SILVER,
-                EconomyAccountOwnerType.USER, actorId, EconomyAccountPurpose.AVAILABLE);
-        EconomyAccountKey issuance = new EconomyAccountKey(EconomyConstants.CURRENCY_SILVER,
-                EconomyAccountOwnerType.SYSTEM, ISSUANCE_OWNER_ID, EconomyAccountPurpose.SILVER_ISSUANCE);
-        EconomyPostingResult result = treasury.issue(new EconomyPostingCommand(
-                scope, new EconomyPrincipal(EconomyPrincipalType.USER, actorId), idempotencyKey, requestHash,
-                EconomyJournalType.ISSUE_SILVER, campaignRef, List.of(
-                new EconomyPostingLine(user, amountMicro),
-                new EconomyPostingLine(issuance, Math.negateExact(amountMicro))), null));
-        return new OnboardingGrantReceipt(result.transactionId(), result.status(), amountMicro, campaignRef);
+        var receipts = new java.util.ArrayList<CampaignReceipt>();
+        for (var campaign : eligible) {
+            String idempotencyKey = deterministicUuid(scope, actorId, campaign.id());
+            // The claim is identified by campaign + recipient, NOT mutable configuration amounts.
+            byte[] requestHash = sha256(canonicalGrant(scope, actorId, campaign.id()));
+            EconomyAccountKey user = new EconomyAccountKey(EconomyConstants.CURRENCY_WEN,
+                    EconomyAccountOwnerType.USER, actorId, EconomyAccountPurpose.AVAILABLE);
+            EconomyAccountKey issuance = new EconomyAccountKey(EconomyConstants.CURRENCY_WEN,
+                    EconomyAccountOwnerType.SYSTEM, ISSUANCE_OWNER_ID, EconomyAccountPurpose.WEN_ISSUANCE);
+            EconomyPostingResult result = treasury.issue(new EconomyPostingCommand(
+                    scope, new EconomyPrincipal(EconomyPrincipalType.USER, actorId), idempotencyKey, requestHash,
+                    EconomyJournalType.ISSUE_WEN, campaign.id(), List.of(
+                    new EconomyPostingLine(user, campaign.amountWen()),
+                    new EconomyPostingLine(issuance, Math.negateExact(campaign.amountWen()))), null));
+            // Replays return the ORIGINAL posted amount, even after changing the campaign rule.
+            receipts.add(new CampaignReceipt(result.transactionId(), result.status(),
+                    result.creditTotalWen(), campaign.id()));
+        }
+        return List.copyOf(receipts);
     }
 
     private static String deterministicUuid(EconomyScope scope, String actorId, String campaignRef) {
-        byte[] digest = sha256(canonicalGrant(scope, actorId, campaignRef, 0));
+        byte[] digest = sha256(canonicalGrant(scope, actorId, campaignRef));
         ByteBuffer bytes = ByteBuffer.wrap(digest);
         long most = bytes.getLong();
         long least = bytes.getLong();
@@ -139,13 +146,14 @@ public final class EconomyWalletService {
         return new UUID(most, least).toString();
     }
 
-    private static byte[] canonicalGrant(EconomyScope scope, String actorId, String campaignRef, long amountMicro) {
+    private static byte[] canonicalGrant(EconomyScope scope, String actorId, String campaignRef) {
+        byte[] domain = lengthPrefixed("campaign-claim:wen:v1");
         byte[] tenant = lengthPrefixed(scope.tenantId());
         byte[] client = lengthPrefixed(scope.clientId());
         byte[] actor = lengthPrefixed(actorId);
         byte[] campaign = lengthPrefixed(campaignRef);
-        return ByteBuffer.allocate(tenant.length + client.length + actor.length + campaign.length + Long.BYTES)
-                .put(tenant).put(client).put(actor).put(campaign).putLong(amountMicro).array();
+        return ByteBuffer.allocate(domain.length + tenant.length + client.length + actor.length + campaign.length)
+                .put(domain).put(tenant).put(client).put(actor).put(campaign).array();
     }
 
     private boolean isExplicitPreviewEnvironment() {
@@ -158,7 +166,7 @@ public final class EconomyWalletService {
         mapper.insertAccountIfAbsent(account(scope, walletAccountId(actorId), "USER", actorId,
                 "AVAILABLE", 0, now));
         mapper.insertAccountIfAbsent(account(scope, ISSUANCE_ACCOUNT_ID, "SYSTEM", ISSUANCE_OWNER_ID,
-                "SILVER_ISSUANCE", 1, now));
+                "WEN_ISSUANCE", 1, now));
     }
 
     private static EconomyAccountEntity account(
@@ -166,7 +174,7 @@ public final class EconomyWalletService {
             String purpose, int allowNegative, long now) {
         return new EconomyAccountEntity()
                 .setAccountId(accountId).setOwnerType(ownerType).setOwnerId(ownerId).setPurpose(purpose)
-                .setCurrency(EconomyConstants.CURRENCY_SILVER).setBalanceMicro(0L)
+                .setCurrency(EconomyConstants.CURRENCY_WEN).setBalanceWen(0L)
                 .setAllowNegative(allowNegative).setStatus("ACTIVE").setVersion(0L)
                 .setTenantId(scope.tenantId()).setClientId(scope.clientId())
                 .setCreateTime(now).setUpdateTime(now);
@@ -203,10 +211,10 @@ public final class EconomyWalletService {
         return value;
     }
 
-    public record WalletSnapshot(long availableMicro, long heldMicro, long version) {
+    public record WalletSnapshot(long availableWen, long heldWen, long version) {
     }
 
-    public record OnboardingGrantReceipt(String transactionId, String status, long amountMicro, String campaignRef) {
+    public record CampaignReceipt(String transactionId, String status, long amountWen, String campaignRef) {
     }
 
     public record LedgerPage(List<EconomyWalletLedgerRow> rows, Cursor nextCursor) {

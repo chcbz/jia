@@ -17,8 +17,8 @@ public class EconomyTransactionEntity {
     private String currency;
     private String status;
     private Integer entryCount;
-    private Long debitTotalMicro;
-    private Long creditTotalMicro;
+    private Long debitTotalWen;
+    private Long creditTotalWen;
     private Long postedAt;
     private String tenantId;
     private String clientId;

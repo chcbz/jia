@@ -15,7 +15,7 @@ public class SkillOrderEntity {
     private String buyerId;
     private String sellerType;
     private String sellerId;
-    private Long priceMicro;
+    private Long priceWen;
     private Long expectedAgentVersion;
     private Long permissionGrantVersion;
     private String approvedPermissionsManifest;

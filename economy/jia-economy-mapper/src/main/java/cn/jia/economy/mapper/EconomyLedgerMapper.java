@@ -24,12 +24,12 @@ public interface EconomyLedgerMapper {
             INSERT INTO economy_transaction(
                 transaction_id,principal_type,principal_id,idempotency_key,request_hash,
                 business_type,business_id,currency,status,entry_count,
-                debit_total_micro,credit_total_micro,posted_at,
+                debit_total_wen,credit_total_wen,posted_at,
                 tenant_id,client_id,create_time,update_time)
             VALUES(
                 #{transactionId},#{principalType},#{principalId},#{idempotencyKey},#{requestHash},
                 #{businessType},#{businessId},#{currency},#{status},#{entryCount},
-                #{debitTotalMicro},#{creditTotalMicro},#{postedAt},
+                #{debitTotalWen},#{creditTotalWen},#{postedAt},
                 #{tenantId},#{clientId},#{createTime},#{updateTime})
             """)
     int insertTransaction(EconomyTransactionEntity transaction);
@@ -37,7 +37,7 @@ public interface EconomyLedgerMapper {
     @Select("""
             SELECT id,transaction_id,principal_type,principal_id,idempotency_key,request_hash,
                    business_type,business_id,currency,status,entry_count,
-                   debit_total_micro,credit_total_micro,posted_at,
+                   debit_total_wen,credit_total_wen,posted_at,
                    tenant_id,client_id,create_time,update_time
             FROM economy_transaction
             WHERE """ + EXACT_SCOPE + """
@@ -58,7 +58,7 @@ public interface EconomyLedgerMapper {
     @Select("""
             SELECT id,transaction_id,principal_type,principal_id,idempotency_key,request_hash,
                    business_type,business_id,currency,status,entry_count,
-                   debit_total_micro,credit_total_micro,posted_at,
+                   debit_total_wen,credit_total_wen,posted_at,
                    tenant_id,client_id,create_time,update_time
             FROM economy_transaction
             WHERE """ + EXACT_SCOPE + """
@@ -74,11 +74,11 @@ public interface EconomyLedgerMapper {
     @Update("""
             UPDATE economy_transaction
             SET status='POSTED',entry_count=#{entryCount},
-                debit_total_micro=#{debitTotalMicro},credit_total_micro=#{creditTotalMicro},
+                debit_total_wen=#{debitTotalWen},credit_total_wen=#{creditTotalWen},
                 posted_at=#{postedAt},update_time=#{postedAt}
             WHERE """ + EXACT_SCOPE + """
               AND transaction_id=#{transactionId} AND status='POSTING'
-              AND entry_count=0 AND debit_total_micro=0 AND credit_total_micro=0
+              AND entry_count=0 AND debit_total_wen=0 AND credit_total_wen=0
               AND posted_at IS NULL
               AND OCTET_LENGTH(transaction_id)=OCTET_LENGTH(#{transactionId})
             """)
@@ -87,12 +87,12 @@ public interface EconomyLedgerMapper {
             @Param("clientId") String clientId,
             @Param("transactionId") String transactionId,
             @Param("entryCount") int entryCount,
-            @Param("debitTotalMicro") long debitTotalMicro,
-            @Param("creditTotalMicro") long creditTotalMicro,
+            @Param("debitTotalWen") long debitTotalWen,
+            @Param("creditTotalWen") long creditTotalWen,
             @Param("postedAt") long postedAt);
 
     @Select("""
-            SELECT id,account_id,owner_type,owner_id,purpose,currency,balance_micro,
+            SELECT id,account_id,owner_type,owner_id,purpose,currency,balance_wen,
                    allow_negative,status,version,tenant_id,client_id,create_time,update_time
             FROM economy_account
             WHERE """ + EXACT_SCOPE + """
@@ -115,22 +115,22 @@ public interface EconomyLedgerMapper {
     // Hosting capture changes held funds without touching AVAILABLE. Its order-escrow versions
     // advance this snapshot revision too; non-hosting wallet behavior remains unchanged.
     @Select("""
-            SELECT COALESCE(wallet.balance_micro,0) AS available_micro,
-                   COALESCE(held.held_micro,0) AS held_micro,
-                   COALESCE(held.minimum_held_component_micro,0) AS minimum_held_component_micro,
+            SELECT COALESCE(wallet.balance_wen,0) AS available_wen,
+                   COALESCE(held.held_wen,0) AS held_wen,
+                   COALESCE(held.minimum_held_component_wen,0) AS minimum_held_component_wen,
                    COALESCE(wallet.version,0)+COALESCE(held.hosting_version,0) AS version
             FROM (SELECT 1 AS singleton) snapshot_anchor
             LEFT JOIN economy_account wallet
               ON wallet.tenant_id=#{tenantId} AND wallet.client_id=#{clientId}
              AND OCTET_LENGTH(wallet.tenant_id)=OCTET_LENGTH(#{tenantId})
              AND OCTET_LENGTH(wallet.client_id)=OCTET_LENGTH(#{clientId})
-             AND wallet.currency='SILVER' AND wallet.owner_type='USER'
+             AND wallet.currency='WEN' AND wallet.owner_type='USER'
              AND wallet.owner_id=#{ownerId} AND wallet.purpose='AVAILABLE'
              AND OCTET_LENGTH(wallet.owner_id)=OCTET_LENGTH(#{ownerId})
             LEFT JOIN (
-                SELECT SUM(e.gross_micro-e.captured_micro-e.refunded_micro) AS held_micro,
+                SELECT SUM(e.gross_wen-e.captured_wen-e.refunded_wen) AS held_wen,
                        SUM(CASE WHEN e.business_type='HOSTING_RENT' THEN e.version ELSE 0 END) AS hosting_version,
-                       MIN(e.gross_micro-e.captured_micro-e.refunded_micro) AS minimum_held_component_micro
+                       MIN(e.gross_wen-e.captured_wen-e.refunded_wen) AS minimum_held_component_wen
                 FROM economy_escrow e
                 JOIN economy_account payer
                   ON payer.tenant_id=e.tenant_id AND payer.client_id=e.client_id
@@ -154,7 +154,7 @@ public interface EconomyLedgerMapper {
 
     @Select("""
             SELECT e.id AS row_id,e.transaction_id,e.entry_id,t.business_type,t.business_id AS business_ref,
-                   e.signed_amount_micro,e.status,e.posted_at
+                   e.signed_amount_wen,e.status,e.posted_at
             FROM economy_entry e
             JOIN economy_account a
               ON a.tenant_id=e.tenant_id AND a.client_id=e.client_id AND a.account_id=e.account_id
@@ -187,20 +187,33 @@ public interface EconomyLedgerMapper {
 
     @Insert("""
             INSERT IGNORE INTO economy_account(
-                account_id,owner_type,owner_id,purpose,currency,balance_micro,
+                account_id,owner_type,owner_id,purpose,currency,balance_wen,
                 allow_negative,status,version,tenant_id,client_id,create_time,update_time)
             VALUES(
-                #{accountId},#{ownerType},#{ownerId},#{purpose},#{currency},#{balanceMicro},
+                #{accountId},#{ownerType},#{ownerId},#{purpose},#{currency},#{balanceWen},
                 #{allowNegative},#{status},#{version},#{tenantId},#{clientId},#{createTime},#{updateTime})
             """)
     int insertAccountIfAbsent(EconomyAccountEntity account);
 
+    /** Provision and acquire an exclusive account lock. Call in EconomyAccountKey.LOCK_ORDER.
+     * Unlike INSERT IGNORE, duplicate provisioning cannot hold a shared lock then upgrade on posting. */
+    @Insert("""
+            INSERT INTO economy_account(
+                account_id,owner_type,owner_id,purpose,currency,balance_wen,
+                allow_negative,status,version,tenant_id,client_id,create_time,update_time)
+            VALUES(
+                #{accountId},#{ownerType},#{ownerId},#{purpose},#{currency},#{balanceWen},
+                #{allowNegative},#{status},#{version},#{tenantId},#{clientId},#{createTime},#{updateTime})
+            ON DUPLICATE KEY UPDATE id=id
+            """)
+    int insertAccountIfAbsentAndLock(EconomyAccountEntity account);
+
     @Update("""
             UPDATE economy_account
-            SET balance_micro=#{newBalance},version=#{newVersion},update_time=#{now}
+            SET balance_wen=#{newBalance},version=#{newVersion},update_time=#{now}
             WHERE id=#{account.id} AND """ + EXACT_SCOPE + """
               AND account_id=#{account.accountId}
-              AND balance_micro=#{account.balanceMicro} AND version=#{account.version}
+              AND balance_wen=#{account.balanceWen} AND version=#{account.version}
               AND status=#{account.status}
               AND OCTET_LENGTH(account_id)=OCTET_LENGTH(#{account.accountId})
             """)
@@ -214,19 +227,19 @@ public interface EconomyLedgerMapper {
 
     @Insert("""
             INSERT INTO economy_entry(
-                entry_id,transaction_id,account_id,entry_sequence,signed_amount_micro,
-                balance_after_micro,currency,status,posted_at,
+                entry_id,transaction_id,account_id,entry_sequence,signed_amount_wen,
+                balance_after_wen,currency,status,posted_at,
                 tenant_id,client_id,create_time)
             VALUES(
-                #{entryId},#{transactionId},#{accountId},#{entrySequence},#{signedAmountMicro},
-                #{balanceAfterMicro},#{currency},#{status},#{postedAt},
+                #{entryId},#{transactionId},#{accountId},#{entrySequence},#{signedAmountWen},
+                #{balanceAfterWen},#{currency},#{status},#{postedAt},
                 #{tenantId},#{clientId},#{createTime})
             """)
     int insertEntry(EconomyEntryEntity entry);
 
     @Select("""
-            SELECT id,entry_id,transaction_id,account_id,entry_sequence,signed_amount_micro,
-                   balance_after_micro,currency,status,posted_at,tenant_id,client_id,create_time
+            SELECT id,entry_id,transaction_id,account_id,entry_sequence,signed_amount_wen,
+                   balance_after_wen,currency,status,posted_at,tenant_id,client_id,create_time
             FROM economy_entry
             WHERE """ + EXACT_SCOPE + """
               AND transaction_id=#{transactionId}
@@ -240,7 +253,7 @@ public interface EconomyLedgerMapper {
 
     @Select("""
             SELECT id,escrow_id,business_type,business_id,payer_account_id,escrow_account_id,
-                   currency,gross_micro,captured_micro,refunded_micro,status,version,
+                   currency,gross_wen,captured_wen,refunded_wen,status,version,
                    tenant_id,client_id,create_time,update_time
             FROM economy_escrow
             WHERE """ + EXACT_SCOPE + """
@@ -258,21 +271,21 @@ public interface EconomyLedgerMapper {
     @Insert("""
             INSERT INTO economy_escrow(
                 escrow_id,business_type,business_id,payer_account_id,escrow_account_id,
-                currency,gross_micro,captured_micro,refunded_micro,status,version,
+                currency,gross_wen,captured_wen,refunded_wen,status,version,
                 tenant_id,client_id,create_time,update_time)
             VALUES(
                 #{escrowId},#{businessType},#{businessId},#{payerAccountId},#{escrowAccountId},
-                #{currency},#{grossMicro},#{capturedMicro},#{refundedMicro},#{status},#{version},
+                #{currency},#{grossWen},#{capturedWen},#{refundedWen},#{status},#{version},
                 #{tenantId},#{clientId},#{createTime},#{updateTime})
             """)
     int insertEscrow(EconomyEscrowEntity escrow);
 
     @Update("""
             UPDATE economy_escrow
-            SET gross_micro=#{newGross},version=#{newVersion},update_time=#{now}
+            SET gross_wen=#{newGross},version=#{newVersion},update_time=#{now}
             WHERE id=#{escrow.id} AND """ + EXACT_SCOPE + """
               AND escrow_id=#{escrow.escrowId} AND version=#{escrow.version}
-              AND gross_micro=#{escrow.grossMicro} AND status='ACTIVE'
+              AND gross_wen=#{escrow.grossWen} AND status='ACTIVE'
               AND OCTET_LENGTH(escrow_id)=OCTET_LENGTH(#{escrow.escrowId})
             """)
     int updateEscrowGross(
@@ -298,18 +311,18 @@ public interface EconomyLedgerMapper {
     @Insert("""
             INSERT INTO economy_escrow_funding_lot(
                 escrow_id,funding_sequence,reserve_transaction_id,payer_account_id,
-                amount_micro,escrow_gross_after_micro,escrow_version_after,currency,
+                amount_wen,escrow_gross_after_wen,escrow_version_after,currency,
                 tenant_id,client_id,created_at)
             VALUES(
                 #{escrowId},#{fundingSequence},#{reserveTransactionId},#{payerAccountId},
-                #{amountMicro},#{escrowGrossAfterMicro},#{escrowVersionAfter},#{currency},
+                #{amountWen},#{escrowGrossAfterWen},#{escrowVersionAfter},#{currency},
                 #{tenantId},#{clientId},#{createdAt})
             """)
     int insertFundingLot(EconomyEscrowFundingLotEntity lot);
 
     @Select("""
             SELECT id,escrow_id,funding_sequence,reserve_transaction_id,payer_account_id,
-                   amount_micro,escrow_gross_after_micro,escrow_version_after,currency,
+                   amount_wen,escrow_gross_after_wen,escrow_version_after,currency,
                    tenant_id,client_id,created_at
             FROM economy_escrow_funding_lot
             WHERE """ + EXACT_SCOPE + """
@@ -324,12 +337,12 @@ public interface EconomyLedgerMapper {
 
     @Update("""
             UPDATE economy_escrow
-            SET captured_micro=#{capturedAfter},refunded_micro=#{refundedAfter},
+            SET captured_wen=#{capturedAfter},refunded_wen=#{refundedAfter},
                 status=#{status},version=#{versionAfter},update_time=#{now}
             WHERE id=#{escrow.id} AND """ + EXACT_SCOPE + """
               AND escrow_id=#{escrow.escrowId} AND version=#{escrow.version}
-              AND gross_micro=#{escrow.grossMicro}
-              AND captured_micro=#{escrow.capturedMicro} AND refunded_micro=#{escrow.refundedMicro}
+              AND gross_wen=#{escrow.grossWen}
+              AND captured_wen=#{escrow.capturedWen} AND refunded_wen=#{escrow.refundedWen}
               AND status=#{escrow.status}
               AND OCTET_LENGTH(escrow_id)=OCTET_LENGTH(#{escrow.escrowId})
             """)

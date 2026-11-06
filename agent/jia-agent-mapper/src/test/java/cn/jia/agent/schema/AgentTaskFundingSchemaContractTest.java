@@ -21,7 +21,7 @@ class AgentTaskFundingSchemaContractTest {
         assertTrue(sql.contains("create table if not exists agent_task_funding_operation"));
         assertTrue(sql.contains("create table if not exists agent_task_funding"));
         assertTrue(sql.contains("unique key uk_task_funding_operation_actor_key"));
-        assertTrue(sql.contains("cancel_refunded_micro"));
+        assertTrue(sql.contains("cancel_refunded_wen"));
         assertTrue(sql.contains("cancel_task_version"));
 
         assertFalse(sql.contains("create table if not exists economy_"));

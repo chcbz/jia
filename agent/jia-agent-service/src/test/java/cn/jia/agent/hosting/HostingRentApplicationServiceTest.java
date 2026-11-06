@@ -60,7 +60,7 @@ class HostingRentApplicationServiceTest {
             assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
             return provider.available();
         });
-        application = new HostingRentApplicationService(new AgentHostingRentProperties(true, null, null, null),
+        application = new HostingRentApplicationService(new AgentHostingRentProperties(true, "1", "1000000000", "2592000"),
                 new EconomyPreviewGate(new EconomyPreviewProperties(true, List.of(
                         new EconomyPreviewProperties.AllowedScope("0", "Client-A")))), owners, rent,
                 ledger, roots, bindings, runtimes, identities, providers, reconciler,
@@ -71,7 +71,7 @@ class HostingRentApplicationServiceTest {
         when(roots.lockBindings("Client-A", "wuyong")).thenReturn(List.of());
         when(rent.selectQuoteForUpdate("0", "Client-A", "hrq-test")).thenReturn(new EconomyHostingRentQuoteEntity()
                 .setQuoteId("hrq-test").setQuotePurpose("INITIAL").setPrincipalId("login-sub").setPrincipalType("USER")
-                .setPersonaCode("wuyong").setAgentId(AGENT).setPlanVersion(1L).setAmountMicro(1000000000L).setPeriodSeconds(2592000L));
+                .setPersonaCode("wuyong").setAgentId(AGENT).setPlanVersion(1L).setAmountWen(1000000000L).setPeriodSeconds(2592000L));
         when(ledger.reserve(any())).thenAnswer(call -> {
             assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
             HostingRentReserveCommand command = call.getArgument(0);
@@ -101,7 +101,7 @@ class HostingRentApplicationServiceTest {
     void reserveIdentityAndBindingShareTransactionAndOnlyWakeAfterCommit() {
         doAnswer(call -> { assertEquals(4, count()); return null; }).when(reconciler).wake();
         var result = application.bind(ACTOR, "wuyong", KEY, confirmation());
-        assertEquals("1000000000", result.amountMicro());
+        assertEquals("1000000000", result.amountWen());
         assertEquals("2592000", ((HostingRentApplicationService.MutationView) result).periodSeconds());
         assertEquals("FUNDS_RESERVED", result.status());
         var order = inOrder(ledger, bindings, identities, runtimes, reconciler);
@@ -176,7 +176,7 @@ class HostingRentApplicationServiceTest {
     void quoteAllocatesOnlyOpaqueProposedIdentityWithoutBindingOrRuntimeMutation() {
         when(rent.selectPlanForUpdate("0", "Client-A", "agent-hosting-preview", 1L)).thenReturn(
                 new EconomyHostingRentPlanEntity().setPlanId("agent-hosting-preview").setPlanVersion(1L)
-                        .setAmountMicro(1000000000L).setPeriodSeconds(2592000L).setStatus("ACTIVE"));
+                        .setAmountWen(1000000000L).setPeriodSeconds(2592000L).setStatus("ACTIVE"));
         when(ledger.quote(any())).thenAnswer(call -> {
             HostingRentQuoteCommand command = call.getArgument(0);
             assertTrue(command.agentId().matches("agt_[0-9a-f]{32}"));
@@ -197,6 +197,6 @@ class HostingRentApplicationServiceTest {
     private int count() { return jdbc.queryForObject("SELECT COUNT(*) FROM effects", Integer.class); }
     private Map<String, String> confirmation() {
         return Map.of("mode", "server", "hostingAction", "INITIAL", "agentId", AGENT, "quoteId", "hrq-test",
-                "expectedPlanVersion", "1", "expectedAmountMicro", "1000000000", "expectedPeriodSeconds", "2592000");
+                "expectedPlanVersion", "1", "expectedAmountWen", "1000000000", "expectedPeriodSeconds", "2592000");
     }
 }

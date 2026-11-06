@@ -8,8 +8,17 @@ import java.util.List;
 
 /** Exact owner-scoped persistence boundary for private execution grants and output receipts. */
 public interface PersonalWorkspaceExecutionDao {
+    /** Current reads under the task root; immutable terminal executions are not rewritten. */
+    List<PersonalWorkspaceExecutionEntity> lockUnfinishedTaskExecutions(
+            String tenantId, String clientId, String ownerJiacn, String taskId);
+    boolean cancelLockedTaskExecution(PersonalWorkspaceExecutionEntity execution, long now);
+
     PersonalWorkspaceExecutionEntity findForRuntime(String tenantId,String clientId,String executorOwner,
             String agentId,String taskId,String runId);
+
+    /** Historical native cost authority, not active execution admission. */
+    PersonalWorkspaceExecutionEntity findForNativeUsageCost(String tenantId, String clientId, String executorOwner,
+            String agentId, String taskId, String runId, String executionId);
 
     PersonalWorkspaceExecutionEntity find(String tenantId, String clientId, String ownerJiacn,
             String executionId);

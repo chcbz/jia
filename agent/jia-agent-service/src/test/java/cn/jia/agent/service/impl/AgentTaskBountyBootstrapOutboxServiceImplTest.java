@@ -574,13 +574,13 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
             var mvc=MockMvcBuilders.standaloneSetup(new AgentTaskDeliberationOperationController(reads,grants)).build();
             mvc.perform(post("/agent/tasks/task-1/point-and-deliberate").principal(jwtToken("owner","client"))
                     .header("Idempotency-Key","point-key").contentType("application/json")
-                    .content("{\"targetAgentId\":\"agent-1\",\"expectedTaskVersion\":\"0\",\"requirementRevision\":\"1\"}"))
+                    .content(java.util.Objects.requireNonNull(getClass().getResourceAsStream("/billing/task-assignment-quote.json")).readAllBytes()))
                     .andExpect(status().isOk()).andExpect(header().string(HttpHeaders.CACHE_CONTROL,"private, no-store"))
                     .andExpect(jsonPath("$.data.schemaVersion").value(2))
                     .andExpect(jsonPath("$.data.inputs[0].version").value("1"))
                     .andExpect(jsonPath("$.data.initialOperation").value("DELIBERATE"))
                     .andExpect(jsonPath("$.data.taskVersion").value("1"));
-            verify(grants).assignForDeliberation(scope(),"task-1","point-key","agent-1",0,1);
+            verify(grants).assignForDeliberation(scope(),"task-1","point-key","agent-1",0,1, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1"));
             clearInvocations(grants);
             mvc.perform(get("/agent/tasks/task-1/point-and-deliberate/request")
                     .principal(jwtToken("owner","client")).header("Idempotency-Key","point-key"))
@@ -881,7 +881,7 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
         }
 
         private static JwtAuthenticationToken jwtToken(String owner, String client) {
-            Jwt token = Jwt.withTokenValue("token").claim("tenant_id", "0").header("alg", "none")
+            Jwt token = Jwt.withTokenValue("token").claim("tenant_id", "0").subject("payer-1").header("alg", "none")
                     .claim("jiacn", owner).claim("client_id", client).build();
             JwtAuthenticationToken authentication = new JwtAuthenticationToken(token);
             authentication.setAuthenticated(true);

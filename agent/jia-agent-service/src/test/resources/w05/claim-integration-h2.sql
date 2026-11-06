@@ -41,6 +41,7 @@ CREATE TABLE agent_identity_alias (
 );
 
 CREATE TABLE agent_runtime (
+                    execution_model VARCHAR(200) DEFAULT NULL,
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     agent_id VARCHAR_IGNORECASE(100) NOT NULL UNIQUE,
     name VARCHAR(100) NOT NULL, avatar VARCHAR(500), owner_jiacn VARCHAR_IGNORECASE(50),

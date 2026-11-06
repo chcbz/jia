@@ -3,6 +3,8 @@ package cn.jia.agent.dao;
 import cn.jia.agent.entity.AgentTaskProviderCostConsentEntity;
 
 public interface AgentTaskProviderCostConsentDao {
+    java.util.List<AgentTaskProviderCostConsentEntity> lockUnconsumedForTask(
+            String tenantId, String clientId, String ownerJiacn, String taskId);
     AgentTaskProviderCostConsentEntity findByIdempotencyKey(String tenantId,
             String clientId, String ownerJiacn, String taskId, String idempotencyKey);
     AgentTaskProviderCostConsentEntity findByIdempotencyKeyForUpdate(String tenantId,

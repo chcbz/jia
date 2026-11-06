@@ -15,7 +15,7 @@ public class EconomyHostingProvisioningIntentEntity {
     private String principalId;
     private String personaCode;
     private String agentId;
-    private Long amountMicro;
+    private Long amountWen;
     private Long periodSeconds;
     private String status;
     private byte[] reserveIdempotencyKey;

@@ -22,17 +22,17 @@ public final class EconomyReadOnlyPreviewDtos {
     public record Capabilities(String contractVersion, String mode, boolean enabled,
             String principalScopeFingerprint, Map<String, Boolean> features, Map<String, Boolean> actions) { }
 
-    public record Wallet(String currency, String availableMicro, String heldMicro, String version) { }
+    public record Wallet(String currency, String availableWen, String heldWen, String version) { }
 
     public record LedgerPage(List<LedgerItem> items, String nextCursor) { }
 
     public record LedgerItem(String transactionId, String entryId, String businessType, String businessRef,
-            String direction, String amountMicro, String status, String postedAt) { }
+            String direction, String amountWen, String status, String postedAt) { }
 
     public record ProductPage(List<Product> items, String nextOffset) { }
 
     public record Product(String productId, String name, String description, String productVersionId,
-            String skillKey, String skillVersion, String priceMicro, List<String> permissions,
+            String skillKey, String skillVersion, String priceWen, List<String> permissions,
             String deploymentRestriction, String priceSource, boolean purchaseAllowed) { }
 
     public record AgentSkills(String agentId, List<Entitlement> entitlements,
@@ -45,24 +45,24 @@ public final class EconomyReadOnlyPreviewDtos {
     public record InstallationEvidence(String installationId, String skillKey, String skillVersion,
             String status, String evidenceKind, String verifiedAt) { }
 
-    public record HostingPlan(String source, String planVersion, String amountMicro,
+    public record HostingPlan(String source, String planVersion, String amountWen,
             String periodSeconds, String currency, boolean activationAllowed) { }
 
     public record HostingLease(String agentId, String applicability, Lease lease) { }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record Lease(String leaseId, String version, String status, String planVersion,
-            String amountMicro, String periodSeconds, String paidFrom, String paidThrough) { }
+            String amountWen, String periodSeconds, String paidFrom, String paidThrough) { }
 
     public record TokenClasses(String input, String cachedInput, String output, String reasoning) { }
 
     public record BountyEstimate(String mode, boolean charged, boolean persisted, String currency,
             String priceBookVersion, String rateProvenance, TokenClasses estimatedTokens,
-            TokenClasses worstTokens, String estimatedComputeMicro, String worstComputeMicro,
-            String platformFeeMicro, String estimatedAgentPayoutMicro, String worstAgentPayoutMicro,
-            String budgetHeadroomMicro, boolean budgetCovered) { }
+            TokenClasses worstTokens, String estimatedComputeWen, String worstComputeWen,
+            String platformFeeWen, String estimatedAgentPayoutWen, String worstAgentPayoutWen,
+            String budgetHeadroomWen, boolean budgetCovered) { }
 
-    public record EstimateInput(long grossBountyAmountMicro, long minimumAcceptedPayoutMicro,
+    public record EstimateInput(long grossBountyAmountWen, long minimumAcceptedPayoutWen,
             ParsedTokens estimatedTokens, ParsedTokens worstTokens) { }
 
     public record ParsedTokens(long input, long cachedInput, long output, long reasoning) { }

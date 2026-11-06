@@ -12,7 +12,7 @@ public class EconomyWalletLedgerRow {
     private String entryId;
     private String businessType;
     private String businessRef;
-    private Long signedAmountMicro;
+    private Long signedAmountWen;
     private String status;
     private Long postedAt;
 }

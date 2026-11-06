@@ -639,6 +639,7 @@ class AgentTaskWorkspaceMySqlTest {
                 """);
         jdbc.execute("""
                 CREATE TABLE agent_runtime (
+                    execution_model VARCHAR(200) DEFAULT NULL,
                     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
                     agent_id VARCHAR(100) NOT NULL, name VARCHAR(100), avatar VARCHAR(500),
                     owner_jiacn VARCHAR(50), persona_code VARCHAR(50), persona_name VARCHAR(100),

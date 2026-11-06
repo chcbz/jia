@@ -226,6 +226,45 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
                 });
     }
 
+    @Override
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY,
+            rollbackFor = Exception.class)
+    public AgentWorkItemLeaseDTO cancelForTask(
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
+            long expectedVersion) {
+        requireScopeAndIds(tenantId, clientId, ownerJiacn, taskId, workItemId);
+        if (expectedVersion < 0 || expectedVersion == Long.MAX_VALUE) {
+            throw invalidRequest("An incrementable expectedVersion is required");
+        }
+        return withLockedTaskRoot(tenantId, clientId, ownerJiacn, taskId, root -> {
+            var current = workItemDao.findByTaskAndWorkItemId(
+                    tenantId, clientId, ownerJiacn, taskId, workItemId);
+            if (current == null) throw notFound();
+            requireCompleteSnapshot(tenantId, clientId, ownerJiacn, current);
+            if (!taskId.equals(current.getTaskId()) || !workItemId.equals(current.getWorkItemId())) {
+                throw notFound();
+            }
+            requireVersion(current.getVersion(), expectedVersion);
+            var status = persistedStatus(current.getStatus());
+            if (status != AgentTaskWorkItemStatus.CLAIMED && status != AgentTaskWorkItemStatus.RUNNING) {
+                throw leaseInvalid("Only claimed/running leases need task cancellation");
+            }
+            requireLeaseIdentity(current);
+            // Owner cancellation is independent of lease expiry and live Agent/member readiness.
+            // The existing root lock serializes claims/results; the scoped version CAS keeps
+            // stale snapshots from clearing a replacement lease. No retry attempt is invented.
+            var update = copyWorkItem(current);
+            update.setStatus(AgentTaskWorkItemStatus.CANCELLED.value());
+            clearLease(update);
+            requireSingleCasUpdate(workItemDao.updateByVersion(
+                    tenantId, clientId, ownerJiacn, workItemId, expectedVersion, update));
+            var result = result(update, expectedVersion + 1, now(), current.getAssigneeAgentId());
+            appendLeaseEvent(tenantId, clientId, ownerJiacn, taskId, current, result,
+                    TaskEventType.WORK_ITEM_CANCELLED, null, "task_cancelled");
+            return result;
+        });
+    }
+
     private AgentWorkItemLeaseDTO mutateActiveLease(
             String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             AgentWorkItemLeaseCommandDTO command, List<AgentTaskWorkItemStatus> statuses,

@@ -1,6 +1,6 @@
 package cn.jia.agent.service;
 
-/** Initial cancellation: only ordinary, unfunded tasks with no current execution or task-start evidence. */
+/** Owner cancellation joins task execution shutdown and fixed-quote release in the root transaction. */
 public interface AgentTaskCancellationService {
     Receipt cancel(String tenantId, String clientId, String ownerJiacn, String actorId,
             String taskId, long expectedTaskVersion);

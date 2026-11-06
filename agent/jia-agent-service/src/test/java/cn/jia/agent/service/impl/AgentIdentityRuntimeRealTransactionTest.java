@@ -153,6 +153,7 @@ class AgentIdentityRuntimeRealTransactionTest {
         AgentRegisterDTO request = new AgentRegisterDTO();
         request.setAgentId(bound.getAgentId());
         request.setEndpoint("wss://agent/one");
+        request.setExecutionModel("reported-model");
         // Registration cannot create/rotate credentials: an authenticated unified session
         // must already have claimed this exact runtime. Model that persisted boundary.
         assertThrows(IllegalArgumentException.class, () -> agentService.register(request));
@@ -165,7 +166,14 @@ class AgentIdentityRuntimeRealTransactionTest {
         assertEquals("ACTIVE", jdbc.queryForObject(
                 "SELECT lifecycle_status FROM agent_identity_registry", String.class));
 
+        assertEquals("reported-model", jdbc.queryForObject("SELECT execution_model FROM agent_runtime", String.class));
+        var stalePresence = runtimeDao.findByAgentId(bound.getAgentId());
+        stalePresence.setExecutionModel("stale-model");
+        runtimeDao.updateById(stalePresence);
+        assertEquals("reported-model", jdbc.queryForObject("SELECT execution_model FROM agent_runtime", String.class));
+        request.setExecutionModel(null);
         AgentRegisterResultDTO repeated = agentService.register(request);
+        assertNull(jdbc.queryForObject("SELECT execution_model FROM agent_runtime", String.class));
         assertEquals(bound.getAgentId(), repeated.getAgentId());
         assertNull(repeated.getToken());
         assertEquals("urs1:synthetic", jdbc.queryForObject("SELECT token_hash FROM agent_runtime", String.class));
@@ -607,6 +615,7 @@ class AgentIdentityRuntimeRealTransactionTest {
                 """);
         jdbc.execute("""
                 CREATE TABLE agent_runtime (
+                    execution_model VARCHAR(200) DEFAULT NULL,
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,
                     agent_id VARCHAR_IGNORECASE(100) NOT NULL UNIQUE,
                     name VARCHAR(100) NOT NULL, avatar VARCHAR(500), owner_jiacn VARCHAR_IGNORECASE(50),

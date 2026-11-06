@@ -57,17 +57,17 @@ public class FundedBountyLedgerServiceImpl implements FundedBountyLedgerService 
         EconomyPostingResult result = postingService.post(new EconomyPostingCommand(
                 command.scope(), command.principal(), command.idempotencyKey(), command.requestHash(),
                 EconomyJournalType.RESERVE_BOUNTY, command.taskId(), List.of(
-                new EconomyPostingLine(payer, Math.negateExact(command.amountMicro())),
-                new EconomyPostingLine(escrow, command.amountMicro())),
+                new EconomyPostingLine(payer, Math.negateExact(command.amountWen())),
+                new EconomyPostingLine(escrow, command.amountWen())),
                 new EconomyEscrowFunding(EconomyEscrowType.BOUNTY, payer, escrow,
-                        command.amountMicro(), null)));
+                        command.amountWen(), null)));
         if (result.escrow() == null || result.escrow().escrowVersion() != 1
-                || result.escrow().fundingAmountMicro() != command.amountMicro()) {
+                || result.escrow().fundingAmountWen() != command.amountWen()) {
             throw new EconomyPostingException(EconomyPostingException.Reason.JOURNAL_CORRUPT,
                     "bounty reserve escrow receipt is invalid");
         }
         return new FundedBountyReserveReceipt(result.transactionId(), result.escrow().escrowId(),
-                result.escrow().escrowVersion(), command.amountMicro(), result.postedAt());
+                result.escrow().escrowVersion(), command.amountWen(), result.postedAt());
     }
 
     @Override
@@ -79,32 +79,32 @@ public class FundedBountyLedgerServiceImpl implements FundedBountyLedgerService 
         EconomyPostingResult result = postingService.post(new EconomyPostingCommand(
                 command.scope(), command.principal(), command.idempotencyKey(), command.requestHash(),
                 EconomyJournalType.REFUND_BOUNTY, command.taskId(), List.of(
-                new EconomyPostingLine(escrow, Math.negateExact(command.amountMicro())),
-                new EconomyPostingLine(payer, command.amountMicro())), null,
+                new EconomyPostingLine(escrow, Math.negateExact(command.amountWen())),
+                new EconomyPostingLine(payer, command.amountWen())), null,
                 new EconomyEscrowSettlement(EconomyEscrowType.BOUNTY, escrow, payer,
-                        command.amountMicro(), command.expectedEscrowVersion(),
+                        command.amountWen(), command.expectedEscrowVersion(),
                         command.reserveTransactionId())));
         return new FundedBountyRefundReceipt(result.transactionId(),
-                Math.addExact(command.expectedEscrowVersion(), 1L), command.amountMicro(), result.postedAt());
+                Math.addExact(command.expectedEscrowVersion(), 1L), command.amountWen(), result.postedAt());
     }
 
     private void ensureAccount(cn.jia.economy.service.EconomyScope scope, EconomyAccountKey key,
             String accountId, long now) {
         mapper.insertAccountIfAbsent(new EconomyAccountEntity()
                 .setAccountId(accountId).setOwnerType(key.ownerType().name()).setOwnerId(key.ownerId())
-                .setPurpose(key.purpose().name()).setCurrency(key.currency()).setBalanceMicro(0L)
+                .setPurpose(key.purpose().name()).setCurrency(key.currency()).setBalanceWen(0L)
                 .setAllowNegative(0).setStatus("ACTIVE").setVersion(0L)
                 .setTenantId(scope.tenantId()).setClientId(scope.clientId())
                 .setCreateTime(now).setUpdateTime(now));
     }
 
     private static EconomyAccountKey userAvailable(String actorId) {
-        return new EconomyAccountKey(EconomyConstants.CURRENCY_SILVER,
+        return new EconomyAccountKey(EconomyConstants.CURRENCY_WEN,
                 EconomyAccountOwnerType.USER, actorId, EconomyAccountPurpose.AVAILABLE);
     }
 
     private static EconomyAccountKey taskEscrow(String taskId) {
-        return new EconomyAccountKey(EconomyConstants.CURRENCY_SILVER,
+        return new EconomyAccountKey(EconomyConstants.CURRENCY_WEN,
                 EconomyAccountOwnerType.TASK, taskId, EconomyAccountPurpose.ESCROW);
     }
 
@@ -137,7 +137,7 @@ public class FundedBountyLedgerServiceImpl implements FundedBountyLedgerService 
 
     private static void requireReserve(FundedBountyReserveCommand command) {
         if (command == null || command.scope() == null || command.principal() == null
-                || command.amountMicro() <= 0 || command.taskId() == null) {
+                || command.amountWen() <= 0 || command.taskId() == null) {
             throw new EconomyPostingException(EconomyPostingException.Reason.INVALID_COMMAND,
                     "funded bounty reserve command is incomplete");
         }
@@ -145,7 +145,7 @@ public class FundedBountyLedgerServiceImpl implements FundedBountyLedgerService 
 
     private static void requireRefund(FundedBountyRefundCommand command) {
         if (command == null || command.scope() == null || command.principal() == null
-                || command.amountMicro() <= 0 || command.expectedEscrowVersion() <= 0
+                || command.amountWen() <= 0 || command.expectedEscrowVersion() <= 0
                 || command.taskId() == null || command.reserveTransactionId() == null) {
             throw new EconomyPostingException(EconomyPostingException.Reason.INVALID_COMMAND,
                     "funded bounty refund command is incomplete");

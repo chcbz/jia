@@ -194,14 +194,14 @@ public final class AgentTaskBountyQuoteSchemaInitializer implements Initializing
             result.put("estimated_cached_input_tokens", new ColumnSpec("bigint", "NO", null, null, ""));
             result.put("estimated_output_tokens", new ColumnSpec("bigint", "NO", null, null, ""));
             result.put("estimated_reasoning_tokens", new ColumnSpec("bigint", "NO", null, null, ""));
-            result.put("estimated_compute_micro", new ColumnSpec("bigint", "NO", null, null, ""));
-            result.put("worst_compute_micro", new ColumnSpec("bigint", "NO", null, null, ""));
-            result.put("platform_fee_micro", new ColumnSpec("bigint", "NO", null, null, ""));
-            result.put("gross_allocation_micro", new ColumnSpec("bigint", "NO", null, null, ""));
-            result.put("estimated_agent_payout_micro", new ColumnSpec("bigint", "NO", null, null, ""));
-            result.put("worst_agent_payout_micro", new ColumnSpec("bigint", "NO", null, null, ""));
-            result.put("minimum_accepted_payout_micro", new ColumnSpec("bigint", "NO", null, null, ""));
-            result.put("budget_headroom_micro", new ColumnSpec("bigint", "NO", null, null, ""));
+            result.put("estimated_compute_wen", new ColumnSpec("bigint", "NO", null, null, ""));
+            result.put("worst_compute_wen", new ColumnSpec("bigint", "NO", null, null, ""));
+            result.put("platform_fee_wen", new ColumnSpec("bigint", "NO", null, null, ""));
+            result.put("gross_allocation_wen", new ColumnSpec("bigint", "NO", null, null, ""));
+            result.put("estimated_agent_payout_wen", new ColumnSpec("bigint", "NO", null, null, ""));
+            result.put("worst_agent_payout_wen", new ColumnSpec("bigint", "NO", null, null, ""));
+            result.put("minimum_accepted_payout_wen", new ColumnSpec("bigint", "NO", null, null, ""));
+            result.put("budget_headroom_wen", new ColumnSpec("bigint", "NO", null, null, ""));
             result.put("verified_skill_match", new ColumnSpec("tinyint(1)", "NO", null, null, ""));
             result.put("advisory_ability_match", new ColumnSpec("tinyint(1)", "NO", null, null, ""));
             result.put("budget_covered", new ColumnSpec("tinyint(1)", "NO", null, null, ""));
@@ -245,9 +245,9 @@ public final class AgentTaskBountyQuoteSchemaInitializer implements Initializing
                 "idempotency_key","request_hash","task_version","price_book_version",
                 "task_input_hash","skill_set_hash","model_route_version","estimated_input_tokens",
                 "estimated_cached_input_tokens","estimated_output_tokens","estimated_reasoning_tokens",
-                "estimated_compute_micro","worst_compute_micro","platform_fee_micro",
-                "gross_allocation_micro","estimated_agent_payout_micro","worst_agent_payout_micro",
-                "minimum_accepted_payout_micro","budget_headroom_micro","verified_skill_match",
+                "estimated_compute_wen","worst_compute_wen","platform_fee_wen",
+                "gross_allocation_wen","estimated_agent_payout_wen","worst_agent_payout_wen",
+                "minimum_accepted_payout_wen","budget_headroom_wen","verified_skill_match",
                 "advisory_ability_match","budget_covered","agent_ready","recommendation","reason_codes",
                 "status","expires_at","claimed_at","tenant_id","client_id","create_time","update_time"),
                 indexes(

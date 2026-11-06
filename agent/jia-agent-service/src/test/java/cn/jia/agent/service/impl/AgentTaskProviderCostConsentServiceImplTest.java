@@ -8,6 +8,7 @@ import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.entity.AgentTaskProviderCostConsentEntity;
 import cn.jia.agent.entity.AgentTaskProviderCostConsentIssueDTO;
 import cn.jia.agent.service.AgentTaskExecutionGrantService;
+import cn.jia.agent.service.AgentTaskExecutionGrantException;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.service.AgentTaskProviderCostConsentService;
 import cn.jia.agent.service.NativeProviderCredentialBindingLookup;
@@ -70,6 +71,43 @@ class AgentTaskProviderCostConsentServiceImplTest {
                 eq(6L),eq("agent-a"),eq("c".repeat(64)),eq("d".repeat(64))))
                 .thenReturn(new AgentTaskExecutionGrantService.Admission("grant-a",1,6,
                         "agent-a","GENERATE_IMAGE",false,List.of(input)));
+    }
+
+    @Test void taskCancellationRevokesUnusedConsentButPreservesConsumedAttemptAndReplay() {
+        service.issue(scope(),"task-1","cancel-issued",request("binding-a"));
+        var issued=rows.byConsent.values().iterator().next();
+        var consumed=new AgentTaskProviderCostConsentEntity().setConsentId("paid")
+                .setOwnerJiacn("owner-a").setTaskId("task-1").setState("CONSUMED").setVersion(4L)
+                .setConsumedLeaseId("paid-lease").setConsumedAt(123L);
+        consumed.setTenantId("0"); consumed.setClientId("client-a"); rows.byConsent.put("paid",consumed);
+        service.cancelForTask(scope(),"task-1");
+        assertEquals("REVOKED",issued.getState()); assertEquals(2L,issued.getVersion());
+        assertTrue(issued.getRevokeIdempotencyKey().startsWith("task_cancel_"));
+        assertEquals("CONSUMED",consumed.getState()); assertEquals(4L,consumed.getVersion());
+        assertEquals("paid-lease",consumed.getConsumedLeaseId()); assertEquals(123L,consumed.getConsumedAt());
+        service.cancelForTask(scope(),"task-1"); assertEquals(1,rows.revokes);
+    }
+
+    @Test void taskCancellationDoesNotTouchOtherTaskOrOwner() {
+        service.issue(scope(),"task-1","cancel-scope",request("binding-a"));
+        var row=rows.byConsent.values().iterator().next();
+        service.cancelForTask(scope(),"other-task");
+        service.cancelForTask(new AgentTaskProviderCostConsentService.Scope("0","client-a","other-owner"),"task-1");
+        assertEquals("ISSUED",row.getState()); assertEquals(0,rows.revokes);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(value = AgentTaskExecutionGrantException.Reason.class,
+            names = {"TASK_QUOTE_UNAVAILABLE", "TASK_QUOTE_PAYER_FORBIDDEN", "TASK_FUNDS_INSUFFICIENT"})
+    void assignmentBillingFailuresPreserveConsentFailureSemantics(AgentTaskExecutionGrantException.Reason reason) {
+        when(grants.previewAssignmentWithinLockedTask(any(),eq("task-1"),eq(5L),eq("assign-key"),any()))
+                .thenThrow(new AgentTaskExecutionGrantException(reason, "billing denied"));
+        var failure = assertThrows(AgentTaskProviderCostConsentService.Failure.class,
+                () -> service.issue(scope(), "task-1", "billing-failure", request("binding-a")));
+        assertEquals(reason == AgentTaskExecutionGrantException.Reason.TASK_QUOTE_PAYER_FORBIDDEN
+                ? AgentTaskProviderCostConsentService.Reason.FORBIDDEN
+                : AgentTaskProviderCostConsentService.Reason.CONFLICT, failure.reason());
+        assertEquals(0, rows.inserts);
     }
 
     @Test void issueReplayConflictAndOwnerReadsAreImmutable() {
@@ -212,6 +250,11 @@ class AgentTaskProviderCostConsentServiceImplTest {
         final Map<String,AgentTaskProviderCostConsentEntity> byKey=new LinkedHashMap<>();
         int inserts;int lockReads;int revokes;
         private String key(String task,String id){return task+"\0"+id;}
+        @Override public List<AgentTaskProviderCostConsentEntity> lockUnconsumedForTask(String t,String c,String o,String task) {
+            return byConsent.values().stream().filter(r->t.equals(r.getTenantId())&&c.equals(r.getClientId())
+                    &&o.equals(r.getOwnerJiacn())&&task.equals(r.getTaskId())
+                    &&List.of("ISSUED","BOUND","RESERVED").contains(r.getState())).toList();
+        }
         @Override public AgentTaskProviderCostConsentEntity findByIdempotencyKey(String t,String c,String o,String task,String id){return byKey.get(key(task,id));}
         @Override public AgentTaskProviderCostConsentEntity findByIdempotencyKeyForUpdate(String t,String c,String o,String task,String id){lockReads++;return byKey.get(key(task,id));}
         @Override public AgentTaskProviderCostConsentEntity findByConsent(String t,String c,String o,String task,String id){return byConsent.get(id);}

@@ -35,9 +35,9 @@ class SkillManagementCodecTest {
         // Interleave incompatible roots repeatedly, after other tests may have warmed the registry.
         for(int i=0;i<3;i++) {
             assertDoesNotThrow(()->SkillManagementCodec.validate("Id","a-resource"));
-            assertDoesNotThrow(()->SkillManagementCodec.validate("Money",SkillManagementCodec.map("amountMinor","0","currency","SILVER")));
+            assertDoesNotThrow(()->SkillManagementCodec.validate("Money",SkillManagementCodec.map("amountMinor","0","currency","WEN")));
             assertThrows(SkillMarketplaceException.class,()->SkillManagementCodec.validate("Money","a-resource"));
-            assertThrows(SkillMarketplaceException.class,()->SkillManagementCodec.validate("Id",SkillManagementCodec.map("amountMinor","0","currency","SILVER")));
+            assertThrows(SkillMarketplaceException.class,()->SkillManagementCodec.validate("Id",SkillManagementCodec.map("amountMinor","0","currency","WEN")));
         }
     }
     @Test void originalIllegalTokensCannotBeNormalizedAway() throws Exception {

@@ -7,7 +7,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties({EconomyPreviewProperties.class, EconomyOnboardingGrantProperties.class})
+@EnableConfigurationProperties({EconomyPreviewProperties.class, EconomyCampaignProperties.class, EconomyPricingProperties.class})
 public class EconomyConfiguration {
     @Bean
     public EconomyPreviewGate economyPreviewGate(EconomyPreviewProperties properties) {
@@ -26,5 +26,11 @@ public class EconomyConfiguration {
     @ConditionalOnProperty(prefix = "economy.hosting-rent", name = "schema-enabled", havingValue = "true")
     public EconomyHostingRentSchemaInitializer economyHostingRentSchemaInitializer(JdbcTemplate jdbcTemplate) {
         return new EconomyHostingRentSchemaInitializer(jdbcTemplate);
+    }
+    @org.springframework.context.annotation.Profile("schema-maintenance")
+    @Bean
+    @ConditionalOnProperty(prefix = "economy.usage-cost", name = "schema-enabled", havingValue = "true")
+    public EconomyUsageCostSchemaInitializer economyUsageCostSchemaInitializer(javax.sql.DataSource dataSource) {
+        return new EconomyUsageCostSchemaInitializer(dataSource);
     }
 }

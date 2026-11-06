@@ -674,7 +674,7 @@ public class HallRequestDraftServiceImpl implements HallRequestDraftService {
                 || !"PRIVATE".equals(row.getExecutionMode())
                 || !safePersistedId(row.getTaskId(), 100)
                 || !safePersistedId(row.getRunId(), 100)
-                || !Set.of("QUEUED", "INPUTS_REVOKED", "OUTPUT_COMMITTED", "FAILED")
+                || !Set.of("QUEUED", "INPUTS_REVOKED", "CANCELLED", "OUTPUT_COMMITTED", "FAILED")
                         .contains(row.getExecutionState())) {
             throw failure(Reason.STORAGE_UNAVAILABLE);
         }

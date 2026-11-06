@@ -8,6 +8,9 @@ import java.util.List;
 @RequiredArgsConstructor
 public class ChatDeliberationDaoImpl implements ChatDeliberationDao {
     private final ChatDeliberationMapper mapper;
+    public List<ChatTurnEntity> findTaskDiscussions(String t,String o,String c,String task) {
+        return mapper.findTaskDiscussions(t,o,c,task);
+    }
     public Long nextOutboxDue(String tenantId,String clientId,long now) { return mapper.nextOutboxDue(tenantId,clientId,now); }
     public int insertSnapshot(ChatContextSnapshotEntity e) { return mapper.insertSnapshot(e); }
     public int insertRequest(ChatRequestEntity e) { return mapper.insertRequest(e); }

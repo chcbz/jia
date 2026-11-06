@@ -14,5 +14,5 @@ public class AgentTaskQuoteRequestDTO implements Serializable {
     private String workItemId;
     private AgentModelPreferenceDTO modelPreference;
     private String contextRevision;
-    private String minimumAcceptedPayoutMicro;
+    private String minimumAcceptedPayoutWen;
 }

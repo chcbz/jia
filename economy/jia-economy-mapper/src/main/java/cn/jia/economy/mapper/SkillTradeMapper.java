@@ -13,12 +13,12 @@ public interface SkillTradeMapper {
     @Insert("""
             INSERT INTO economy_skill_purchase_quote(
                 quote_id,actor_type,actor_id,idempotency_key,request_hash,product_version_id,
-                target_agent_id,expected_agent_version,expected_price_micro,
+                target_agent_id,expected_agent_version,expected_price_wen,
                 approved_permissions_manifest,approved_permissions_sha256,deployment_restriction,
                 expires_at,tenant_id,client_id,create_time)
             VALUES(
                 #{quoteId},#{actorType},#{actorId},#{idempotencyKey},#{requestHash},#{productVersionId},
-                #{targetAgentId},#{expectedAgentVersion},#{expectedPriceMicro},
+                #{targetAgentId},#{expectedAgentVersion},#{expectedPriceWen},
                 #{approvedPermissionsManifest},#{approvedPermissionsSha256},#{deploymentRestriction},
                 #{expiresAt},#{tenantId},#{clientId},#{createTime})
             """)
@@ -26,7 +26,7 @@ public interface SkillTradeMapper {
 
     @Select("""
             SELECT id,quote_id,actor_type,actor_id,idempotency_key,request_hash,product_version_id,
-                   target_agent_id,expected_agent_version,expected_price_micro,
+                   target_agent_id,expected_agent_version,expected_price_wen,
                    approved_permissions_manifest,approved_permissions_sha256,deployment_restriction,
                    expires_at,tenant_id,client_id,create_time
             FROM economy_skill_purchase_quote
@@ -46,7 +46,7 @@ public interface SkillTradeMapper {
 
     @Select("""
             SELECT id,quote_id,actor_type,actor_id,idempotency_key,request_hash,product_version_id,
-                   target_agent_id,expected_agent_version,expected_price_micro,
+                   target_agent_id,expected_agent_version,expected_price_wen,
                    approved_permissions_manifest,approved_permissions_sha256,deployment_restriction,
                    expires_at,tenant_id,client_id,create_time
             FROM economy_skill_purchase_quote
@@ -67,13 +67,13 @@ public interface SkillTradeMapper {
     @Insert("""
             INSERT INTO economy_skill_order(
                 order_id,quote_id,product_version_id,target_agent_id,buyer_type,buyer_id,
-                seller_type,seller_id,price_micro,expected_agent_version,permission_grant_version,
+                seller_type,seller_id,price_wen,expected_agent_version,permission_grant_version,
                 approved_permissions_manifest,approved_permissions_sha256,escrow_id,reserve_transaction_id,
                 capture_transaction_id,refund_transaction_id,status,version,tenant_id,client_id,
                 held_at,installing_at,active_at,refunded_at,update_time)
             VALUES(
                 #{orderId},#{quoteId},#{productVersionId},#{targetAgentId},#{buyerType},#{buyerId},
-                #{sellerType},#{sellerId},#{priceMicro},#{expectedAgentVersion},#{permissionGrantVersion},
+                #{sellerType},#{sellerId},#{priceWen},#{expectedAgentVersion},#{permissionGrantVersion},
                 #{approvedPermissionsManifest},#{approvedPermissionsSha256},#{escrowId},#{reserveTransactionId},
                 #{captureTransactionId},#{refundTransactionId},#{status},#{version},#{tenantId},#{clientId},
                 #{heldAt},#{installingAt},#{activeAt},#{refundedAt},#{updateTime})
@@ -82,7 +82,7 @@ public interface SkillTradeMapper {
 
     @Select("""
             SELECT id,order_id,quote_id,product_version_id,target_agent_id,buyer_type,buyer_id,
-                   seller_type,seller_id,price_micro,expected_agent_version,permission_grant_version,
+                   seller_type,seller_id,price_wen,expected_agent_version,permission_grant_version,
                    approved_permissions_manifest,approved_permissions_sha256,escrow_id,reserve_transaction_id,
                    capture_transaction_id,refund_transaction_id,status,version,tenant_id,client_id,
                    held_at,installing_at,active_at,refunded_at,update_time
@@ -99,7 +99,7 @@ public interface SkillTradeMapper {
 
     @Select("""
             SELECT id,order_id,quote_id,product_version_id,target_agent_id,buyer_type,buyer_id,
-                   seller_type,seller_id,price_micro,expected_agent_version,permission_grant_version,
+                   seller_type,seller_id,price_wen,expected_agent_version,permission_grant_version,
                    approved_permissions_manifest,approved_permissions_sha256,escrow_id,reserve_transaction_id,
                    capture_transaction_id,refund_transaction_id,status,version,tenant_id,client_id,
                    held_at,installing_at,active_at,refunded_at,update_time
@@ -138,8 +138,8 @@ public interface SkillTradeMapper {
                 version=version+1,update_time=#{now}
             WHERE """ + EXACT_SCOPE + """
               AND order_id=#{orderId} AND status='INSTALLING' AND version=#{expectedVersion}
-              AND ((price_micro=0 AND #{captureTransactionId} IS NULL)
-                   OR (price_micro>0 AND #{captureTransactionId} IS NOT NULL))
+              AND ((price_wen=0 AND #{captureTransactionId} IS NULL)
+                   OR (price_wen>0 AND #{captureTransactionId} IS NOT NULL))
               AND OCTET_LENGTH(order_id)=OCTET_LENGTH(#{orderId})
             """)
     int markOrderActive(
@@ -157,8 +157,8 @@ public interface SkillTradeMapper {
             WHERE """ + EXACT_SCOPE + """
               AND order_id=#{orderId} AND status IN ('FUNDS_HELD','INSTALLING')
               AND version=#{expectedVersion} AND capture_transaction_id IS NULL
-              AND ((price_micro=0 AND #{refundTransactionId} IS NULL)
-                   OR (price_micro>0 AND #{refundTransactionId} IS NOT NULL))
+              AND ((price_wen=0 AND #{refundTransactionId} IS NULL)
+                   OR (price_wen>0 AND #{refundTransactionId} IS NOT NULL))
               AND OCTET_LENGTH(order_id)=OCTET_LENGTH(#{orderId})
             """)
     int markOrderRefunded(
@@ -172,18 +172,18 @@ public interface SkillTradeMapper {
     @Insert("""
             INSERT INTO economy_skill_order_receipt(
                 order_id,actor_type,actor_id,idempotency_key,request_hash,order_version,order_status,
-                price_micro,permission_grant_version,approved_permissions_sha256,escrow_id,
+                price_wen,permission_grant_version,approved_permissions_sha256,escrow_id,
                 tenant_id,client_id,create_time)
             VALUES(
                 #{orderId},#{actorType},#{actorId},#{idempotencyKey},#{requestHash},#{orderVersion},#{orderStatus},
-                #{priceMicro},#{permissionGrantVersion},#{approvedPermissionsSha256},#{escrowId},
+                #{priceWen},#{permissionGrantVersion},#{approvedPermissionsSha256},#{escrowId},
                 #{tenantId},#{clientId},#{createTime})
             """)
     int insertOrderReceipt(SkillOrderReceiptEntity receipt);
 
     @Select("""
             SELECT id,order_id,actor_type,actor_id,idempotency_key,request_hash,order_version,order_status,
-                   price_micro,permission_grant_version,approved_permissions_sha256,escrow_id,
+                   price_wen,permission_grant_version,approved_permissions_sha256,escrow_id,
                    tenant_id,client_id,create_time
             FROM economy_skill_order_receipt
             WHERE """ + EXACT_SCOPE + """

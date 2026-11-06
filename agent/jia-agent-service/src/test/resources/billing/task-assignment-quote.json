@@ -1,0 +1,7 @@
+{
+  "targetAgentId": "agent-1",
+  "expectedTaskVersion": "0",
+  "requirementRevision": "1",
+  "quoteId": "quote-1",
+  "recommendationId": "rec-1"
+}

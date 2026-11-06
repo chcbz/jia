@@ -73,7 +73,7 @@ class PlatformSkillSeederTest {
             assertEquals(2L, product.getVersion());
             assertEquals(expected.skillKey(), version.getSkillKey());
             assertEquals(expected.skillVersion(), version.getSkillVersion());
-            assertEquals(expected.priceMicro(), version.getPriceMicro());
+            assertEquals(expected.priceWen(), version.getPriceWen());
             assertEquals(expected.packageSize(), version.getPackageSize());
             assertEquals(expected.deploymentRestriction(), version.getDeploymentRestriction());
             assertEquals("[]", version.getApprovedPermissionsManifest());
@@ -110,7 +110,7 @@ class PlatformSkillSeederTest {
         SkillProductVersionEntity incompatible = new SkillProductVersionEntity()
                 .setProductVersionId(expected.productVersionId()).setProductId(expected.productId())
                 .setVersionSequence(1L).setSkillKey(expected.skillKey()).setSkillVersion(expected.skillVersion())
-                .setPriceMicro(expected.priceMicro() + 1L).setPackageSha256(expected.packageSha256())
+                .setPriceWen(expected.priceWen() + 1L).setPackageSha256(expected.packageSha256())
                 .setPackageSize(expected.packageSize()).setApprovedPermissionsManifest("[]")
                 .setApprovedPermissionsSha256(expected.approvedPermissionsSha256())
                 .setDeploymentRestriction(expected.deploymentRestriction()).setReviewStatus("APPROVED")

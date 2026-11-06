@@ -32,7 +32,7 @@ import java.util.regex.Pattern;
  * Local bindings prove channel liveness only, never ownership. No API-key execution fallback.
  */
 @Service
-public class AgentRuntimeAuthenticationService {
+public class AgentRuntimeAuthenticationService implements cn.jia.agent.service.AuthenticatedRuntimeOperation {
     private static final Pattern AGENT_REFERENCE = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}");
     private static final SecureRandom RANDOM = new SecureRandom();
     private final AgentRuntimeDao runtimes;
@@ -162,6 +162,17 @@ public class AgentRuntimeAuthenticationService {
                 || !(runtime.getDetails() instanceof Proof proof)
                 || !runtime.getPrincipal().equals(proof.scope())) throw denied();
         return proof;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public <T> T withAuthenticatedRuntime(java.security.Principal principal,
+            java.util.function.Function<cn.jia.agent.service.AuthenticatedRuntimeOperation.Scope, T> operation) {
+        if (!(principal instanceof org.springframework.security.core.Authentication authentication)) throw denied();
+        var proof = requireProof(authentication);
+        var scope = proof.scope();
+        return withFence(proof, false, () -> operation.apply(new cn.jia.agent.service.AuthenticatedRuntimeOperation.Scope(
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.agentId())));
     }
 
     /** Native business commit boundary. This entry point owns a proxy transaction;

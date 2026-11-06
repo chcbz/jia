@@ -12,7 +12,7 @@ public class EconomyAccountEntity {
     private String ownerId;
     private String purpose;
     private String currency;
-    private Long balanceMicro;
+    private Long balanceWen;
     private Integer allowNegative;
     private String status;
     private Long version;

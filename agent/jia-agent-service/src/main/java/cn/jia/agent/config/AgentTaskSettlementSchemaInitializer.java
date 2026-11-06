@@ -101,8 +101,8 @@ public final class AgentTaskSettlementSchemaInitializer implements InitializingB
     private static Map<String, String> columns() {
         Map<String, String> columns = new LinkedHashMap<>();
         String[] names = {"id", "tenant_id", "client_id", "principal_type", "principal_id", "idempotency_key", "request_hash",
-                "task_id", "quote_id", "agent_id", "escrow_id", "status", "gross_micro", "actual_compute_micro", "platform_fee_micro",
-                "agent_payout_micro", "refunded_micro", "task_version", "funding_version", "escrow_version", "settled_at", "transaction_ids"};
+                "task_id", "quote_id", "agent_id", "escrow_id", "status", "gross_wen", "actual_compute_wen", "platform_fee_wen",
+                "agent_payout_wen", "refunded_wen", "task_version", "funding_version", "escrow_version", "settled_at", "transaction_ids"};
         String[] types = {"bigint", "varchar(50)", "varchar(50)", "varchar(20)", "varchar(100)", "varbinary(36)", "binary(32)",
                 "varchar(100)", "varchar(100)", "varchar(100)", "varchar(100)", "varchar(16)", "bigint", "bigint", "bigint",
                 "bigint", "bigint", "bigint", "bigint", "bigint", "bigint", "text"};

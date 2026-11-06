@@ -10,7 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class FundedBountyQuoteCalculatorTest {
     @Test
     void fourTokenClassesUseIndependentCeilTermsWithoutCachedInputOverlap() {
-        long fixed = FundedBountyPreviewPriceBook.FIXED_REQUEST_FEE_MICRO;
+        long fixed = FundedBountyPreviewPriceBook.FIXED_REQUEST_FEE_WEN;
         assertEquals(fixed + 2, FundedBountyQuoteCalculator.tokenCost(tokens(1, 0, 0, 0), 0));
         assertEquals(fixed + 1, FundedBountyQuoteCalculator.tokenCost(tokens(0, 1, 0, 0), 0));
         assertEquals(fixed + 6, FundedBountyQuoteCalculator.tokenCost(tokens(0, 0, 1, 0), 0));
@@ -25,14 +25,14 @@ class FundedBountyQuoteCalculatorTest {
                 FundedBountyPreviewPriceBook.ESTIMATED_TOKENS,
                 FundedBountyPreviewPriceBook.WORST_TOKENS);
         assertTrue(covered.budgetCovered());
-        assertTrue(covered.budgetHeadroomMicro() >= 0);
+        assertTrue(covered.budgetHeadroomWen() >= 0);
 
         FundedBountyQuoteCalculator.QuoteAmounts rejected = FundedBountyQuoteCalculator.calculate(
                 10_000_000L, 10_000_000L,
                 FundedBountyPreviewPriceBook.ESTIMATED_TOKENS,
                 FundedBountyPreviewPriceBook.WORST_TOKENS);
         assertFalse(rejected.budgetCovered());
-        assertEquals(0L, rejected.budgetHeadroomMicro());
+        assertEquals(0L, rejected.budgetHeadroomWen());
     }
 
     @Test

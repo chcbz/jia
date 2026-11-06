@@ -1,0 +1,42 @@
+{
+  "protocolVersion": 1,
+  "code": "E0",
+  "msg": "ok",
+  "requestId": "recommend-test",
+  "data": {
+    "taskId": "task",
+    "taskVersion": "7",
+    "observedAt": 1000,
+    "state": "NO_MATCH",
+    "requirementSummary": "资料不足",
+    "recommendations": [
+      {
+        "agent": {
+          "agentId": "a",
+          "name": "Agent",
+          "status": "online",
+          "abilities": [],
+          "canOperate": true,
+          "boundToMe": true,
+          "providerDisplayName": null
+        },
+        "recommendationLevel": "UNKNOWN",
+        "reason": "尚无能力介绍",
+        "evidence": [],
+        "gaps": [],
+        "quote": {
+          "state": "AVAILABLE",
+          "quoteId": "quote-1",
+          "recommendationId": "recommendation-1",
+          "amount": {
+            "amountMinor": "13",
+            "currency": "WEN"
+          },
+          "unavailableReason": null
+        }
+      }
+    ],
+    "questions": [],
+    "candidateSetComplete": true
+  }
+}

@@ -146,11 +146,11 @@ class SkillSchemaInitializerMySqlTest {
         insertFreeOrderAndReceipt(jdbc);
 
         assertThrows(RuntimeException.class, () -> jdbc.update(
-                "UPDATE agent_skill_product_version SET price_micro=1 WHERE product_version_id='spv-1'"));
+                "UPDATE agent_skill_product_version SET price_wen=1 WHERE product_version_id='spv-1'"));
         assertThrows(RuntimeException.class, () -> jdbc.update(
                 "DELETE FROM agent_skill_product_version WHERE product_version_id='spv-1'"));
         assertThrows(RuntimeException.class, () -> jdbc.update(
-                "UPDATE economy_skill_purchase_quote SET expected_price_micro=1 WHERE quote_id='sq-1'"));
+                "UPDATE economy_skill_purchase_quote SET expected_price_wen=1 WHERE quote_id='sq-1'"));
         assertThrows(RuntimeException.class, () -> jdbc.update(
                 "DELETE FROM economy_skill_order_receipt WHERE order_id='so-1'"));
 
@@ -258,7 +258,7 @@ class SkillSchemaInitializerMySqlTest {
             String skillKey, String restriction, long price) {
         jdbc.update("""
                 INSERT INTO agent_skill_product_version(
-                    product_version_id,product_id,version_sequence,skill_key,skill_version,price_micro,
+                    product_version_id,product_id,version_sequence,skill_key,skill_version,price_wen,
                     package_sha256,package_size,approved_permissions_manifest,approved_permissions_sha256,
                     deployment_restriction,review_status,tenant_id,client_id,create_time)
                 VALUES(?,?,1,?,'1.0.0',?, ?,123,'[]',? ,?,'APPROVED',?,?,1)
@@ -270,7 +270,7 @@ class SkillSchemaInitializerMySqlTest {
         jdbc.update("""
                 INSERT INTO economy_skill_purchase_quote(
                     quote_id,actor_type,actor_id,idempotency_key,request_hash,product_version_id,target_agent_id,
-                    expected_agent_version,expected_price_micro,approved_permissions_manifest,
+                    expected_agent_version,expected_price_wen,approved_permissions_manifest,
                     approved_permissions_sha256,deployment_restriction,expires_at,tenant_id,client_id,create_time)
                 VALUES(?,'USER','user-1',?, ?,?,'agent-1',1,0,'[]',?,'NONE',100,?,?,1)
                 """, quoteId,
@@ -282,7 +282,7 @@ class SkillSchemaInitializerMySqlTest {
         jdbc.update("""
                 INSERT INTO economy_skill_order(
                     order_id,quote_id,product_version_id,target_agent_id,buyer_type,buyer_id,seller_type,seller_id,
-                    price_micro,expected_agent_version,permission_grant_version,approved_permissions_manifest,
+                    price_wen,expected_agent_version,permission_grant_version,approved_permissions_manifest,
                     approved_permissions_sha256,status,version,tenant_id,client_id,held_at,update_time)
                 VALUES('so-1','sq-1','spv-1','agent-1','USER','user-1','SYSTEM','SKILL_STORE',
                     0,1,1,'[]',?,'FUNDS_HELD',1,'Tenant-A','Client-A',1,1)
@@ -290,7 +290,7 @@ class SkillSchemaInitializerMySqlTest {
         jdbc.update("""
                 INSERT INTO economy_skill_order_receipt(
                     order_id,actor_type,actor_id,idempotency_key,request_hash,order_version,order_status,
-                    price_micro,permission_grant_version,approved_permissions_sha256,tenant_id,client_id,create_time)
+                    price_wen,permission_grant_version,approved_permissions_sha256,tenant_id,client_id,create_time)
                 VALUES('so-1','USER','user-1',?, ?,1,'FUNDS_HELD',0,1,?,'Tenant-A','Client-A',1)
                 """, "00000000-0000-0000-0000-000000000702".getBytes(StandardCharsets.US_ASCII),
                 new byte[32], new byte[32]);

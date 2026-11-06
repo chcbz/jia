@@ -27,7 +27,7 @@ class EconomyOperationWireTest {
     @Test void hostingQuoteIsProjectedByActualHttpBoundaryAndRetainsAuthentication() throws Exception {
         var service = mock(HostingRentApplicationService.class);
         var quote = new HostingRentApplicationService.QuoteView("q","INITIAL","linchong","agent",null,null,
-                "plan","9007199254740993","SILVER","1234500000","172800","2000");
+                "plan","9007199254740993","WEN","1234500000","172800","2000");
         when(service.quote(any(),eq("linchong"),eq("00000000-0000-4000-8000-000000000001"),any())).thenReturn(quote);
         var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(new AgentHostingRentController(service))
                 .setControllerAdvice(new cn.jia.core.config.ApiEnvelopeAdvice(),new cn.jia.core.config.ApiRequestEnvelopeAdvice(),new cn.jia.core.config.ExceptionHandlerAdvice())
@@ -40,7 +40,7 @@ class EconomyOperationWireTest {
                 .contentType("application/json").content("{\"protocolVersion\":1,\"requestId\":\"quote-test\",\"data\":{\"purpose\":\"INITIAL\"}}"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.data.expiresAt").value(2000))
                 .andExpect(jsonPath("$.data.planVersion").value("9007199254740993"))
-                .andExpect(jsonPath("$.data.amountMicro").value("1234500000"))
+                .andExpect(jsonPath("$.data.amountWen").value("1234500000"))
                 .andExpect(jsonPath("$.data.leaseId").value(org.hamcrest.Matchers.nullValue()))
                 .andExpect(jsonPath("$.requestId").value("quote-test"));
         mvc.perform(get("/agent/agent/hosting-lease")).andExpect(status().isUnauthorized());

@@ -3,7 +3,7 @@ package cn.jia.economy.api;
 import cn.jia.core.security.TenantClaimPolicy;
 
 import cn.jia.economy.common.EconomyConstants;
-import cn.jia.economy.common.MicroSilver;
+import cn.jia.economy.common.WenAmount;
 import cn.jia.economy.common.Money;
 import cn.jia.economy.config.EconomyPreviewGate;
 import cn.jia.economy.entity.EconomyWalletLedgerRow;
@@ -72,8 +72,8 @@ public final class EconomyWalletController {
         Subject subject = requireSubject(authentication);
         requirePreviewScope(subject.scope());
         EconomyWalletService.WalletSnapshot snapshot = walletService.wallet(subject.scope(), subject.actorId());
-        return cn.jia.core.entity.JsonResult.success(new WalletResponse(EconomyConstants.CURRENCY_SILVER, Money.silver(snapshot.availableMicro()),
-                Money.silver(snapshot.heldMicro()), Long.toString(snapshot.version())));
+        return cn.jia.core.entity.JsonResult.success(new WalletResponse(EconomyConstants.CURRENCY_WEN, Money.wen(snapshot.availableWen()),
+                Money.wen(snapshot.heldWen()), Long.toString(snapshot.version())));
     }
 
     @GetMapping(value = "/ledger", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -88,18 +88,30 @@ public final class EconomyWalletController {
         return cn.jia.core.entity.JsonResult.success(new LedgerResponse(List.copyOf(items), encodeCursor(page.nextCursor()), page.nextCursor() != null));
     }
 
-    @PostMapping(value = "/onboarding-grant", consumes = MediaType.APPLICATION_JSON_VALUE,
+    @PostMapping(value = "/events", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public cn.jia.core.entity.JsonResult<OnboardingGrantResponse> claimOnboardingGrant(@cn.jia.core.annotation.ApiJsonData @RequestBody byte[] rawBody,
+    public cn.jia.core.entity.JsonResult<CampaignEventResponse> observeEvent(
+            @cn.jia.core.annotation.ApiJsonData @RequestBody byte[] rawBody,
             HttpServletRequest request, Authentication authentication) {
         requireNoQuery(request);
-        requireEmptyObject(rawBody);
         Subject subject = requireSubject(authentication);
         requirePreviewScope(subject.scope());
-        EconomyWalletService.OnboardingGrantReceipt receipt =
-                walletService.claimOnboardingGrant(subject.scope(), subject.actorId());
-        return cn.jia.core.entity.JsonResult.success(new OnboardingGrantResponse(receipt.transactionId(), receipt.status(),
-                Money.silver(receipt.amountMicro()), receipt.campaignRef()));
+        var event = parseEvent(rawBody);
+        var receipts = walletService.observeEvent(subject.scope(), subject.actorId(), event).stream()
+                .map(r -> new CampaignReceiptResponse(r.transactionId(), r.status(),
+                        Money.wen(r.amountWen()), r.campaignRef())).toList();
+        return cn.jia.core.entity.JsonResult.success(new CampaignEventResponse(receipts));
+    }
+
+    private static cn.jia.economy.config.EconomyCampaignProperties.Event parseEvent(byte[] rawBody) {
+        try {
+            JsonNode body = STRICT_JSON.readTree(rawBody);
+            if (body == null || !body.isObject() || body.size() != 1
+                    || !body.has("event") || !body.get("event").isTextual()) throw badRequest();
+            return cn.jia.economy.config.EconomyCampaignProperties.Event.valueOf(body.get("event").textValue());
+        } catch (Exception invalid) {
+            throw badRequest();
+        }
     }
 
     @PostMapping(value = "/preview/issuances", consumes = MediaType.APPLICATION_JSON_VALUE,
@@ -115,8 +127,8 @@ public final class EconomyWalletController {
         IssuanceRequest body = parseIssuanceBody(rawBody);
         byte[] requestHash = requestHash(subject, body);
         EconomyPostingResult result = walletService.issue(subject.scope(), subject.actorId(), idempotencyKey,
-                requestHash, body.amountMicro(), body.campaignRef());
-        return cn.jia.core.entity.JsonResult.success(new IssuanceResponse(result.transactionId(), result.status(), Money.silver(body.amountMicro())));
+                requestHash, body.amountWen(), body.campaignRef());
+        return cn.jia.core.entity.JsonResult.success(new IssuanceResponse(result.transactionId(), result.status(), Money.wen(body.amountWen())));
     }
 
     @ExceptionHandler(EconomyRequestException.class)
@@ -240,10 +252,10 @@ public final class EconomyWalletController {
             JsonNode money = root.get("amount");
             if (money.size() != 2 || !money.has("amountMinor") || !money.has("currency")
                     || !money.get("amountMinor").isTextual() || !money.get("currency").isTextual()
-                    || !EconomyConstants.CURRENCY_SILVER.equals(money.get("currency").textValue())) throw badRequest();
+                    || !EconomyConstants.CURRENCY_WEN.equals(money.get("currency").textValue())) throw badRequest();
             String amount = money.get("amountMinor").textValue();
             String campaign = root.get("campaignRef").textValue();
-            long parsed = MicroSilver.parseUnsigned(amount);
+            long parsed = WenAmount.parseUnsigned(amount);
             if (parsed == 0 || !validExact(campaign, 100)) throw badRequest();
             return new IssuanceRequest(parsed, campaign);
         } catch (EconomyRequestException | EconomyPostingException exception) {
@@ -263,7 +275,7 @@ public final class EconomyWalletController {
             envelope.put("method", "POST");
             envelope.put("route", "/economy/preview/issuances");
             var closedBody = envelope.putObject("body");
-            closedBody.put("amountMicro", MicroSilver.format(body.amountMicro()));
+            closedBody.put("amountWen", WenAmount.format(body.amountWen()));
             closedBody.put("campaignRef", body.campaignRef());
             return MessageDigest.getInstance("SHA-256").digest(STRICT_JSON.writeValueAsBytes(envelope));
         } catch (NoSuchAlgorithmException exception) {
@@ -277,11 +289,11 @@ public final class EconomyWalletController {
         if (row == null || !validExact(row.getTransactionId(), 100) || !validExact(row.getEntryId(), 140)
                 || !validExact(row.getBusinessType(), 32) || !validExact(row.getBusinessRef(), 100)
                 || !"POSTED".equals(row.getStatus()) || row.getPostedAt() == null || row.getPostedAt() < 0
-                || row.getSignedAmountMicro() == null || row.getSignedAmountMicro() == 0) {
+                || row.getSignedAmountWen() == null || row.getSignedAmountWen() == 0) {
             throw new EconomyPostingException(EconomyPostingException.Reason.JOURNAL_CORRUPT,
                     "wallet ledger row is invalid");
         }
-        long signed = row.getSignedAmountMicro();
+        long signed = row.getSignedAmountWen();
         String direction = signed > 0 ? "CREDIT" : "DEBIT";
         long amount;
         try {
@@ -291,7 +303,7 @@ public final class EconomyWalletController {
                     "wallet ledger amount is invalid", exception);
         }
         return new LedgerItemResponse(row.getTransactionId(), row.getEntryId(), row.getBusinessType(),
-                row.getBusinessRef(), direction, Money.silver(amount), row.getStatus(),
+                row.getBusinessRef(), direction, Money.wen(amount), row.getStatus(),
                 row.getPostedAt());
     }
 
@@ -370,7 +382,7 @@ public final class EconomyWalletController {
     private record Query(EconomyWalletService.Cursor cursor, int limit) {
     }
 
-    private record IssuanceRequest(long amountMicro, String campaignRef) {
+    private record IssuanceRequest(long amountWen, String campaignRef) {
     }
 
     public record WalletResponse(String currency, Money available, Money held, String version) {
@@ -386,9 +398,11 @@ public final class EconomyWalletController {
     public record IssuanceResponse(String transactionId, String status, Money amount) {
     }
 
-    public record OnboardingGrantResponse(
+    public record CampaignReceiptResponse(
             String transactionId, String status, Money amount, String campaignRef) {
     }
+
+    public record CampaignEventResponse(List<CampaignReceiptResponse> grants) { }
 
     public record EconomyErrorDetails(boolean retryable, String currentVersion) { }
     public record EconomyError(String code, String message, boolean retryable, String currentVersion) {

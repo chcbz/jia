@@ -15,7 +15,7 @@ public class EconomyHostingLeaseEntity {
     private String bindingId;
     private String planId;
     private Long planVersion;
-    private Long amountMicro;
+    private Long amountWen;
     private Long periodSeconds;
     private String status;
     private Long paidFrom;

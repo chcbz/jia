@@ -31,6 +31,9 @@ public class AgentRuntimeEntity extends BaseEntity {
     private Long bindingId;
     private String abilities;
     private String endpoint;
+    /** Latest reported default execution model; null means not reported, not free. */
+    @com.baomidou.mybatisplus.annotation.TableField(updateStrategy = com.baomidou.mybatisplus.annotation.FieldStrategy.NEVER)
+    private String executionModel;
     /** Digest and account-epoch proof only; never a raw execution credential. */
     @lombok.ToString.Exclude
     private String tokenHash;

@@ -22,10 +22,10 @@ class SkillMarketplaceHttpTest {
             assertThrows(SkillMarketplaceException.class,()->SkillMarketplaceHttp.body(raw(s),false));
     }
     @Test void explicitEmptyPermissionsAreRequiredEvenForFreeOrder() {
-        String json="{\"quoteId\":\"q\",\"productVersionId\":\"p\",\"targetAgentId\":\"a\",\"expectedAgentVersion\":\"1\",\"expectedPrice\":{\"amountMinor\":\"0\",\"currency\":\"SILVER\"},\"approvedPermissions\":[]}";
+        String json="{\"quoteId\":\"q\",\"productVersionId\":\"p\",\"targetAgentId\":\"a\",\"expectedAgentVersion\":\"1\",\"expectedPrice\":{\"amountMinor\":\"0\",\"currency\":\"WEN\"},\"approvedPermissions\":[]}";
         assertEquals("[]",SkillMarketplaceHttp.body(raw(json),true).get("approvedPermissions"));
-        assertEquals("0",SkillMarketplaceHttp.body(raw(json),true).get("expectedPriceMicro"));
-        assertThrows(SkillMarketplaceException.class,()->SkillMarketplaceHttp.body(raw(json.replace("SILVER","USD")),true));
+        assertEquals("0",SkillMarketplaceHttp.body(raw(json),true).get("expectedPriceWen"));
+        assertThrows(SkillMarketplaceException.class,()->SkillMarketplaceHttp.body(raw(json.replace("WEN","USD")),true));
         assertThrows(SkillMarketplaceException.class,()->SkillMarketplaceHttp.body(raw(json.replace("[]","null")),true));
         assertThrows(SkillMarketplaceException.class,()->SkillMarketplaceHttp.body(raw(json.replace("[]","[\"a\",\"a\"]")),true));
     }

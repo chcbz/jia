@@ -40,14 +40,14 @@ class AgentWebSocketUnifiedReadinessTest {
         assertEquals(AgentRawCommandDispatchResult.Status.OFFLINE, f.dispatch("agent-a").status());
         verify(a, never()).sendMessage(any());
     }
-    @Test void staleChannelDoesNotReceiveOriginalCommandButCurrentChannelReceivesExactBytesOnce() throws Exception {
+    @Test void staleChannelDoesNotReceiveCommandButCurrentChannelReceivesExactPublicProjectionOnce() throws Exception {
         var f = new Fixture(); var old = f.session("old", "agent-a"); var current = f.session("new", "agent-a");
         f.register(old, true, true); f.register(current, true, true); f.current.remove("old");
         clearInvocations(old, current);
         var result = f.dispatch("agent-a"); assertEquals(AgentRawCommandDispatchResult.Status.SENT, result.status());
         assertEquals(1, result.sentSessionCount()); verify(old, never()).sendMessage(any());
         var message = org.mockito.ArgumentCaptor.forClass(TextMessage.class); verify(current).sendMessage(message.capture());
-        assertArrayEquals(f.wire("agent-a"), message.getValue().getPayload().getBytes(StandardCharsets.UTF_8));
+        assertArrayEquals(f.publicWire("agent-a"), message.getValue().getPayload().getBytes(StandardCharsets.UTF_8));
     }
     @Test void duplicateCurrentExecutionChannelsRejectInsteadOfBroadcast() throws Exception {
         var f = new Fixture(); var a = f.session("a", "agent-a"); var b = f.session("b", "agent-a");
@@ -96,7 +96,7 @@ class AgentWebSocketUnifiedReadinessTest {
         for (var types : List.of(List.of("NEW_BUSINESS_COMMAND"), List.of("TASK_INVITE", "TASK_INVITE"))) {
             var f = new Fixture(); var a = f.session("a", "agent-a");
             f.handler.afterConnectionEstablished(a);
-            f.handler.handleTextMessage(a, new TextMessage(new ObjectMapper().writeValueAsString(Map.of(
+            UnifiedRuntimeTestSupport.deliver(f.handler, a, new TextMessage(new ObjectMapper().writeValueAsString(Map.of(
                     "type", "agent.register", "agentId", "agent-a", "runtimeInstanceId", "boot",
                     "durableStateHealthy", true, "readyCommandTypes", types))));
             verify(f.service, never()).register(any());
@@ -116,7 +116,7 @@ class AgentWebSocketUnifiedReadinessTest {
         f.register(a, true, true); f.register(b, true, true);
         var runtime = new AgentRuntimeDTO(); runtime.setAgentId("agent-a"); runtime.setStatus("online");
         when(f.service.updateStatus(eq("agent-a"), any())).thenReturn(runtime);
-        f.handler.handleTextMessage(a, new TextMessage("{\"schemaVersion\":1,\"messageType\":\"agent.presence\",\"messageId\":\"health\","
+        UnifiedRuntimeTestSupport.deliver(f.handler, a, new TextMessage("{\"schemaVersion\":1,\"messageType\":\"agent.presence\",\"messageId\":\"health\","
                 + "\"agentId\":\"agent-a\",\"runtimeInstanceId\":\"boot\",\"status\":\"online\",\"durableStateHealthy\":false}"));
         assertFalse(f.handler.isExactAgentConnected("0", "client", "agent-a"));
         assertTrue(f.handler.isExactAgentConnected("0", "client", "agent-b"));
@@ -129,21 +129,24 @@ class AgentWebSocketUnifiedReadinessTest {
         var presence = new TextMessage("{\"type\":\"agent.presence\",\"agentId\":\"agent-a\","
                 + "\"runtimeInstanceId\":\"boot\",\"status\":\"online\"}");
 
-        f.handler.handleTextMessage(old, presence);
+        UnifiedRuntimeTestSupport.deliver(f.handler, old, presence);
         verify(f.service, never()).updateStatus(any(), any());
-        f.handler.handleTextMessage(current, presence);
+        UnifiedRuntimeTestSupport.deliver(f.handler, current, presence);
         verify(f.service).updateStatus(eq("agent-a"), any());
         assertTrue(f.handler.isExactAgentConnected("0", "client", "agent-a"));
     }
-    @Test void queueHealthLossDoesNotRejectExistingTerminalTaskReport() throws Exception {
+    @Test void queueHealthLossDoesNotReenableRetiredTaskReport() throws Exception {
         var f = new Fixture(); var a = f.session("a", "agent-a"); f.register(a, false, true);
-        var task = new AgentTaskDTO(); task.setId("original-task"); task.setStatus("completed");
-        when(f.service.reportTask(eq("original-task"), any())).thenReturn(task);
+        clearInvocations(f.service, a);
 
-        f.handler.handleTextMessage(a, new TextMessage("{\"type\":\"task.report\",\"agentId\":\"agent-a\","
+        UnifiedRuntimeTestSupport.deliver(f.handler, a, new TextMessage("{\"type\":\"task.report\",\"agentId\":\"agent-a\","
                 + "\"runtimeInstanceId\":\"boot\",\"taskId\":\"original-task\",\"status\":\"completed\"}"));
 
-        verify(f.service).reportTask(eq("original-task"), any());
+        verifyNoInteractions(f.service);
+        var receipt = org.mockito.ArgumentCaptor.forClass(TextMessage.class);
+        verify(a).sendMessage(receipt.capture());
+        assertTrue(receipt.getValue().getPayload().contains("UNSUPPORTED_MESSAGE_TYPE"));
+        assertFalse(receipt.getValue().getPayload().contains("task.report.receipt"));
         assertFalse(f.handler.isExactAgentConnected("0", "client", "agent-a"));
     }
     @Test void staleFencedBusinessCallbackNeverMutatesEvenIfChannelWasSelected() throws Exception {
@@ -153,7 +156,7 @@ class AgentWebSocketUnifiedReadinessTest {
         doThrow(new IllegalArgumentException("stale generation"))
                 .when(f.auth).withFence(eq(proof), eq(false), any());
 
-        f.handler.handleTextMessage(a, new TextMessage("{\"type\":\"agent.presence\",\"agentId\":\"agent-a\","
+        UnifiedRuntimeTestSupport.deliver(f.handler, a, new TextMessage("{\"type\":\"agent.presence\",\"agentId\":\"agent-a\","
                 + "\"runtimeInstanceId\":\"boot\",\"status\":\"online\"}"));
 
         verify(f.auth).withFence(eq(proof), eq(false), any());
@@ -167,7 +170,7 @@ class AgentWebSocketUnifiedReadinessTest {
         var b = f.session("b", "agent-b"); f.register(b, true, true);
         var runtime = new AgentRuntimeDTO(); runtime.setAgentId("agent-b"); runtime.setStatus("online");
         when(f.service.updateStatus(eq("agent-b"), any())).thenReturn(runtime);
-        f.handler.handleTextMessage(b, new TextMessage("{\"type\":\"agent.presence\",\"agentId\":\"agent-b\","
+        UnifiedRuntimeTestSupport.deliver(f.handler, b, new TextMessage("{\"type\":\"agent.presence\",\"agentId\":\"agent-b\","
                 + "\"runtimeInstanceId\":\"boot\",\"status\":\"online\"}"));
         verify(f.service).updateStatus(eq("agent-b"), any());
         verify(f.service, never()).updateStatus(eq("agent-a"), any());
@@ -189,7 +192,7 @@ class AgentWebSocketUnifiedReadinessTest {
         var disposable = trackStream(f.handler, "old", "original-request", "original-conversation");
         f.stop(old, "original-request", "original-conversation");
         f.stop(current, "original-request", "original-conversation");
-        f.handler.handleTextMessage(old, new TextMessage("{\"type\":\"chat.stop\",\"requestId\":\"original-request\"}"));
+        UnifiedRuntimeTestSupport.deliver(f.handler, old, new TextMessage("{\"type\":\"chat.stop\",\"requestId\":\"original-request\"}"));
         verify(disposable, never()).dispose();
     }
     // Seed only the existing private stream recovery handle; no network/provider execution.
@@ -202,7 +205,7 @@ class AgentWebSocketUnifiedReadinessTest {
         constructor.setAccessible(true);
         var field = AgentWebSocketHandler.class.getDeclaredField("runningStreams"); field.setAccessible(true);
         var streams = (Map<String, Object>) field.get(handler);
-        streams.put(sessionId + ":" + requestId, constructor.newInstance(sessionId, requestId, conversationId, disposable));
+        streams.put(sessionId + ":" + conversationId + ":" + requestId, constructor.newInstance(sessionId, requestId, conversationId, disposable));
         return disposable;
     }
 
@@ -233,13 +236,22 @@ class AgentWebSocketUnifiedReadinessTest {
             var payload = new HashMap<String, Object>(); payload.put("type", "agent.register"); payload.put("agentId", s.getAttributes().get("agentId"));
             UnifiedRuntimeTestSupport.registrationProof(s, payload);
             payload.put("runtimeInstanceId", "boot"); payload.put("durableStateHealthy", durable); payload.put("readyCommandTypes", execute ? List.of("TASK_INVITE") : List.of());
-            handler.handleTextMessage(s, new TextMessage(new ObjectMapper().writeValueAsString(payload)));
+            UnifiedRuntimeTestSupport.deliver(handler, s, new TextMessage(new ObjectMapper().writeValueAsString(payload)));
         }
         void stop(WebSocketSession session, String requestId, String conversationId) throws Exception {
-            handler.handleTextMessage(session, new TextMessage(new ObjectMapper().writeValueAsString(Map.of(
+            UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(new ObjectMapper().writeValueAsString(Map.of(
                     "type", "chat.stop", "requestId", requestId, "conversationId", conversationId))));
         }
         AgentRawCommandDispatchResult dispatch(String agent) { return handler.dispatchExactRawCommand("0", "client", "task", agent, wire(agent)); }
+        // Canonical command bytes remain private; the socket sends the public v1 projection.
+        // Pin the complete expected bytes independently of the production projection factory.
+        byte[] publicWire(String agent) {
+            return ("{\"protocolVersion\":1,\"requestId\":\"original-message\",\"messageType\":\"command.dispatch\","
+                    + "\"messageId\":\"original-message\",\"data\":{\"schemaVersion\":1,\"commandId\":\"original-command\","
+                    + "\"tenantId\":\"0\",\"clientId\":\"client\",\"taskId\":\"task\",\"targetAgentId\":\"" + agent + "\","
+                    + "\"commandType\":\"TASK_INVITE\",\"attempt\":1,\"expiresAt\":2000000,\"payload\":{\"instruction\":\"fixture\"}}}")
+                    .getBytes(StandardCharsets.UTF_8);
+        }
         byte[] wire(String agent) {
             return ("{\"schemaVersion\":1,\"messageType\":\"command.dispatch\",\"messageId\":\"original-message\",\"commandId\":\"original-command\","
                     + "\"tenantId\":\"0\",\"clientId\":\"client\",\"taskId\":\"task\",\"targetAgentId\":\"" + agent + "\","

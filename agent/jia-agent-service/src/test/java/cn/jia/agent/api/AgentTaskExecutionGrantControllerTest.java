@@ -19,13 +19,41 @@ import static org.mockito.Mockito.*;
 
 class AgentTaskExecutionGrantControllerTest {
     @Test
-    void legacyAssignWithoutV2FieldsPreservesOriginalServicePath() {
-        AgentService legacy=mock(AgentService.class); AgentTaskExecutionGrantService grants=mock(AgentTaskExecutionGrantService.class);
+    void unquotedRequestCannotFallBackToLegacyService() {
+        AgentService legacy=mock(AgentService.class);
+        AgentTaskExecutionGrantService grants=mock(AgentTaskExecutionGrantService.class);
         AgentController controller=new AgentController(legacy,mock(AbilityEvaluationService.class));
-        controller.setTaskExecutionGrants(grants); AgentTaskAssignDTO request=new AgentTaskAssignDTO(); request.setAgentId("agent-1");
-        assertNull(request.getInitialOperation());
-        controller.assignTask("task-1",new cn.jia.core.entity.JsonRequest<>(1, "test-request", request),null,null);
-        verify(legacy).assignTask("task-1",request); verifyNoInteractions(grants);
+        controller.setTaskExecutionGrants(grants);
+        AgentTaskAssignDTO request=new AgentTaskAssignDTO(); request.setAgentId("agent-1");
+        var denied=new AgentTaskExecutionGrantException(AgentTaskExecutionGrantException.Reason.BAD_REQUEST,
+                "quoted assignment required");
+        when(grants.assignAndGrant(any(),eq("task-1"),isNull(),same(request),eq("payer-1"))).thenThrow(denied);
+        assertSame(denied,assertThrows(AgentTaskExecutionGrantException.class,()->controller.assignTask(
+                "task-1",new cn.jia.core.entity.JsonRequest<>(1,"test-request",request),null,jwt("owner","client"))));
+        verifyNoInteractions(legacy);
+    }
+
+    @Test
+    void unquotedRequestStillRequiresAuthenticatedPayer() {
+        AgentService legacy=mock(AgentService.class);
+        AgentTaskExecutionGrantService grants=mock(AgentTaskExecutionGrantService.class);
+        AgentController controller=new AgentController(legacy,mock(AbilityEvaluationService.class));
+        controller.setTaskExecutionGrants(grants);
+        AgentTaskAssignDTO request=new AgentTaskAssignDTO();request.setAgentId("agent-1");
+        var failure=assertThrows(AgentTaskExecutionGrantException.class,()->controller.assignTask(
+                "task-1",new cn.jia.core.entity.JsonRequest<>(1,"test-request",request),null,null));
+        assertEquals(AgentTaskExecutionGrantException.Reason.UNAUTHENTICATED,failure.reason());
+        verifyNoInteractions(legacy,grants);
+    }
+
+    @Test
+    void unquotedServiceAndAutoAssignHttpEntrypointsAreAbsent() {
+        for (var type:List.of(AgentService.class,cn.jia.agent.service.impl.AgentServiceImpl.class)) {
+            assertFalse(java.util.Arrays.stream(type.getMethods()).anyMatch(m ->
+                    m.getName().equals("assignTask") || m.getName().equals("autoAssignTask")));
+        }
+        assertFalse(java.util.Arrays.stream(AgentController.class.getMethods())
+                .anyMatch(m -> m.getName().equals("autoAssignTask")));
     }
 
     @Test
@@ -58,7 +86,7 @@ class AgentTaskExecutionGrantControllerTest {
             AgentTaskExecutionGrantException rejected=new AgentTaskExecutionGrantException(
                     AgentTaskExecutionGrantException.Reason.BAD_REQUEST,
                     "v2 validator rejected selector-only request");
-            when(grants.assignAndGrant(any(),eq("task-1"),eq("key-selector"),same(request)))
+            when(grants.assignAndGrant(any(),eq("task-1"),eq("key-selector"),same(request), eq("payer-1")))
                     .thenThrow(rejected);
 
             AgentTaskExecutionGrantException failure=assertThrows(
@@ -69,7 +97,7 @@ class AgentTaskExecutionGrantControllerTest {
             assertSame(rejected,failure,selector);
             verify(grants).assignAndGrant(
                     new AgentTaskExecutionGrantService.Scope("0","client","owner"),
-                    "task-1","key-selector",request);
+                    "task-1","key-selector",request, "payer-1");
             verifyNoInteractions(legacy);
         }
     }
@@ -89,15 +117,15 @@ class AgentTaskExecutionGrantControllerTest {
         AgentTaskExecutionGrantService grants=mock(AgentTaskExecutionGrantService.class);
         AgentController controller=new AgentController(mock(AgentService.class),mock(AbilityEvaluationService.class));
         controller.setTaskExecutionGrants(grants); AgentTaskAssignDTO request=request();
-        when(grants.assignAndGrant(any(),eq("task-1"),eq("key-1"),same(request)))
+        when(grants.assignAndGrant(any(),eq("task-1"),eq("key-1"),same(request), eq("payer-1")))
                 .thenReturn(new AgentTaskExecutionGrantDTO().setGrantId("grant-1"));
         Object raw=controller.assignTask("task-1",new cn.jia.core.entity.JsonRequest<>(1, "test-request", request),"key-1",jwt("owner","client"));
         assertInstanceOf(ResponseEntity.class,raw);
         verify(grants).assignAndGrant(new AgentTaskExecutionGrantService.Scope("0","client","owner"),
-                "task-1","key-1",request);
+                "task-1","key-1",request, "payer-1");
     }
 
     private static AgentTaskAssignDTO request(){AgentTaskAssignDTO r=new AgentTaskAssignDTO();r.setAgentId("agent-1");r.setWorkflowVersion(2);r.setBusinessAction("assign_and_start");r.setExpectedTaskVersion(0L);r.setRequirementRevision(1L);r.setRequestedOperations(List.of("GENERATE_IMAGE"));return r;}
     private static AgentTaskAssignDTO selectorOnly(String selector){AgentTaskAssignDTO r=new AgentTaskAssignDTO();r.setAgentId("agent-1");r.setInitialOperation(selector);return r;}
-    private static JwtAuthenticationToken jwt(String owner,String client){Jwt jwt=Jwt.withTokenValue("token").claim("tenant_id", "0").header("alg","none").claim("jiacn",owner).claim("client_id",client).issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();return new JwtAuthenticationToken(jwt,List.of());}
+    private static JwtAuthenticationToken jwt(String owner,String client){Jwt jwt=Jwt.withTokenValue("token").claim("tenant_id", "0").subject("payer-1").header("alg","none").claim("jiacn",owner).claim("client_id",client).issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();return new JwtAuthenticationToken(jwt,List.of());}
 }

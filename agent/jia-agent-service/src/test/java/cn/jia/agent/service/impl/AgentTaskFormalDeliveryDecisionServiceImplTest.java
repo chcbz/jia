@@ -17,6 +17,9 @@ import cn.jia.agent.entity.AgentTaskWorkItemDTO;
 import cn.jia.agent.entity.AgentTaskWorkItemEntity;
 import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
+import cn.jia.economy.service.EconomyScope;
+import cn.jia.economy.task.TaskBillingService;
+import cn.jia.economy.task.TaskBillingException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -52,6 +55,8 @@ class AgentTaskFormalDeliveryDecisionServiceImplTest {
     private AgentTaskMutationTransaction transaction;
     private AgentTaskEventWriter eventWriter;
     private AgentTaskFormalDeliveryDecisionServiceImpl service;
+    private TaskBillingService billing;
+    private boolean rootLocked;
 
     @BeforeEach
     void setUp() {
@@ -61,13 +66,15 @@ class AgentTaskFormalDeliveryDecisionServiceImplTest {
         workItemDao = mock(AgentTaskWorkItemDao.class);
         transaction = mock(AgentTaskMutationTransaction.class);
         eventWriter = mock(AgentTaskEventWriter.class);
+        billing = mock(TaskBillingService.class);
         when(transaction.executeWithLockedTaskRootInOwnerScope(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), any()))
                 .thenAnswer(invocation -> {
                     AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(4);
-                    return mutation.apply(root());
+                    rootLocked = true;
+                    try { return mutation.apply(root()); } finally { rootLocked = false; }
                 });
         service = new AgentTaskFormalDeliveryDecisionServiceImpl(deliveryDao, taskMetaDao,
-                memberDao, workItemDao, transaction, eventWriter, () -> 2_000L);
+                memberDao, workItemDao, transaction, eventWriter, billing, () -> 2_000L);
     }
 
     @Test
@@ -85,6 +92,7 @@ class AgentTaskFormalDeliveryDecisionServiceImplTest {
         var result = service.decide(TENANT, CLIENT, TASK, OWNER, changesRequested());
 
         assertEquals("changes_requested", result.getState());
+        org.mockito.Mockito.verifyNoInteractions(billing);
         assertEquals(5L, result.getTaskVersion());
         assertEquals(9L, result.getWorkItemVersion());
         assertFalse(result.getReplayed());
@@ -106,6 +114,10 @@ class AgentTaskFormalDeliveryDecisionServiceImplTest {
 
     @Test
     void acceptedDecisionCompletesTaskAndWorkItem() {
+        when(billing.capture(billingTask())).thenAnswer(invocation -> {
+            assertTrue(rootLocked, "capture must join the task-root mutation");
+            return null;
+        });
         when(deliveryDao.findForUpdate(TENANT, CLIENT, DELIVERY)).thenReturn(delivery());
         when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, OWNER, TASK, WORK)).thenReturn(workItem());
         when(memberDao.findByTaskAndAgentForUpdate(TENANT, CLIENT, OWNER, TASK, "agent-a"))
@@ -123,6 +135,10 @@ class AgentTaskFormalDeliveryDecisionServiceImplTest {
         var result = service.decide(TENANT, CLIENT, TASK, OWNER, accepted());
 
         assertEquals("accepted", result.getState());
+        var order = org.mockito.Mockito.inOrder(billing, deliveryDao);
+        order.verify(billing).capture(billingTask());
+        order.verify(deliveryDao).reviewByVersion(TENANT, CLIENT, DELIVERY, "submitted", 0L,
+                "accepted", OWNER, null, 2_000L);
         ArgumentCaptor<AgentTaskWorkItemDTO> update = ArgumentCaptor.forClass(AgentTaskWorkItemDTO.class);
         verify(workItemDao).updateByVersion(eq(TENANT), eq(CLIENT), eq(OWNER), eq(WORK), eq(8L), update.capture());
         assertEquals("completed", update.getValue().getStatus());
@@ -153,6 +169,38 @@ class AgentTaskFormalDeliveryDecisionServiceImplTest {
                 () -> service.decide(TENANT, CLIENT, TASK, "owner-b", accepted()));
         verify(transaction).executeWithLockedTaskRootInOwnerScope(
                 eq(TENANT), eq(CLIENT), eq("owner-b"), eq(TASK), any());
+    }
+
+    @Test
+    void missingReservationRejectsAcceptanceBeforeAnyCompletionWrite() {
+        when(deliveryDao.findForUpdate(TENANT, CLIENT, DELIVERY)).thenReturn(delivery());
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, OWNER, TASK, WORK)).thenReturn(workItem());
+        when(memberDao.findByTaskAndAgentForUpdate(TENANT, CLIENT, OWNER, TASK, "agent-a"))
+                .thenReturn(member());
+        var failure = new TaskBillingException(TaskBillingException.Reason.RESERVATION_REQUIRED);
+        when(billing.capture(billingTask())).thenThrow(failure);
+        assertEquals(failure, assertThrows(TaskBillingException.class,
+                () -> service.decide(TENANT, CLIENT, TASK, OWNER, accepted())));
+        verify(deliveryDao, never()).reviewByVersion(any(), any(), any(), any(), anyLong(),
+                any(), any(), any(), anyLong());
+        org.mockito.Mockito.verifyNoInteractions(taskMetaDao, eventWriter);
+        verify(workItemDao, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any());
+        verify(memberDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
+    }
+
+    @Test
+    void acceptedHistoricalReplayRemainsReadOnlyAndDoesNotBackCharge() {
+        var row = delivery();
+        row.setState("accepted"); row.setVersion(1L); row.setReviewedByJiacn(OWNER);
+        row.setReviewedAt(2_000L);
+        when(deliveryDao.findForUpdate(TENANT, CLIENT, DELIVERY)).thenReturn(row);
+        when(deliveryDao.listItems(TENANT, CLIENT, DELIVERY)).thenReturn(List.of(item()));
+        assertTrue(service.decide(TENANT, CLIENT, TASK, OWNER, accepted()).getReplayed());
+        org.mockito.Mockito.verifyNoInteractions(billing, taskMetaDao, workItemDao, memberDao, eventWriter);
+    }
+
+    private static TaskBillingService.Task billingTask() {
+        return new TaskBillingService.Task(new EconomyScope(TENANT, CLIENT), OWNER, TASK);
     }
 
     private static AgentTaskFormalDeliveryDecisionDTO accepted() {

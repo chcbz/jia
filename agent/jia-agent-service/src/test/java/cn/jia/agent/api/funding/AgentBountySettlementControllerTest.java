@@ -10,52 +10,43 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** Boundary unit source only; real SQL/transaction proof is in FundedBountySettlementRealTransactionTest. */
+/** Historical read authentication and retired write boundary. */
 class AgentBountySettlementControllerTest {
-    private static final String KEY = "00000000-0000-0000-0000-000000000004";
-
     @Test
-    void exactJwtSubjectAndCanonicalStringBodyReachServiceWithoutMonetaryOverride() {
+    void authenticatedHistoryReadPreservesExactPayerAndOwner() {
         AtomicReference<FundedBountyActor> actor = new AtomicReference<>();
-        AtomicReference<AgentTaskFundingCompleteDTO> request = new AtomicReference<>();
-        FundedBountySettlementService boundary = new FundedBountySettlementService() {
-            @Override public AgentTaskSettlementReceiptDTO complete(FundedBountyActor value, String key,
-                    String taskId, AgentTaskFundingCompleteDTO body) {
-                actor.set(value); request.set(body); assertEquals(KEY, key); assertEquals("task", taskId);
-                return new AgentTaskSettlementReceiptDTO("task", "SETTLED", "q", "agt", "esc", "10", "1", "1", "8",
-                        "0", "0", "2", "2", "4", "1", List.of("tx"));
-            }
-            @Override public AgentTaskSettlementDTO read(FundedBountyActor value, String taskId) {
-                actor.set(value); return null;
-            }
+        FundedBountySettlementService boundary = (value, taskId) -> {
+            actor.set(value); assertEquals("task", taskId); return null;
         };
         StaticListableBeanFactory beans = new StaticListableBeanFactory(); beans.addBean("settlement", boundary);
         AgentBountySettlementController controller = new AgentBountySettlementController(beans.getBeanProvider(FundedBountySettlementService.class));
-        var response = controller.complete("task", new cn.jia.core.entity.JsonRequest<>(1, "test-request", Map.of("expectedTaskVersion", "1", "actualComputeMicro", "1")), KEY, jwt("sub", "Tenant", "Client"));
+        var response = controller.read("task", jwt("payer", "Owner", "Client"));
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals("private, no-store", response.getHeaders().getFirst("Cache-Control"));
-        assertEquals(new FundedBountyActor("0", "Client", "Tenant", "sub"), actor.get());
-        assertEquals(new AgentTaskFundingCompleteDTO("1", "1"), request.get());
-        for (Map<String, Object> body : List.<Map<String, Object>>of(
-                Map.of("expectedTaskVersion", 1, "actualComputeMicro", "1"),
-                Map.of("expectedTaskVersion", "1", "actualComputeMicro", 1),
-                Map.of("expectedTaskVersion", "1", "actualComputeMicro", "1", "platformFeeMicro", "0"),
-                Map.of("expectedTaskVersion", "1", "actualComputeMicro", "1", "agentId", "another"))) {
-            assertEquals(HttpStatus.BAD_REQUEST, assertThrows(FundedBountyException.class,
-                    () -> controller.complete("task", new cn.jia.core.entity.JsonRequest<>(1, "test-request", body), KEY, jwt("sub", "Tenant", "Client"))).status());
+        assertEquals(new FundedBountyActor("0", "Client", "Owner", "payer"), actor.get());
+    }
+
+    @Test
+    void completionRouteAndCommandAreAbsentRatherThanRedirected() {
+        assertFalse(java.util.Arrays.stream(AgentBountySettlementController.class.getDeclaredMethods())
+                .anyMatch(method -> method.isAnnotationPresent(org.springframework.web.bind.annotation.PostMapping.class)));
+        for (Class<?> type : List.of(FundedBountySettlementService.class, FundedBountySettlementServiceImpl.class,
+                FundedBountyService.class, FundedBountyServiceImpl.class)) {
+            assertFalse(java.util.Arrays.stream(type.getMethods()).anyMatch(method ->
+                    java.util.Set.of("create", "cancel", "complete", "quote", "claim").contains(method.getName())));
         }
+        assertThrows(ClassNotFoundException.class, () -> Class.forName("cn.jia.agent.service.funding.FundedBountyQuoteClaimServiceImpl"));
     }
 
     @Test
     void absentPreviewServiceAndIncompleteOrFallbackIdentitiesFailClosed() {
         AgentBountySettlementController controller = new AgentBountySettlementController(
                 new StaticListableBeanFactory().getBeanProvider(FundedBountySettlementService.class));
-        assertEquals("ECONOMY_PREVIEW_DISABLED", assertThrows(FundedBountyException.class,
+        assertEquals("FUNDED_HISTORY_UNAVAILABLE", assertThrows(FundedBountyException.class,
                 () -> controller.read("task", jwt("sub", "Tenant", "Client"))).code());
         assertEquals(HttpStatus.UNAUTHORIZED, assertThrows(FundedBountyException.class, () -> controller.read("task", null)).status());
         assertThrows(FundedBountyException.class, () -> controller.read("task",

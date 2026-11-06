@@ -856,7 +856,7 @@ public final class Ur06EnrollMysqlFixture {
         }
         @Bean AgentLegacyTaskCompatibilityService legacy(AgentTaskMetaDao meta, AgentTaskMemberDao members, AgentTaskWorkItemDao items,
                 AgentTaskAggregationService aggregation, AgentIdentityService identity, AgentTaskMutationTransaction mutation, AgentTaskEventWriter writer) {
-            return new AgentLegacyTaskCompatibilityService(meta, members, items, aggregation, identity, mutation, writer);
+            return new AgentLegacyTaskCompatibilityService(meta, members, items, identity, mutation, writer);
         }
         @Bean AgentTaskRequirementSnapshotService requirements(JdbcTemplate jdbc, AgentTaskMutationTransaction mutation) { return new AgentTaskRequirementSnapshotServiceImpl(jdbc, mutation); }
         @Bean AgentHostingWorkAdmission hosting(SqlSessionTemplate s) { return new HostingRentWorkAdmission(s.getMapper(EconomyHostingRentMapper.class), false); }

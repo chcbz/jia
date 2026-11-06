@@ -149,6 +149,17 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void failedTaskMayCancelButAcceptedTaskCannotReleaseItsFinalSettlement() {
+        assertTrue(AgentTaskStatus.FAILED.canTransitionTo(AgentTaskStatus.CANCELLED));
+        assertFalse(AgentTaskStatus.COMPLETED.canTransitionTo(AgentTaskStatus.CANCELLED));
+        assertFalse(AgentTaskStatus.ARCHIVED.canTransitionTo(AgentTaskStatus.CANCELLED));
+        var failed=task("failed",8L);
+        when(taskMetaDao.findByTaskIdInOwnerScope(TENANT,CLIENT,OWNER,TASK_ID)).thenReturn(failed);
+        when(taskMetaDao.updateStatusByVersionInOwnerScope(TENANT,CLIENT,OWNER,TASK_ID,8L,"cancelled",null,null,null)).thenReturn(1);
+        assertEquals("cancelled",service.transitionTask(TENANT,CLIENT,OWNER,TASK_ID,transition("cancelled",8L,null)).getStatus());
+    }
+
+    @Test
     void illegalAndTerminalTaskTransitionsFailClosedWithoutCasWrite() {
         AgentTaskMetaEntity completed = task("completed", 8L);
         when(taskMetaDao.findByTaskIdInOwnerScope(TENANT, CLIENT, OWNER, TASK_ID)).thenReturn(completed);

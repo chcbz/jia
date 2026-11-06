@@ -3,7 +3,6 @@ package cn.jia.agent.service.impl;
 import cn.jia.agent.cache.AgentPersonaCatalogCache;
 import cn.jia.agent.cache.AgentPersonaCatalogCache.CatalogEntry;
 import cn.jia.agent.common.AgentConstants;
-import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.common.AgentErrorConstants;
 import cn.jia.agent.common.AgentSceneConstants;
 import cn.jia.agent.common.TaskEventPayload;
@@ -21,8 +20,6 @@ import cn.jia.agent.entity.AgentCapabilityDTO;
 import cn.jia.agent.entity.AgentAbilitiesUpdateDTO;
 import cn.jia.agent.entity.AgentIdentityRegistryEntity;
 import cn.jia.agent.entity.AgentPersonaBindingEntity;
-import cn.jia.agent.entity.AgentActionDispatchResultDTO;
-import cn.jia.agent.entity.AgentActionIntentDTO;
 import cn.jia.agent.entity.AgentPersonaEntity;
 import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRegisterResultDTO;
@@ -32,7 +29,6 @@ import cn.jia.agent.entity.AgentRuntimeEntity;
 import cn.jia.agent.entity.AgentSceneStateDTO;
 import cn.jia.agent.entity.AgentStatsDTO;
 import cn.jia.agent.entity.AgentStatusDTO;
-import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskAssigneeDTO;
 import cn.jia.agent.entity.AgentTaskCreateDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
@@ -41,7 +37,6 @@ import cn.jia.agent.entity.AgentTaskMemberEntity;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.entity.AgentTaskNoteDTO;
 import cn.jia.agent.entity.AgentTaskNoteEntity;
-import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.entity.AgentTaskRecommendationDTO;
 import cn.jia.agent.entity.AgentTaskTeamRecommendationCandidateDTO;
 import cn.jia.agent.entity.AgentTaskTeamRecommendationDTO;
@@ -108,7 +103,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 
 @Service
@@ -121,7 +115,6 @@ public class AgentServiceImpl implements AgentService {
         this.processTenant = java.util.Objects.requireNonNull(processTenant);
     }
 
-    private static final String REGION_BOUNTY_BOARD = "bounty-board";
     private static final String REGION_COUNCIL_TABLE = "council-table";
     private static final String REGION_MAIN_SEAT = "main-seat";
     private static final long SCENE_EXPECTED_ARRIVAL_MILLIS = 20_000L;
@@ -383,6 +376,10 @@ public class AgentServiceImpl implements AgentService {
         entity.setBindingId(binding.getId());
         entity.setClientId(clientId);
         entity.setEndpoint(request.getEndpoint());
+        // Optional display metadata never blocks registration; do not retain a stale model.
+        String model = request.getExecutionModel();
+        entity.setExecutionModel(model != null && !model.isBlank() && model.length() <= 200
+                && model.codePoints().noneMatch(Character::isISOControl) ? model.strip() : null);
         require(entity.getRuntimeInstallationId() != null && entity.getRuntimeHostId() != null
                 && entity.getRuntimeInstanceId() != null && entity.getRuntimeSessionGeneration() != null
                 && entity.getRuntimeSessionGeneration() > 0 && entity.getTokenHash() != null
@@ -395,7 +392,7 @@ public class AgentServiceImpl implements AgentService {
             agentRuntimeDao.insert(entity);
             observeSkillLifecycle(entity);
         } else {
-            agentRuntimeDao.updateById(entity);
+            agentRuntimeDao.updateRegistration(entity);
             observeSkillLifecycle(entity);
         }
         publishAgentSnapshotAfterCommit("agent-register", tenantId, clientId, jiacn,
@@ -1117,7 +1114,7 @@ public class AgentServiceImpl implements AgentService {
         // Validate full original Unicode and SQL MEDIUMTEXT capacity before lossy TaskPlan work.
         AgentTaskRequirementSnapshotServiceImpl.validateOriginalInput(
                 request.getTitle(), request.getDescription());
-        require(request.getGrossBountyAmountMicro() == null && request.getSettlementPolicy() == null
+        require(request.getGrossBountyAmountWen() == null && request.getSettlementPolicy() == null
                         && request.getRequiredSkillRequirements() == null,
                 "funded task fields require the funded bounty endpoint");
 
@@ -1373,85 +1370,6 @@ public class AgentServiceImpl implements AgentService {
             }
         }
         return List.copyOf(writableAgentIds);
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public AgentTaskDTO assignTask(String taskId, AgentTaskAssignDTO request) {
-        return assignTaskInternal(taskId, request, false);
-    }
-
-    private AgentTaskDTO assignTaskInternal(
-            String taskId, AgentTaskAssignDTO request, boolean automatic) {
-        List<String> requestedAgentIds = normalizeAssignAgentIds(request);
-        require(!requestedAgentIds.isEmpty(), "agentId is required");
-        String tenantId = resolveCurrentTenantId();
-        String clientId = resolveCurrentClientId();
-        String ownerJiacn = resolveCurrentJiacn();
-        AgentTaskMetaEntity meta = requireTask(taskId);
-        requireOwnedTaskProjection(meta, tenantId, clientId, ownerJiacn, taskId);
-        requireLegacyAssignmentAllowed(tenantId, clientId, taskId, automatic, requestedAgentIds.size());
-        List<String> agentIds = legacyTaskCompatibilityService.resolveAgentIds(
-                tenantId, clientId, ownerJiacn, requestedAgentIds);
-        boolean allowQueue = Boolean.TRUE.equals(request.getAllowQueue());
-
-        validateLegacyAssignableTask(meta);
-        AtomicReference<List<AgentRuntimeEntity>> lockedAssignedAgents =
-                new AtomicReference<>(List.of());
-        AgentLegacyTaskCompatibilityService.AssignOutcome outcome =
-                legacyTaskCompatibilityService.assignResolved(
-                        tenantId, clientId, ownerJiacn, taskId, agentIds, automatic,
-                        new AgentLegacyTaskCompatibilityService.AssignmentPrecommitValidator() {
-                            @Override
-                            public void beforeIdentityLock(
-                                    AgentTaskMetaEntity lockedTask, List<String> canonicalAgentIds) {
-                                requireOwnedTaskProjection(
-                                        lockedTask, tenantId, clientId, ownerJiacn,
-                                        lockedTask.getTaskId());
-                                requireLegacyAssignmentAllowedLocked(tenantId, clientId,
-                                        lockedTask.getTaskId(), automatic, canonicalAgentIds.size());
-                            }
-
-                            @Override
-                            public void validate(
-                                    AgentTaskMetaEntity lockedTask, List<String> canonicalAgentIds) {
-                                List<AgentRuntimeEntity> runtimes = canonicalAgentIds.stream()
-                                        .map(agentId -> lockAssignedRuntime(agentId, tenantId, clientId, ownerJiacn))
-                                        .toList();
-                                for (AgentRuntimeEntity agent : runtimes) {
-                                    requireHostingNewWork(tenantId, clientId, agent.getAgentId());
-                                    validateAssignableAgent(agent, allowQueue);
-                                    validateAbility(agent, lockedTask);
-                                }
-                                if (automatic) {
-                                    validateCompleteAbilityCoverage(runtimes, lockedTask);
-                                }
-                                lockedAssignedAgents.set(List.copyOf(runtimes));
-                            }
-                        });
-        AgentTaskMetaEntity assignedMeta = Optional.ofNullable(
-                agentTaskMetaDao.findByTaskIdInOwnerScope(
-                        tenantId, clientId, ownerJiacn, taskId)).orElseThrow(() ->
-                new AgentBizException(AgentErrorConstants.TASK_NOT_FOUND, "Task not found"));
-        requireOwnedTaskProjection(assignedMeta, tenantId, clientId, ownerJiacn, taskId);
-        List<AgentRuntimeEntity> assignedAgents = lockedAssignedAgents.get();
-        if (outcome.changed() && assignedAgents.size() != outcome.agentIds().size()) {
-            throw new IllegalStateException("Changed assignment did not validate every target runtime");
-        }
-        applyAssignmentProjection(assignedMeta, outcome.agentIds());
-        AgentTaskDTO task = toTaskDTO(assignedMeta);
-        applyTaskAssignees(task, outcome.agentIds());
-        if (!outcome.changed()) {
-            task.setActionDispatchResults(List.of());
-            return task;
-        }
-        task.setActionDispatchResults(List.of());
-        boolean durableAssignmentDelivery = commandTransportCapture.captureTaskInvites(
-                ownerJiacn, task, assignedAgents, outcome.taskAssignedEventId(), outcome.occurredAt());
-        publishTaskAssignmentSideEffectsAfterCommit(
-                task, assignedAgents, durableAssignmentDelivery);
-        publishTaskAssignmentSceneStates(taskId, assignedAgents);
-        return task;
     }
 
     @Override
@@ -1714,86 +1632,6 @@ public class AgentServiceImpl implements AgentService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public AgentTaskDTO autoAssignTask(String taskId, AgentTaskAssignDTO request) {
-        requireTask(taskId);
-        requireLegacyAssignmentAllowed(resolveCurrentTenantId(), resolveCurrentClientId(), taskId, true, 1);
-        AgentTaskDTO task = getTask(taskId);
-        // Legacy team auto-assignment remains owner-only; external single-agent delegation
-        // uses point-and-deliberate, which persists the shared execution grant.
-        List<AgentTaskRecommendationDTO> recommendations = Optional.ofNullable(agentRuntimeDao
-                .findCandidateRosterByOwner(resolveCurrentClientId(), resolveCurrentJiacn()))
-                .orElseGet(Collections::emptyList).stream().map(agent -> evaluateTaskCandidate(task, agent))
-                .sorted(java.util.Comparator.comparing(AgentTaskRecommendationDTO::getEligible).reversed()
-                        .thenComparing(java.util.Comparator.comparing(AgentTaskRecommendationDTO::getScore).reversed()))
-                .limit(5).toList();
-        List<String> selectedAgentIds = selectAutoAssignAgentIds(task, recommendations);
-        require(!selectedAgentIds.isEmpty(), "No available agent can accept this task");
-
-        AgentTaskAssignDTO assignRequest = new AgentTaskAssignDTO();
-        assignRequest.setAgentIds(selectedAgentIds);
-        assignRequest.setAllowQueue(request != null && Boolean.TRUE.equals(request.getAllowQueue()));
-        return assignTaskInternal(taskId, assignRequest, true);
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
-    public AgentTaskDTO reportTask(String taskId, AgentTaskReportDTO request) {
-        require(request != null, "report request is required");
-        require(!StringUtil.isBlank(request.getAgentId()), "agentId is required");
-        String tenantId = resolveCurrentTenantId();
-        String clientId = resolveCurrentClientId();
-        String ownerJiacn = resolveCurrentJiacn();
-        requireTask(taskId);
-        requireLegacyLifecycleAllowed(tenantId, clientId, taskId);
-        String reportingAgentId = legacyTaskCompatibilityService.resolveAgentId(
-                tenantId, clientId, ownerJiacn, request.getAgentId());
-        requireOwnedAgent(requireAgent(reportingAgentId));
-
-        AgentLegacyTaskCompatibilityService.ReportOutcome outcome =
-                legacyTaskCompatibilityService.reportResolved(
-                        tenantId, clientId, ownerJiacn, taskId, reportingAgentId,
-                        request.getStatus(), request.getFailureReason());
-        AgentTaskMetaEntity meta = Optional.ofNullable(
-                agentTaskMetaDao.findByTaskIdInOwnerScope(
-                        tenantId, clientId, ownerJiacn, taskId)).orElseThrow(() ->
-                new AgentBizException(AgentErrorConstants.TASK_NOT_FOUND, "Task not found"));
-        requireOwnedTaskProjection(meta, tenantId, clientId, ownerJiacn, taskId);
-        require(outcome.taskStatus().equals(meta.getRewardStatus())
-                        && Objects.equals(outcome.taskVersion(), meta.getTaskVersion()),
-                "task aggregate does not match the compatibility report outcome");
-
-        AgentTaskDTO task = toTaskDTO(meta);
-        applyTaskAssignees(task, outcome.memberAgentIds());
-        if (!outcome.changed()) {
-            return task;
-        }
-
-        List<AgentRuntimeDTO> updatedAgents;
-        if (outcome.terminalTransition()) {
-            updatedAgents = outcome.memberAgentIds().stream()
-                    .map(agentId -> updateLegacyReportRuntime(
-                            agentId, meta.getTaskId(),
-                            terminalRuntimeReportStatus(agentId, outcome.reportingAgentId(),
-                                    meta.getRewardStatus()),
-                            null, Objects.equals(agentId, outcome.reportingAgentId())
-                                    ? request.getFailureReason() : null,
-                            true))
-                    .toList();
-        } else {
-            updatedAgents = List.of(updateLegacyReportRuntime(
-                    outcome.reportingAgentId(), meta.getTaskId(), request.getStatus(),
-                    request.getCurrentTaskTitle(), request.getFailureReason(), false));
-        }
-        publishLegacyReportSideEffectsAfterCommit(
-                ownerJiacn, "task_" + meta.getRewardStatus(), task, updatedAgents);
-        if (outcome.terminalTransition()) {
-            publishReturnHomeSceneStates(meta.getTaskId(), updatedAgents);
-        }
-        return task;
-    }
-
-    @Override
-    @Transactional(rollbackFor = Exception.class)
     public AgentTaskNoteDTO addTaskNote(String taskId, AgentTaskNoteDTO request) {
         require(request != null && !StringUtil.isBlank(request.getContent()),
                 "note content is required");
@@ -2017,17 +1855,6 @@ public class AgentServiceImpl implements AgentService {
                 "Persisted task does not match the authenticated owner scope");
     }
 
-    private List<String> normalizeAssignAgentIds(AgentTaskAssignDTO request) {
-        List<String> agentIds = Optional.ofNullable(request.getAgentIds())
-                .orElseGet(Collections::emptyList);
-        if (agentIds.isEmpty() && !StringUtil.isBlank(request.getAgentId())) {
-            agentIds = List.of(request.getAgentId());
-        }
-        return new ArrayList<>(new LinkedHashSet<>(agentIds.stream()
-                .filter(agentId -> !StringUtil.isBlank(agentId))
-                .toList()));
-    }
-
     private boolean isExactStoredText(String value, int maxLength) {
         return value != null && !value.isEmpty() && value.length() <= maxLength
                 && value.equals(value.strip())
@@ -2049,70 +1876,6 @@ public class AgentServiceImpl implements AgentService {
             normalized.putIfAbsent(ability.toLowerCase(Locale.ROOT), ability);
         }
         return new ArrayList<>(normalized.values());
-    }
-
-    private void validateCompleteAbilityCoverage(
-            List<AgentRuntimeEntity> agents, AgentTaskMetaEntity meta) {
-        Set<String> required = parseList(meta.getRequiredAbilities()).stream()
-                .map(ability -> ability.toLowerCase(Locale.ROOT))
-                .collect(LinkedHashSet::new, Set::add, Set::addAll);
-        if (required.isEmpty()) {
-            return;
-        }
-        Set<String> available = agents.stream()
-                .flatMap(agent -> parseList(agent.getAbilities()).stream())
-                .map(ability -> ability.toLowerCase(Locale.ROOT))
-                .collect(LinkedHashSet::new, Set::add, Set::addAll);
-        if (!available.containsAll(required)) {
-            Set<String> missing = new LinkedHashSet<>(required);
-            missing.removeAll(available);
-            log.warn("Automatic assignment lost required ability coverage: taskId={}, missingAbilities={}",
-                    meta.getTaskId(), missing);
-            throw new AgentBizException(AgentErrorConstants.AGENT_ABILITY_MISMATCH,
-                    "Automatic assignment does not cover all required abilities");
-        }
-    }
-
-    private AgentRuntimeEntity lockAssignedRuntime(
-            String agentId, String tenantId, String clientId, String ownerJiacn) {
-        AgentRuntimeEntity agent = agentRuntimeDao.findByAgentIdForUpdate(agentId);
-        if (agent == null) {
-            throw new AgentBizException(AgentErrorConstants.AGENT_NOT_FOUND, "Agent not found");
-        }
-        AgentIdentityRegistryEntity identity = agentIdentityService.requireActiveIdentityForBinding(
-                tenantId, clientId, ownerJiacn, requireBindingId(agent), agentId);
-        agentIdentityService.requireActiveBinding(identity, null);
-        return requireExactRuntime(agent, tenantId, agentId, clientId, ownerJiacn, identity.getBindingId());
-    }
-
-    private void validateAssignableAgent(AgentRuntimeEntity agent, boolean allowQueue) {
-        if (AgentConstants.STATUS_OFFLINE.equals(agent.getStatus()) && !allowQueue) {
-            throw new AgentBizException(AgentErrorConstants.AGENT_OFFLINE, "Agent is offline");
-        }
-        if (AgentConstants.STATUS_ERROR.equals(agent.getStatus())) {
-            throw new AgentBizException(AgentErrorConstants.AGENT_ERROR, "Agent is error");
-        }
-        if (AgentConstants.STATUS_BUSY.equals(agent.getStatus()) && !allowQueue) {
-            throw new AgentBizException(AgentErrorConstants.AGENT_BUSY, "Agent is busy");
-        }
-    }
-
-    private void validateAbility(AgentRuntimeEntity agent, AgentTaskMetaEntity meta) {
-        List<String> required = parseList(meta.getRequiredAbilities());
-        if (required.isEmpty()) {
-            return;
-        }
-        Set<String> abilities = parseList(agent.getAbilities()).stream()
-                .map(ability -> ability.toLowerCase(Locale.ROOT))
-                .collect(LinkedHashSet::new, Set::add, Set::addAll);
-        boolean matched = required.stream()
-                .map(ability -> ability.toLowerCase(Locale.ROOT))
-                .anyMatch(abilities::contains);
-        if (!matched) {
-            log.warn("Agent ability mismatch: taskId={}, requiredAbilities={}, agentId={}, agentAbilities={}",
-                    meta.getTaskId(), required, agent.getAgentId(), abilities);
-            throw new AgentBizException(AgentErrorConstants.AGENT_ABILITY_MISMATCH, "Agent ability mismatch");
-        }
     }
 
     private AgentRuntimeEntity requireAgent(String agentId) {
@@ -2249,6 +2012,7 @@ public class AgentServiceImpl implements AgentService {
         }
         dto.setStatus(entity.getStatus());
         dto.setEndpoint(entity.getEndpoint());
+        dto.setExecutionModel(entity.getExecutionModel());
         dto.setCurrentTaskId(entity.getCurrentTaskId());
         dto.setCurrentTaskTitle(entity.getCurrentTaskTitle());
         dto.setLastSeenAt(entity.getLastSeenAt());
@@ -2293,6 +2057,7 @@ public class AgentServiceImpl implements AgentService {
         }
         dto.setStatus(entity.getStatus());
         dto.setEndpoint(entity.getEndpoint());
+        dto.setExecutionModel(entity.getExecutionModel());
         dto.setCurrentTaskId(entity.getCurrentTaskId());
         dto.setCurrentTaskTitle(entity.getCurrentTaskTitle());
         dto.setLastSeenAt(entity.getLastSeenAt());
@@ -2706,42 +2471,6 @@ public class AgentServiceImpl implements AgentService {
         return dto;
     }
 
-    private List<String> selectAutoAssignAgentIds(AgentTaskDTO task, List<AgentTaskRecommendationDTO> recommendations) {
-        List<String> required = Optional.ofNullable(task.getRequiredAbilities()).orElseGet(Collections::emptyList);
-        if (required.isEmpty()) {
-            return recommendations.stream()
-                    .filter(this::isOnlineRecommendation)
-                    .findFirst()
-                    .map(recommendation -> List.of(recommendation.getAgent().getAgentId()))
-                    .orElseGet(List::of);
-        }
-
-        Set<String> remaining = required.stream().map(value -> value.toLowerCase(Locale.ROOT)).collect(LinkedHashSet::new, Set::add, Set::addAll);
-        List<String> selected = new ArrayList<>();
-        for (AgentTaskRecommendationDTO recommendation : recommendations) {
-            if (!isOnlineRecommendation(recommendation)) {
-                continue;
-            }
-            boolean contributes = recommendation.getMatchedAbilities().stream()
-                    .map(value -> value.toLowerCase(Locale.ROOT))
-                    .anyMatch(remaining::contains);
-            if (!contributes && !selected.isEmpty()) {
-                continue;
-            }
-            selected.add(recommendation.getAgent().getAgentId());
-            recommendation.getMatchedAbilities().stream()
-                    .map(value -> value.toLowerCase(Locale.ROOT))
-                    .forEach(remaining::remove);
-            if (remaining.isEmpty() || selected.size() >= 3) {
-                break;
-            }
-        }
-        if (!remaining.isEmpty()) {
-            return List.of();
-        }
-        return selected;
-    }
-
     private boolean isOnlineRecommendation(AgentTaskRecommendationDTO recommendation) {
         return Boolean.TRUE.equals(recommendation.getEligible())
                 && recommendation.getAgent() != null
@@ -2906,8 +2635,8 @@ public class AgentServiceImpl implements AgentService {
                             && row.getFundingMode() == null
                             && row.getFundingStatus() == null
                             && row.getEscrowId() == null
-                            && row.getGrossBountyAmountMicro() == null
-                            && row.getRemainingMicro() == null
+                            && row.getGrossBountyAmountWen() == null
+                            && row.getRemainingWen() == null
                             && row.getRequiredSkillRequirements() == null,
                     "Persisted unfunded task search projection is contaminated");
             dto.setRequiredSkillRequirements(List.of());
@@ -2920,11 +2649,11 @@ public class AgentServiceImpl implements AgentService {
                             || "REFUNDED".equals(row.getFundingStatus())
                             || "SETTLED".equals(row.getFundingStatus()))
                         && !StringUtil.isBlank(row.getEscrowId())
-                        && row.getGrossBountyAmountMicro() != null
-                        && row.getGrossBountyAmountMicro() > 0
-                        && row.getRemainingMicro() != null
-                        && row.getRemainingMicro() >= 0
-                        && row.getRemainingMicro() <= row.getGrossBountyAmountMicro(),
+                        && row.getGrossBountyAmountWen() != null
+                        && row.getGrossBountyAmountWen() > 0
+                        && row.getRemainingWen() != null
+                        && row.getRemainingWen() >= 0
+                        && row.getRemainingWen() <= row.getGrossBountyAmountWen(),
                 "Persisted funded task search projection is corrupt");
         String requirementsJson = row.getRequiredSkillRequirements();
         List<AgentSkillRequirementDTO> requirements = JsonUtil.jsonToList(
@@ -2936,9 +2665,9 @@ public class AgentServiceImpl implements AgentService {
         funding.setMode(row.getFundingMode());
         funding.setStatus(row.getFundingStatus());
         funding.setEscrowId(row.getEscrowId());
-        funding.setGrossBountyAmountMicro(
-                Long.toString(row.getGrossBountyAmountMicro()));
-        funding.setRemainingMicro(Long.toString(row.getRemainingMicro()));
+        funding.setGrossBountyAmountWen(
+                Long.toString(row.getGrossBountyAmountWen()));
+        funding.setRemainingWen(Long.toString(row.getRemainingWen()));
         dto.setFunding(funding);
         dto.setRequiredSkillRequirements(List.copyOf(requirements));
     }
@@ -2980,35 +2709,8 @@ public class AgentServiceImpl implements AgentService {
         return dto;
     }
 
-    private void requireLegacyAssignmentAllowed(String tenantId, String clientId, String taskId,
-            boolean automatic, int targetCount) {
-        fundedBountyLegacyGuard.requireAssignmentAllowed(
-                tenantId, clientId, taskId, automatic, targetCount, false);
-    }
-
-    private void requireLegacyAssignmentAllowedLocked(String tenantId, String clientId, String taskId,
-            boolean automatic, int targetCount) {
-        fundedBountyLegacyGuard.requireAssignmentAllowed(
-                tenantId, clientId, taskId, automatic, targetCount, true);
-    }
-
-    private void requireLegacyLifecycleAllowed(String tenantId, String clientId, String taskId) {
-        fundedBountyLegacyGuard.requireLifecycleAllowed(tenantId, clientId, taskId, false);
-    }
-
     private void requireLegacyLifecycleAllowedLocked(String tenantId, String clientId, String taskId) {
         fundedBountyLegacyGuard.requireLifecycleAllowed(tenantId, clientId, taskId, true);
-    }
-
-    private void applyAssignmentProjection(
-            AgentTaskMetaEntity meta, List<String> agentIds) {
-        require(agentIds != null && !agentIds.isEmpty(), "assigned agentIds are required");
-        String primaryAgentId = agentIds.getFirst();
-        meta.setAssignedAgentId(primaryAgentId);
-        meta.setRewardStatus(AgentConstants.TASK_STATUS_ASSIGNED);
-        meta.setCollaborationMode(agentIds.size() == 1 ? "single" : "team");
-        meta.setMaxAgents(agentIds.size());
-        meta.setCoordinatorAgentId(primaryAgentId);
     }
 
     private List<String> resolveTaskAssigneeIds(AgentTaskMetaEntity meta, String ownerJiacn) {
@@ -3119,25 +2821,6 @@ public class AgentServiceImpl implements AgentService {
         return parseList(value);
     }
 
-    private void validateLegacyAssignableTask(AgentTaskMetaEntity meta) {
-        if (meta.getId() == null) {
-            return;
-        }
-        AgentTaskStatus status;
-        try {
-            status = AgentTaskStatus.fromPersistedValue(meta.getRewardStatus());
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("Persisted task status is non-canonical or unknown");
-        }
-        require(status == AgentTaskStatus.OPEN
-                        || status == AgentTaskStatus.PLANNING
-                        || status == AgentTaskStatus.ASSIGNED,
-                "Task cannot be assigned in its current status");
-        require(meta.getTaskVersion() != null && meta.getTaskVersion() >= 0
-                        && meta.getTaskVersion() != Long.MAX_VALUE,
-                "Persisted task version is invalid");
-    }
-
     private void validateAgentStatus(String status) {
         require(List.of(AgentConstants.STATUS_ONLINE, AgentConstants.STATUS_BUSY, AgentConstants.STATUS_OFFLINE,
                 AgentConstants.STATUS_ERROR).contains(status), "Invalid agent status");
@@ -3147,85 +2830,6 @@ public class AgentServiceImpl implements AgentService {
         require(List.of(AgentConstants.TASK_STATUS_OPEN, AgentConstants.TASK_STATUS_ASSIGNED,
                 AgentConstants.TASK_STATUS_RUNNING, AgentConstants.TASK_STATUS_COMPLETED,
                 AgentConstants.TASK_STATUS_FAILED, AgentConstants.TASK_STATUS_ARCHIVED).contains(status), "Invalid task status");
-    }
-
-    private String resolveAgentStatus(String taskStatus) {
-        return switch (taskStatus) {
-            case AgentConstants.TASK_STATUS_RUNNING -> AgentConstants.STATUS_BUSY;
-            case AgentConstants.TASK_STATUS_FAILED -> AgentConstants.STATUS_ERROR;
-            default -> AgentConstants.STATUS_ONLINE;
-        };
-    }
-
-    private AgentRuntimeDTO updateLegacyReportRuntime(
-            String agentId, String taskId, String reportedStatus,
-            String currentTaskTitle, String failureReason, boolean wholeTeamTerminal) {
-        AgentRuntimeEntity entity = requireAgent(agentId);
-        requireOwnedAgent(entity);
-        entity.setStatus(resolveAgentStatus(reportedStatus));
-        boolean memberTerminal = AgentConstants.TASK_STATUS_COMPLETED.equals(reportedStatus)
-                || AgentConstants.TASK_STATUS_FAILED.equals(reportedStatus);
-        if (wholeTeamTerminal || memberTerminal) {
-            entity.setCurrentTaskId(null);
-            entity.setCurrentTaskTitle(null);
-        } else {
-            entity.setCurrentTaskId(taskId);
-            entity.setCurrentTaskTitle(currentTaskTitle);
-        }
-        entity.setErrorMessage(AgentConstants.TASK_STATUS_FAILED.equals(reportedStatus)
-                ? failureReason : null);
-        entity.setLastSeenAt(System.currentTimeMillis());
-        require(agentRuntimeDao.updateById(entity) == 1, "Agent runtime update failed");
-        observeSkillLifecycle(entity);
-        return toRuntimeDTO(entity);
-    }
-
-    private String terminalRuntimeReportStatus(
-            String agentId, String reportingAgentId, String aggregateStatus) {
-        if (AgentConstants.TASK_STATUS_FAILED.equals(aggregateStatus)
-                && Objects.equals(agentId, reportingAgentId)) {
-            return AgentConstants.TASK_STATUS_FAILED;
-        }
-        return AgentConstants.TASK_STATUS_COMPLETED;
-    }
-
-    private void publishTaskAssignmentSideEffectsAfterCommit(
-            AgentTaskDTO task, List<AgentRuntimeEntity> assignedAgents,
-            boolean durableAssignmentDelivery) {
-        List<AgentRuntimeEntity> agents = List.copyOf(assignedAgents);
-        publishOptionalAfterCommit("task-assignment", () -> {
-            if (!durableAssignmentDelivery) {
-                task.setActionDispatchResults(dispatchTaskAssignedActions(task, agents));
-            }
-            publishTaskEvent("task_assigned", task);
-        });
-    }
-
-    private void publishLegacyReportSideEffectsAfterCommit(
-            String ownerJiacn, String eventType, AgentTaskDTO task, List<AgentRuntimeDTO> updatedAgents) {
-        List<AgentRuntimeDTO> agents = List.copyOf(updatedAgents);
-        String clientId = task.getClientId();
-        publishOptionalAfterCommit("legacy-task-report", () -> {
-            publishScopedAgentSnapshots(clientId, ownerJiacn, agents);
-            publishTaskEvent(eventType, task);
-        });
-    }
-
-    private void publishTaskAssignmentSceneStates(
-            String taskId, List<AgentRuntimeEntity> assignedAgents) {
-        List<AgentRuntimeEntity> agents = List.copyOf(assignedAgents);
-        publishOptionalSceneAfterCommit("task-assignment", () -> {
-            AgentSceneService sceneService = sceneServiceProvider.getIfAvailable();
-            if (sceneService == null) {
-                return;
-            }
-            long now = System.currentTimeMillis();
-            for (AgentRuntimeEntity agent : agents) {
-                publishSceneState(sceneService, movementState(
-                        agent.getAgentId(), agent.getPersonaCode(), "moving_to_bounty",
-                        REGION_BOUNTY_BOARD, "task", taskId, now));
-            }
-        });
     }
 
     private void publishDiscussionSceneState(String personaName, String dialogueType) {
@@ -3261,22 +2865,6 @@ public class AgentServiceImpl implements AgentService {
             publishSceneState(sceneService, movementState(
                     agent.getAgentId(), agent.getPersonaCode(), "moving_to_discussion",
                     REGION_COUNCIL_TABLE, relatedType, relatedId, now));
-        });
-    }
-
-    private void publishReturnHomeSceneStates(String taskId, List<AgentRuntimeDTO> agents) {
-        List<AgentRuntimeDTO> copiedAgents = List.copyOf(agents);
-        publishOptionalSceneAfterCommit("task-return-home", () -> {
-            AgentSceneService sceneService = sceneServiceProvider.getIfAvailable();
-            if (sceneService == null) {
-                return;
-            }
-            long now = System.currentTimeMillis();
-            for (AgentRuntimeDTO agent : copiedAgents) {
-                publishSceneState(sceneService, movementState(
-                        agent.getAgentId(), agent.getPersonaCode(), "returning_home",
-                        REGION_MAIN_SEAT, "task", taskId, now));
-            }
         });
     }
 
@@ -3400,13 +2988,6 @@ public class AgentServiceImpl implements AgentService {
                 }));
     }
 
-    private void publishScopedAgentSnapshots(
-            String clientId, String ownerJiacn, List<AgentRuntimeDTO> agents) {
-        scopePublicationCoordinator.execute(clientId, ownerJiacn,
-                () -> publishAgentSnapshots(clientId, ownerJiacn, agents,
-                        listCapabilities(resolveCurrentTenantId(), clientId, ownerJiacn)));
-    }
-
     private void publishAgentSnapshots(
             String clientId, String ownerJiacn, List<AgentRuntimeDTO> agents,
             List<AgentCapabilityDTO> capabilities) {
@@ -3418,125 +2999,6 @@ public class AgentServiceImpl implements AgentService {
 
     private void publishTaskEvent(String eventType, AgentTaskDTO task) {
         Optional.ofNullable(eventPublisherProvider.getIfAvailable()).ifPresent(publisher -> publisher.publishTaskEvent(eventType, task));
-    }
-
-    private List<AgentActionDispatchResultDTO> dispatchTaskAssignedActions(AgentTaskDTO task, List<AgentRuntimeEntity> assignedAgents) {
-        AgentEventPublisher publisher = eventPublisherProvider.getIfAvailable();
-        return assignedAgents.stream()
-                .map(agent -> dispatchTaskAssignedAction(task, agent, assignedAgents, publisher))
-                .toList();
-    }
-
-    private AgentActionDispatchResultDTO dispatchTaskAssignedAction(AgentTaskDTO task, AgentRuntimeEntity agent,
-            List<AgentRuntimeEntity> assignedAgents, AgentEventPublisher publisher) {
-        AgentActionIntentDTO intent = buildTaskBriefingIntent(task, agent, assignedAgents);
-        if (publisher == null || AgentConstants.STATUS_OFFLINE.equals(agent.getStatus())) {
-            return queuedAction(intent, "Agent offline or not connected");
-        }
-        try {
-            AgentActionDispatchResultDTO result = publisher.publishAgentAction(intent);
-            if (result == null) {
-                result = dispatchedAction(intent);
-            }
-            normalizeDispatchResult(result, intent);
-            log.info("Agent action intent dispatched, intentId={}, taskId={}, targetAgentId={}, status={}, message={}",
-                    result.getIntentId(), result.getTaskId(), result.getTargetAgentId(), result.getStatus(), result.getMessage());
-            return result;
-        } catch (Exception e) {
-            AgentActionDispatchResultDTO result = failedAction(intent, e.getMessage());
-            log.warn("Agent action intent dispatch failed, intentId={}, taskId={}, targetAgentId={}, reason={}",
-                    result.getIntentId(), result.getTaskId(), result.getTargetAgentId(), result.getMessage(), e);
-            return result;
-        }
-    }
-
-    private AgentActionIntentDTO buildTaskBriefingIntent(AgentTaskDTO task, AgentRuntimeEntity agent,
-            List<AgentRuntimeEntity> assignedAgents) {
-        AgentActionIntentDTO intent = new AgentActionIntentDTO();
-        intent.setIntentId(UUID.randomUUID().toString());
-        intent.setCommandId(intent.getIntentId());
-        intent.setCommandType(AgentProtocolConstants.COMMAND_TASK_INVITE);
-        intent.setCorrelationId(task.getId());
-        intent.setTenantId(task.getTenantId());
-        intent.setClientId(task.getClientId());
-        intent.setActionType("task_briefing");
-        intent.setActorAgentId(agent.getAgentId());
-        intent.setTargetAgentIds(assignedAgents.stream().map(AgentRuntimeEntity::getAgentId).toList());
-        intent.setTaskId(task.getId());
-        intent.setReason("宋江首领已完成悬赏分派，请按职责协作推进。");
-        intent.setInstruction("阅读悬赏任务，确认自己的职责；如需协助，优先参考协作名册中的好汉能力并回报下一步计划。");
-        intent.setContext(buildTaskBriefingContext(task, assignedAgents));
-        intent.setAutonomyLevel("assist");
-        intent.setRequiresApproval(false);
-        intent.setConversationType("juyiting");
-        intent.setCreatedAt(System.currentTimeMillis());
-        return intent;
-    }
-
-    private Map<String, Object> buildTaskBriefingContext(AgentTaskDTO task, List<AgentRuntimeEntity> assignedAgents) {
-        Map<String, Object> context = new LinkedHashMap<>();
-        context.put("leader", Map.of(
-                "agentId", AgentConstants.BUILTIN_SONGJIANG_AGENT_ID,
-                "name", "宋江",
-                "role", "首领"));
-        context.put("task", Map.of(
-                "taskId", Optional.ofNullable(task.getId()).orElse(""),
-                "title", Optional.ofNullable(task.getTitle()).orElse(""),
-                "description", Optional.ofNullable(task.getDescription()).orElse(""),
-                "requiredAbilities", Optional.ofNullable(task.getRequiredAbilities()).orElseGet(Collections::emptyList)));
-        context.put("collaborators", assignedAgents.stream()
-                .map(agent -> toCapabilityDTO(toRuntimeDTO(agent)))
-                .toList());
-        context.put("acceptance", "回报执行计划、风险和协助诉求；Protocol v1 使用 work.progress，完成后使用 work.result，旧客户端由兼容层处理。");
-        return context;
-    }
-
-    private AgentActionDispatchResultDTO queuedAction(AgentActionIntentDTO intent, String message) {
-        AgentActionDispatchResultDTO result = new AgentActionDispatchResultDTO();
-        result.setIntentId(intent.getIntentId());
-        result.setTaskId(intent.getTaskId());
-        result.setTargetAgentId(intent.getActorAgentId());
-        result.setStatus("queued");
-        result.setMessage(message);
-        return result;
-    }
-
-    private AgentActionDispatchResultDTO dispatchedAction(AgentActionIntentDTO intent) {
-        AgentActionDispatchResultDTO result = new AgentActionDispatchResultDTO();
-        result.setIntentId(intent.getIntentId());
-        result.setTaskId(intent.getTaskId());
-        result.setTargetAgentId(intent.getActorAgentId());
-        result.setStatus("dispatched");
-        result.setDispatchedAt(System.currentTimeMillis());
-        return result;
-    }
-
-    private AgentActionDispatchResultDTO failedAction(AgentActionIntentDTO intent, String message) {
-        AgentActionDispatchResultDTO result = new AgentActionDispatchResultDTO();
-        result.setIntentId(intent.getIntentId());
-        result.setTaskId(intent.getTaskId());
-        result.setTargetAgentId(intent.getActorAgentId());
-        result.setStatus("failed");
-        result.setMessage(message);
-        return result;
-    }
-
-    private void normalizeDispatchResult(AgentActionDispatchResultDTO result, AgentActionIntentDTO intent) {
-        if (StringUtil.isBlank(result.getIntentId())) {
-            result.setIntentId(intent.getIntentId());
-        }
-        if (StringUtil.isBlank(result.getTaskId())) {
-            result.setTaskId(intent.getTaskId());
-        }
-        if (StringUtil.isBlank(result.getTargetAgentId())) {
-            result.setTargetAgentId(intent.getActorAgentId());
-        }
-        if (StringUtil.isBlank(result.getStatus())) {
-            result.setStatus("dispatched");
-        }
-        if ("dispatched".equals(result.getStatus()) && result.getDispatchedAt() == null) {
-            result.setDispatchedAt(System.currentTimeMillis());
-        }
     }
 
     private String resolveCurrentJiacn() {

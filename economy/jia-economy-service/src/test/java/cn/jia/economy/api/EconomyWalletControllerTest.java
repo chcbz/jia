@@ -1,6 +1,6 @@
 package cn.jia.economy.api;
 
-import cn.jia.economy.config.EconomyOnboardingGrantProperties;
+import cn.jia.economy.config.EconomyCampaignProperties;
 import cn.jia.economy.config.EconomyPreviewGate;
 import cn.jia.economy.config.EconomyPreviewProperties;
 import cn.jia.economy.entity.EconomyWalletLedgerRow;
@@ -62,7 +62,7 @@ class EconomyWalletControllerTest {
 
         mvc.perform(get("/economy/wallet").principal(auth(OWNER, CLIENT, USER)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.currency").value("SILVER"))
+                .andExpect(jsonPath("$.data.currency").value("WEN"))
                 .andExpect(jsonPath("$.data.available.amountMinor").value("1200000000"))
                 .andExpect(jsonPath("$.data.held.amountMinor").value("300000000"))
                 .andExpect(jsonPath("$.data.version").value("17"));
@@ -72,7 +72,7 @@ class EconomyWalletControllerTest {
     @Test
     void walletFailsClosedWhenAnyHeldComponentIsNegative() throws Exception {
         when(mapper.selectUserWalletSnapshot(TENANT, CLIENT, USER)).thenReturn(new EconomyWalletSnapshotRow()
-                .setAvailableMicro(100L).setHeldMicro(20L).setMinimumHeldComponentMicro(-1L).setVersion(1L));
+                .setAvailableWen(100L).setHeldWen(20L).setMinimumHeldComponentWen(-1L).setVersion(1L));
 
         mvc.perform(get("/economy/wallet").principal(auth(OWNER, CLIENT, USER)))
                 .andExpect(status().isServiceUnavailable())
@@ -101,12 +101,12 @@ class EconomyWalletControllerTest {
 
     @Test
     void issuanceRejectsUnknownDuplicateMalformedAndProductionInputBeforeTreasury() throws Exception {
-        String valid = "{\"amount\":{\"amountMinor\":\"100\",\"currency\":\"SILVER\"},\"campaignRef\":\"preview-welcome\"}";
+        String valid = "{\"amount\":{\"amountMinor\":\"100\",\"currency\":\"WEN\"},\"campaignRef\":\"preview-welcome\"}";
         for (String body : List.of(
-                "{\"amountMicro\":\"100\",\"campaignRef\":\"preview-welcome\",\"scope\":\"Tenant-B\"}",
-                "{\"amountMicro\":\"100\",\"amountMicro\":\"101\",\"campaignRef\":\"preview-welcome\"}",
-                "{\"amountMicro\":100,\"campaignRef\":\"preview-welcome\"}",
-                "{\"amountMicro\":\"01\",\"campaignRef\":\"preview-welcome\"} trailing")) {
+                "{\"amountWen\":\"100\",\"campaignRef\":\"preview-welcome\",\"scope\":\"Tenant-B\"}",
+                "{\"amountWen\":\"100\",\"amountWen\":\"101\",\"campaignRef\":\"preview-welcome\"}",
+                "{\"amountWen\":100,\"campaignRef\":\"preview-welcome\"}",
+                "{\"amountWen\":\"01\",\"campaignRef\":\"preview-welcome\"} trailing")) {
             mvc.perform(post("/economy/preview/issuances").principal(auth(OWNER, CLIENT, USER))
                             .header("Idempotency-Key", KEY).contentType(MediaType.APPLICATION_JSON).content(body))
                     .andExpect(status().isBadRequest())
@@ -136,11 +136,11 @@ class EconomyWalletControllerTest {
 
     @Test
     void issuanceUsesTreasuryAndReturnsFrozenReceiptWithoutWalletState() throws Exception {
-        when(treasury.issue(any())).thenReturn(new EconomyPostingResult("etx_1", "POSTED", "SILVER", 99L,
+        when(treasury.issue(any())).thenReturn(new EconomyPostingResult("etx_1", "POSTED", "WEN", 99L,
                 100L, 100L, List.of(), null));
         mvc.perform(post("/economy/preview/issuances").principal(auth(OWNER, CLIENT, USER))
                         .header("Idempotency-Key", KEY).contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"amount\":{\"amountMinor\":\"100\",\"currency\":\"SILVER\"},\"campaignRef\":\"preview-welcome\"}"))
+                        .content("{\"amount\":{\"amountMinor\":\"100\",\"currency\":\"WEN\"},\"campaignRef\":\"preview-welcome\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.transactionId").value("etx_1"))
                 .andExpect(jsonPath("$.data.status").value("POSTED"))
@@ -156,36 +156,37 @@ class EconomyWalletControllerTest {
 
     @Test
     void productionOnboardingGrantUsesServerCampaignAndStableScope() throws Exception {
-        when(treasury.issue(any())).thenReturn(new EconomyPostingResult("etx_welcome", "POSTED", "SILVER", 99L,
-                1000000000L, 1000000000L, List.of(), null));
+        when(treasury.issue(any())).thenReturn(new EconomyPostingResult("etx_welcome", "POSTED", "WEN", 99L,
+                3500L, 3500L, List.of(), null));
         mvc = mvc(gate(true), environment,
-                new EconomyOnboardingGrantProperties(true, 1000000000L, "hosting-welcome-v1"));
+                new EconomyCampaignProperties(List.of(new EconomyCampaignProperties.Campaign("beta-hall-welcome-v1", EconomyCampaignProperties.Event.HALL_ENTERED, true, 3500, null, null))));
 
-        mvc.perform(post("/economy/onboarding-grant").principal(auth(OWNER, CLIENT, USER))
-                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+        mvc.perform(post("/economy/events").principal(auth(OWNER, CLIENT, USER))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"event\":\"HALL_ENTERED\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.transactionId").value("etx_welcome"))
-                .andExpect(jsonPath("$.data.amount.amountMinor").value("1000000000"))
-                .andExpect(jsonPath("$.data.campaignRef").value("hosting-welcome-v1"));
+                .andExpect(jsonPath("$.data.grants[0].transactionId").value("etx_welcome"))
+                .andExpect(jsonPath("$.data.grants[0].amount.amountMinor").value("3500"))
+                .andExpect(jsonPath("$.data.grants[0].campaignRef").value("beta-hall-welcome-v1"));
 
         ArgumentCaptor<EconomyPostingCommand> command = ArgumentCaptor.forClass(EconomyPostingCommand.class);
         verify(treasury).issue(command.capture());
         org.junit.jupiter.api.Assertions.assertEquals("0", command.getValue().scope().tenantId());
         org.junit.jupiter.api.Assertions.assertEquals(CLIENT, command.getValue().scope().clientId());
         org.junit.jupiter.api.Assertions.assertEquals(USER, command.getValue().principal().id());
-        org.junit.jupiter.api.Assertions.assertEquals("hosting-welcome-v1", command.getValue().businessId());
+        org.junit.jupiter.api.Assertions.assertEquals("beta-hall-welcome-v1", command.getValue().businessId());
         org.junit.jupiter.api.Assertions.assertTrue(command.getValue().idempotencyKey()
                 .matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"));
     }
 
     @Test
-    void onboardingGrantRejectsClientAmountsAndDisabledCampaign() throws Exception {
-        mvc.perform(post("/economy/onboarding-grant").principal(auth(OWNER, CLIENT, USER))
-                        .contentType(MediaType.APPLICATION_JSON).content("{\"amountMicro\":\"9999999999\"}"))
+    void campaignEventRejectsClientAmountsAndDisabledCampaignIsNoOp() throws Exception {
+        mvc.perform(post("/economy/events").principal(auth(OWNER, CLIENT, USER))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"amountWen\":\"9999999999\"}"))
                 .andExpect(status().isBadRequest());
-        mvc.perform(post("/economy/onboarding-grant").principal(auth(OWNER, CLIENT, USER))
-                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
-                .andExpect(status().isForbidden());
+        mvc.perform(post("/economy/events").principal(auth(OWNER, CLIENT, USER))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"event\":\"HALL_ENTERED\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.grants").isEmpty());
         verify(treasury, never()).issue(any());
     }
 
@@ -213,11 +214,11 @@ class EconomyWalletControllerTest {
     }
 
     private MockMvc mvc(EconomyPreviewGate gate, MockEnvironment activeEnvironment) {
-        return mvc(gate, activeEnvironment, EconomyOnboardingGrantProperties.disabled());
+        return mvc(gate, activeEnvironment, EconomyCampaignProperties.disabled());
     }
 
     private MockMvc mvc(EconomyPreviewGate gate, MockEnvironment activeEnvironment,
-            EconomyOnboardingGrantProperties onboardingGrant) {
+            EconomyCampaignProperties onboardingGrant) {
         return MockMvcBuilders.standaloneSetup(new EconomyWalletController(gate,
                 new EconomyWalletService(mapper, treasury, activeEnvironment, gate, onboardingGrant))).build();
     }
@@ -228,15 +229,15 @@ class EconomyWalletControllerTest {
     }
 
     private static EconomyWalletSnapshotRow snapshot(long available, long held, long version) {
-        return new EconomyWalletSnapshotRow().setAvailableMicro(available).setHeldMicro(held)
-                .setMinimumHeldComponentMicro(held == 0 ? 0L : held).setVersion(version);
+        return new EconomyWalletSnapshotRow().setAvailableWen(available).setHeldWen(held)
+                .setMinimumHeldComponentWen(held == 0 ? 0L : held).setVersion(version);
     }
 
     private static EconomyWalletLedgerRow row(long id, String transactionId, String entryId,
                                                long signed, long postedAt) {
         return new EconomyWalletLedgerRow().setRowId(id).setTransactionId(transactionId).setEntryId(entryId)
-                .setBusinessType("ISSUE_SILVER").setBusinessRef("preview-welcome")
-                .setSignedAmountMicro(signed).setStatus("POSTED").setPostedAt(postedAt);
+                .setBusinessType("ISSUE_WEN").setBusinessRef("preview-welcome")
+                .setSignedAmountWen(signed).setStatus("POSTED").setPostedAt(postedAt);
     }
 
     private static JwtAuthenticationToken auth(String tenant, String client, String subject) {

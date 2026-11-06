@@ -13,9 +13,7 @@ import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRegisterResultDTO;
 import cn.jia.agent.entity.AgentRawCommandDispatchResult;
 import cn.jia.agent.entity.AgentStatusDTO;
-import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
-import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.agent.service.AgentCommandReconnectSignal;
 import cn.jia.agent.service.AgentExecutionReportService;
@@ -459,14 +457,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             case AgentProtocolConstants.TYPE_CHAT_MESSAGE -> saveAgentMessage(session, payload);
             case AgentProtocolConstants.TYPE_CHAT_MESSAGE_DELTA -> publishAgentMessageDelta(session, payload);
             case AgentProtocolConstants.TYPE_CHAT_DISPATCH_ACK -> acknowledgeChatDispatch(session, payload);
-            case AgentProtocolConstants.TYPE_TASK_ASSIGN_LEGACY -> assignTask(session, payload);
-            case AgentProtocolConstants.TYPE_WORK_RESULT -> {
-                if (normalized.legacyTaskReport()) {
-                    reportTask(session, payload);
-                } else {
+            case AgentProtocolConstants.TYPE_WORK_RESULT ->
                     handleExecutionReport(session, payload, normalized.canonicalType());
-                }
-            }
             case AgentProtocolConstants.TYPE_COMMAND_ACK -> sendProtocolError(session, payload,
                     "COMMAND_ACK_HTTP_REQUIRED", "Command ACK must be committed through Runtime HTTP");
             case AgentProtocolConstants.TYPE_WORK_PROGRESS,
@@ -942,6 +934,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             AgentRegisterDTO request = new AgentRegisterDTO();
             request.setAgentId(agentId);
             request.setEndpoint(asString(payload.get("endpoint")));
+            request.setExecutionModel(payload.get("executionModel") instanceof String model ? model : null);
             stage = "runtime_register";
             AgentRegisterResultDTO result = withSessionContext(session, () -> runtimeAuthentication.withFence(sessionProof(session), true, () -> agentService.register(request)));
             if (result == null || !agentId.equals(result.getAgentId())) {
@@ -1160,99 +1153,6 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             event.put("currentTaskId", agent.getCurrentTaskId());
             event.put("currentTaskTitle", agent.getCurrentTaskTitle());
             sendEvent(session, "agent_status_updated", event);
-        } catch (Exception e) {
-            sendError(session, payload, errorCode(e), e.getMessage());
-        }
-    }
-
-    private void assignTask(WebSocketSession session, Map<String, Object> payload) {
-        AgentService agentService = agentServiceProvider.getIfAvailable();
-        if (agentService == null) {
-            sendError(session, payload, "AGENT_SERVICE_UNAVAILABLE", "Agent service is unavailable");
-            return;
-        }
-        try {
-            String taskId = asString(payload.get("taskId"));
-            String agentId = requireAllowedSessionAgentId(session, payload);
-            if (agentId == null) {
-                return;
-            }
-            AgentTaskAssignDTO request = new AgentTaskAssignDTO();
-            request.setAgentId(agentId);
-            request.setAllowQueue(asBoolean(payload.get("allowQueue")));
-            AgentTaskDTO task = withSessionContext(session, () -> withSessionMutationFence(session, () -> agentService.assignTask(taskId, request)));
-            String tenantId = sessionJiacn(session);
-            String clientId = sessionClientId(session);
-            if (!isTrustedTaskAssignmentConfirmation(task, taskId, tenantId, clientId, agentId)) {
-                log.warn("Refusing legacy task assignment confirmation with incomplete or mismatched trusted scope, "
-                                + "tenantId={}, clientId={}, taskId={}, agentId={}",
-                        tenantId, clientId, taskId, agentId);
-                return;
-            }
-            Map<String, Object> event = new HashMap<>();
-            String requestMessageId = Optional.ofNullable(asString(payload.get("messageId")))
-                    .orElse(asString(payload.get("requestId")));
-            event.put("schemaVersion", AgentProtocolConstants.VERSION_1);
-            event.put("messageId", UUID.randomUUID().toString());
-            event.put("messageType", AgentProtocolConstants.TYPE_TASK_EVENT);
-            event.put("eventType", "task.assignment.accepted");
-            event.put("correlationId", task.getId());
-            putIfPresent(event, "causationId", requestMessageId);
-            event.put("tenantId", tenantId);
-            event.put("clientId", clientId);
-            event.put("taskId", task.getId());
-            event.put("agentId", agentId);
-            event.put("targetAgentId", agentId);
-            event.put("status", task.getStatus());
-            event.put("assignedAgentId", agentId);
-            event.put("assignedAgentName", task.getAssignedAgentName());
-            if (!sendDirectMessageToAgent(agentId, event)) {
-                log.warn("Legacy task assignment confirmation was not delivered, tenantId={}, clientId={}, "
-                                + "taskId={}, agentId={}",
-                        tenantId, clientId, task.getId(), agentId);
-            }
-        } catch (Exception e) {
-            sendError(session, payload, errorCode(e), e.getMessage());
-        }
-    }
-
-    private boolean isTrustedTaskAssignmentConfirmation(AgentTaskDTO task, String requestedTaskId,
-            String tenantId, String clientId, String agentId) {
-        return task != null
-                && !isBlank(requestedTaskId)
-                && requestedTaskId.equals(task.getId())
-                && !isBlank(tenantId)
-                && tenantId.equals(task.getTenantId())
-                && !isBlank(clientId)
-                && clientId.equals(task.getClientId())
-                && !isBlank(agentId)
-                && agentId.equals(task.getAssignedAgentId());
-    }
-
-    private void reportTask(WebSocketSession session, Map<String, Object> payload) {
-        AgentService agentService = agentServiceProvider.getIfAvailable();
-        if (agentService == null) {
-            sendError(session, payload, "AGENT_SERVICE_UNAVAILABLE", "Agent service is unavailable");
-            return;
-        }
-        try {
-            String taskId = asString(payload.get("taskId"));
-            String agentId = requireAllowedSessionAgentId(session, payload);
-            if (agentId == null) {
-                return;
-            }
-            AgentTaskReportDTO request = new AgentTaskReportDTO();
-            request.setAgentId(agentId);
-            request.setStatus(asString(payload.get("status")));
-            request.setCurrentTaskTitle(asString(payload.get("currentTaskTitle")));
-            request.setFailureReason(asString(payload.get("failureReason")));
-            AgentTaskDTO task = withSessionContext(session, () -> withSessionMutationFence(session, () -> agentService.reportTask(taskId, request)));
-            Map<String, Object> event = copyTrace(payload);
-            event.put("taskId", task.getId());
-            event.put("status", task.getStatus());
-            event.put("assignedAgentId", task.getAssignedAgentId());
-            event.put("assignedAgentName", task.getAssignedAgentName());
-            sendEvent(session, "task_reported", event);
         } catch (Exception e) {
             sendError(session, payload, errorCode(e), e.getMessage());
         }

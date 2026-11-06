@@ -47,25 +47,25 @@ public class SkillTradeServiceImpl implements SkillTradeService {
                 new EconomyEscrowFunding(EconomyEscrowType.SKILL_ORDER,availableAccount(principal.id()),escrow,amount,null)));
     }
     @Override public String settle(EconomyScope scope,EconomyPrincipal principal,SkillOrder o,Long escrowVersion,boolean capture,long now) {
-        if(o.getPriceMicro()==0) return null;
+        if(o.getPriceWen()==0) return null;
         preview.requireMutationAllowed(scope.tenantId(),scope.clientId());
-        var dest=capture?new EconomyAccountKey("SILVER",EconomyAccountOwnerType.SYSTEM,"SKILL_STORE",EconomyAccountPurpose.SKILL_STORE):availableAccount(principal.id());
+        var dest=capture?new EconomyAccountKey("WEN",EconomyAccountOwnerType.SYSTEM,"SKILL_STORE",EconomyAccountPurpose.SKILL_STORE):availableAccount(principal.id());
         if(capture) ensureAccount(scope,dest,now);
         if(escrowVersion==null) throw new EconomyPostingException(EconomyPostingException.Reason.ESCROW_CONFLICT,"missing skill escrow version");
         var result=posting.post(new EconomyPostingCommand(scope,principal,UUID.randomUUID().toString(),
                 hash(capture?"skill-capture":"skill-refund",Map.of("order",o.getOrderId())),
                 capture?EconomyJournalType.CAPTURE_SKILL:EconomyJournalType.REFUND_SKILL,o.getOrderId(),
-                List.of(new EconomyPostingLine(escrow(o.getOrderId()),-o.getPriceMicro()),new EconomyPostingLine(dest,o.getPriceMicro())),null,
-                new EconomyEscrowSettlement(EconomyEscrowType.SKILL_ORDER,escrow(o.getOrderId()),dest,o.getPriceMicro(),escrowVersion,o.getReserveTransactionId())));
+                List.of(new EconomyPostingLine(escrow(o.getOrderId()),-o.getPriceWen()),new EconomyPostingLine(dest,o.getPriceWen())),null,
+                new EconomyEscrowSettlement(EconomyEscrowType.SKILL_ORDER,escrow(o.getOrderId()),dest,o.getPriceWen(),escrowVersion,o.getReserveTransactionId())));
         return result.transactionId();
     }
     private void ensureAccount(EconomyScope scope,EconomyAccountKey k,long now) {
         ledger.insertAccountIfAbsent(new EconomyAccountEntity().setAccountId(("skill_ac_"+UUID.randomUUID().toString().replace("-",""))).setOwnerType(k.ownerType().name()).setOwnerId(k.ownerId())
-                .setPurpose(k.purpose().name()).setCurrency("SILVER").setBalanceMicro(0L).setAllowNegative(0).setStatus("ACTIVE").setVersion(0L)
+                .setPurpose(k.purpose().name()).setCurrency("WEN").setBalanceWen(0L).setAllowNegative(0).setStatus("ACTIVE").setVersion(0L)
                 .setTenantId(scope.tenantId()).setClientId(scope.clientId()).setCreateTime(now).setUpdateTime(now));
     }
-    static EconomyAccountKey escrow(String order) { return new EconomyAccountKey("SILVER",EconomyAccountOwnerType.ORDER,order,EconomyAccountPurpose.ESCROW); }
-    static EconomyAccountKey availableAccount(String actor) { return new EconomyAccountKey("SILVER",EconomyAccountOwnerType.USER,actor,EconomyAccountPurpose.AVAILABLE); }
+    static EconomyAccountKey escrow(String order) { return new EconomyAccountKey("WEN",EconomyAccountOwnerType.ORDER,order,EconomyAccountPurpose.ESCROW); }
+    static EconomyAccountKey availableAccount(String actor) { return new EconomyAccountKey("WEN",EconomyAccountOwnerType.USER,actor,EconomyAccountPurpose.AVAILABLE); }
     private static byte[] hash(String operation, Map<String,String> body) {
         try {
             var bytes=new java.io.ByteArrayOutputStream();var out=new java.io.DataOutputStream(bytes);
@@ -85,7 +85,7 @@ public class SkillTradeServiceImpl implements SkillTradeService {
                 .setBuyerId(v.getBuyerId())
                 .setSellerType(v.getSellerType())
                 .setSellerId(v.getSellerId())
-                .setPriceMicro(v.getPriceMicro())
+                .setPriceWen(v.getPriceWen())
                 .setExpectedAgentVersion(v.getExpectedAgentVersion())
                 .setPermissionGrantVersion(v.getPermissionGrantVersion())
                 .setApprovedPermissionsManifest(v.getApprovedPermissionsManifest())
@@ -115,7 +115,7 @@ public class SkillTradeServiceImpl implements SkillTradeService {
                 .setBuyerId(v.getBuyerId())
                 .setSellerType(v.getSellerType())
                 .setSellerId(v.getSellerId())
-                .setPriceMicro(v.getPriceMicro())
+                .setPriceWen(v.getPriceWen())
                 .setExpectedAgentVersion(v.getExpectedAgentVersion())
                 .setPermissionGrantVersion(v.getPermissionGrantVersion())
                 .setApprovedPermissionsManifest(v.getApprovedPermissionsManifest())
@@ -145,7 +145,7 @@ public class SkillTradeServiceImpl implements SkillTradeService {
                 .setProductVersionId(v.getProductVersionId())
                 .setTargetAgentId(v.getTargetAgentId())
                 .setExpectedAgentVersion(v.getExpectedAgentVersion())
-                .setExpectedPriceMicro(v.getExpectedPriceMicro())
+                .setExpectedPriceWen(v.getExpectedPriceWen())
                 .setApprovedPermissionsManifest(v.getApprovedPermissionsManifest())
                 .setApprovedPermissionsSha256(v.getApprovedPermissionsSha256())
                 .setDeploymentRestriction(v.getDeploymentRestriction())
@@ -165,7 +165,7 @@ public class SkillTradeServiceImpl implements SkillTradeService {
                 .setProductVersionId(v.getProductVersionId())
                 .setTargetAgentId(v.getTargetAgentId())
                 .setExpectedAgentVersion(v.getExpectedAgentVersion())
-                .setExpectedPriceMicro(v.getExpectedPriceMicro())
+                .setExpectedPriceWen(v.getExpectedPriceWen())
                 .setApprovedPermissionsManifest(v.getApprovedPermissionsManifest())
                 .setApprovedPermissionsSha256(v.getApprovedPermissionsSha256())
                 .setDeploymentRestriction(v.getDeploymentRestriction())
@@ -184,7 +184,7 @@ public class SkillTradeServiceImpl implements SkillTradeService {
                 .setRequestHash(v.getRequestHash())
                 .setOrderVersion(v.getOrderVersion())
                 .setOrderStatus(v.getOrderStatus())
-                .setPriceMicro(v.getPriceMicro())
+                .setPriceWen(v.getPriceWen())
                 .setPermissionGrantVersion(v.getPermissionGrantVersion())
                 .setApprovedPermissionsSha256(v.getApprovedPermissionsSha256())
                 .setEscrowId(v.getEscrowId())
@@ -202,7 +202,7 @@ public class SkillTradeServiceImpl implements SkillTradeService {
                 .setRequestHash(v.getRequestHash())
                 .setOrderVersion(v.getOrderVersion())
                 .setOrderStatus(v.getOrderStatus())
-                .setPriceMicro(v.getPriceMicro())
+                .setPriceWen(v.getPriceWen())
                 .setPermissionGrantVersion(v.getPermissionGrantVersion())
                 .setApprovedPermissionsSha256(v.getApprovedPermissionsSha256())
                 .setEscrowId(v.getEscrowId())

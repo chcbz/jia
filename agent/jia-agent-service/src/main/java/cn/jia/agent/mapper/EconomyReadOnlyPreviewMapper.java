@@ -25,21 +25,21 @@ public interface EconomyReadOnlyPreviewMapper {
             + " AND OCTET_LENGTH(wallet.client_id)=OCTET_LENGTH(#{clientId}) ";
 
     @Select("""
-            SELECT COALESCE(wallet.balance_micro,0) AS available_micro,
-                   COALESCE(held.held_micro,0) AS held_micro,
-                   COALESCE(held.minimum_held_component_micro,0) AS minimum_held_component_micro,
+            SELECT COALESCE(wallet.balance_wen,0) AS available_wen,
+                   COALESCE(held.held_wen,0) AS held_wen,
+                   COALESCE(held.minimum_held_component_wen,0) AS minimum_held_component_wen,
                    COALESCE(wallet.version,0)+COALESCE(held.hosting_version,0) AS version
             FROM (SELECT 1 AS singleton) snapshot_anchor
             LEFT JOIN economy_account wallet ON
             """ + WALLET_SCOPE + """
-             AND wallet.currency='SILVER' AND wallet.owner_type='USER'
+             AND wallet.currency='WEN' AND wallet.owner_type='USER'
              AND wallet.owner_id=#{actorId} AND wallet.purpose='AVAILABLE'
              AND CAST(wallet.owner_id AS BINARY)=CAST(#{actorId} AS BINARY)
              AND OCTET_LENGTH(wallet.owner_id)=OCTET_LENGTH(#{actorId})
             LEFT JOIN (
-                SELECT SUM(e.gross_micro-e.captured_micro-e.refunded_micro) AS held_micro,
+                SELECT SUM(e.gross_wen-e.captured_wen-e.refunded_wen) AS held_wen,
                        SUM(CASE WHEN e.business_type='HOSTING_RENT' THEN e.version ELSE 0 END) AS hosting_version,
-                       MIN(e.gross_micro-e.captured_micro-e.refunded_micro) AS minimum_held_component_micro
+                       MIN(e.gross_wen-e.captured_wen-e.refunded_wen) AS minimum_held_component_wen
                 FROM economy_escrow e
                 JOIN economy_account payer
                   ON payer.tenant_id=e.tenant_id AND payer.client_id=e.client_id
@@ -66,7 +66,7 @@ public interface EconomyReadOnlyPreviewMapper {
 
     @Select("""
             SELECT e.id AS row_id,e.transaction_id,e.entry_id,t.business_type,t.business_id AS business_ref,
-                   e.signed_amount_micro,e.status,e.posted_at
+                   e.signed_amount_wen,e.status,e.posted_at
             FROM economy_entry e
             JOIN economy_account a
               ON a.tenant_id=e.tenant_id AND a.client_id=e.client_id AND a.account_id=e.account_id
@@ -105,7 +105,7 @@ public interface EconomyReadOnlyPreviewMapper {
 
     @Select("""
             SELECT p.product_id,p.name,p.description,v.product_version_id,v.skill_key,v.skill_version,
-                   v.price_micro,v.approved_permissions_manifest,v.deployment_restriction
+                   v.price_wen,v.approved_permissions_manifest,v.deployment_restriction
             FROM agent_skill_product p
             JOIN agent_skill_product_version v
               ON v.tenant_id=p.tenant_id AND v.client_id=p.client_id AND v.product_id=p.product_id
@@ -132,7 +132,7 @@ public interface EconomyReadOnlyPreviewMapper {
 
     @Select("""
             SELECT p.product_id,p.name,p.description,v.product_version_id,v.skill_key,v.skill_version,
-                   v.price_micro,v.approved_permissions_manifest,v.deployment_restriction
+                   v.price_wen,v.approved_permissions_manifest,v.deployment_restriction
             FROM agent_skill_product p
             JOIN agent_skill_product_version v
               ON v.tenant_id=p.tenant_id AND v.client_id=p.client_id AND v.product_id=p.product_id
@@ -249,7 +249,7 @@ public interface EconomyReadOnlyPreviewMapper {
             @Param("agentId") String agentId);
 
     @Select("""
-            SELECT id,plan_id,plan_version,amount_micro,period_seconds,quote_ttl_seconds,
+            SELECT id,plan_id,plan_version,amount_wen,period_seconds,quote_ttl_seconds,
                    currency,status,tenant_id,client_id,create_time
             FROM economy_hosting_rent_plan
             WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND status='ACTIVE'
@@ -265,7 +265,7 @@ public interface EconomyReadOnlyPreviewMapper {
 
     @Select("""
             SELECT id,lease_id,principal_type,principal_id,persona_code,agent_id,binding_id,
-                   plan_id,plan_version,amount_micro,period_seconds,status,paid_from,paid_through,
+                   plan_id,plan_version,amount_wen,period_seconds,status,paid_from,paid_through,
                    latest_intent_id,version,tenant_id,client_id,create_time,update_time
             FROM economy_hosting_lease
             WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND agent_id=#{agentId}

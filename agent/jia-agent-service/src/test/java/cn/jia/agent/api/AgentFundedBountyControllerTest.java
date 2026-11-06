@@ -2,154 +2,126 @@ package cn.jia.agent.api;
 
 import cn.jia.agent.entity.AgentTaskCreateDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
-import cn.jia.agent.entity.funding.AgentSkillRequirementDTO;
-import cn.jia.agent.entity.funding.AgentTaskFundingCancelDTO;
-import cn.jia.agent.entity.funding.AgentTaskFundingCancelReceiptDTO;
 import cn.jia.agent.service.AbilityEvaluationService;
 import cn.jia.agent.service.AgentService;
-import cn.jia.agent.service.funding.FundedBountyActor;
 import cn.jia.agent.service.funding.FundedBountyException;
-import cn.jia.agent.service.funding.FundedBountyService;
-import cn.jia.core.entity.JsonResult;
+import cn.jia.core.entity.JsonRequest;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
+import org.springframework.web.bind.annotation.PostMapping;
 
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
+import java.util.function.Consumer;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
+/** Retired money requests cannot debit, create a replacement task, or enter quoted assignment. */
 class AgentFundedBountyControllerTest {
     @Test
     void ordinaryCreateUsesTrustedJwtWithoutRequiringIdempotencyHeader() {
-        AgentService legacy = mock(AgentService.class);
+        AgentService service = mock(AgentService.class);
         AgentTaskCreateDTO request = new AgentTaskCreateDTO();
-        request.setTitle("legacy");
-        when(legacy.createTask(any(AgentService.TaskOwnerScope.class), eq(request))).thenReturn(new AgentTaskDTO());
-        AgentController controller = new AgentController(
-                legacy, mock(AbilityEvaluationService.class), mock(FundedBountyService.class));
-
-        controller.createTask(new cn.jia.core.entity.JsonRequest<>(1, "test-request", request), null, jwt("user-1", "user-1", "Client-A"));
-
-        verify(legacy).createTask(eq(new AgentService.TaskOwnerScope("0", "Client-A", "user-1")), eq(request));
+        request.setTitle("ordinary");
+        when(service.createTask(any(AgentService.TaskOwnerScope.class), same(request)))
+                .thenReturn(new AgentTaskDTO());
+        controller(service).createTask(body(request), null, jwt());
+        verify(service).createTask(new AgentService.TaskOwnerScope("0", "Client-A", "owner-1"), request);
+        verifyNoMoreInteractions(service);
     }
 
     @Test
     void ordinaryCreateRejectsMissingIdentityBeforeService() {
-        AgentService legacy = mock(AgentService.class);
-        AgentController controller = new AgentController(legacy,
-                mock(AbilityEvaluationService.class), mock(FundedBountyService.class));
-        AgentTaskCreateDTO request = new AgentTaskCreateDTO();
-        request.setTitle("ordinary");
-        assertThrows(RuntimeException.class, () -> controller.createTask(
-                new cn.jia.core.entity.JsonRequest<>(1, "test-request", request), null, null));
-        org.mockito.Mockito.verifyNoInteractions(legacy);
+        AgentService service = mock(AgentService.class);
+        assertThrows(RuntimeException.class, () -> controller(service).createTask(
+                body(new AgentTaskCreateDTO()), null, null));
+        verifyNoInteractions(service);
     }
 
     @Test
-    void partialFundingBodyFailsClosedWithoutJwtAndNeverCallsLegacyCreate() {
-        AgentService legacy = mock(AgentService.class);
+    void everyRetiredFundingFieldIsRejectedEvenWhenBlankOrEmpty() {
+        List<Consumer<AgentTaskCreateDTO>> oldBodies = List.of(
+                request -> request.setGrossBountyAmountWen("100"),
+                request -> request.setGrossBountyAmountWen("0"),
+                request -> request.setGrossBountyAmountWen(""),
+                request -> request.setSettlementPolicy("GROSS_INCLUSIVE"),
+                request -> request.setSettlementPolicy(""),
+                request -> request.setRequiredSkillRequirements(List.of()));
+        AgentService service = mock(AgentService.class);
+        AgentController controller = controller(service);
+        for (var configure : oldBodies) {
+            AgentTaskCreateDTO request = new AgentTaskCreateDTO();
+            request.setTitle("original funded request");
+            configure.accept(request);
+            var failure = assertThrows(FundedBountyException.class,
+                    () -> controller.createTask(body(request), "original-key", jwt()));
+            assertEquals("FUNDED_BOUNTY_RETIRED", failure.code());
+            assertEquals(HttpStatus.GONE, failure.status());
+        }
+        verifyNoInteractions(service);
+    }
+
+    @Test
+    void retryOfRetiredCreateNeverCreatesAnOrdinaryReplacement() {
+        AgentService service = mock(AgentService.class);
+        AgentController controller = controller(service);
         AgentTaskCreateDTO request = new AgentTaskCreateDTO();
-        request.setTitle("funded");
+        request.setGrossBountyAmountWen("100");
+        for (int attempt = 0; attempt < 2; attempt++) {
+            assertThrows(FundedBountyException.class,
+                    () -> controller.createTask(body(request), "same-original-key", jwt()));
+        }
+        verifyNoInteractions(service);
+    }
+
+    @Test
+    void retiredFundingBodyDoesNotBypassJwtAuthentication() {
+        AgentService service = mock(AgentService.class);
+        AgentTaskCreateDTO request = new AgentTaskCreateDTO();
         request.setSettlementPolicy("GROSS_INCLUSIVE");
-        AgentController controller = new AgentController(
-                legacy, mock(AbilityEvaluationService.class), mock(FundedBountyService.class));
-
-        FundedBountyException failure = assertThrows(FundedBountyException.class,
-                () -> controller.createTask(new cn.jia.core.entity.JsonRequest<>(1, "test-request", request), null, null));
-
-        assertEquals("ECONOMY_UNAUTHENTICATED", failure.code());
-        verify(legacy, never()).createTask(any(), any());
+        assertThrows(cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException.class,
+                () -> controller(service).createTask(body(request), "original-key", null));
+        verifyNoInteractions(service);
     }
 
     @Test
-    void fundedCreateUsesOnlyExactJwtClaimsAndCanonicalSemanticDigest() {
-        AgentService legacy = mock(AgentService.class);
-        FundedBountyService funded = mock(FundedBountyService.class);
-        AgentTaskCreateDTO request = fundedRequest();
-        when(funded.create(any(), eq("018f0000-0000-7000-8000-000000000004"), any(), eq(request)))
-                .thenReturn(new AgentTaskDTO());
-        AgentController controller = new AgentController(
-                legacy, mock(AbilityEvaluationService.class), funded);
-
-        controller.createTask(new cn.jia.core.entity.JsonRequest<>(1, "test-request", request), "018f0000-0000-7000-8000-000000000004",
-                jwt("user-1", "Tenant-A", "Client-A"));
-        controller.createTask(new cn.jia.core.entity.JsonRequest<>(1, "test-request", request), "018f0000-0000-7000-8000-000000000004",
-                jwt("user-1", "Tenant-A", "Client-A"));
-
-        ArgumentCaptor<FundedBountyActor> actor = ArgumentCaptor.forClass(FundedBountyActor.class);
-        ArgumentCaptor<byte[]> digest = ArgumentCaptor.forClass(byte[].class);
-        verify(funded, org.mockito.Mockito.times(2)).create(actor.capture(),
-                eq("018f0000-0000-7000-8000-000000000004"), digest.capture(), eq(request));
-        assertEquals(new FundedBountyActor("0", "Client-A", "Tenant-A", "user-1"), actor.getAllValues().getFirst());
-        assertArrayEquals(digest.getAllValues().getFirst(), digest.getAllValues().getLast());
-        verify(legacy, never()).createTask(any(), any());
+    void legacyFundingWriteRoutesAndDependenciesAreAbsent() {
+        Set<String> retired = Set.of("/tasks/{taskId}/funding/cancel",
+                "/tasks/{taskId}/quotes", "/tasks/{taskId}/claim");
+        for (var method : AgentController.class.getDeclaredMethods()) {
+            PostMapping mapping = method.getAnnotation(PostMapping.class);
+            if (mapping != null) {
+                assertTrue(Arrays.stream(mapping.value()).noneMatch(retired::contains));
+                assertTrue(Arrays.stream(mapping.path()).noneMatch(retired::contains));
+            }
+        }
+        for (var field : AgentController.class.getDeclaredFields()) {
+            assertFalse(field.getType().getSimpleName().startsWith("FundedBounty"));
+        }
+        // Historical reads stay available, but no quote/claim compatibility redirect is installed.
+        assertDoesNotThrow(() -> AgentController.class.getMethod("getTask", String.class));
+        assertFalse(Arrays.stream(AgentController.class.getDeclaredMethods())
+                .anyMatch(method -> Set.of("quoteTask", "claimTask", "cancelTaskFunding").contains(method.getName())));
     }
 
-    @Test
-    void cancelRejectsNonCanonicalVersionBeforeServiceMutation() {
-        FundedBountyService funded = mock(FundedBountyService.class);
-        AgentController controller = new AgentController(mock(AgentService.class),
-                mock(AbilityEvaluationService.class), funded);
-        AgentTaskFundingCancelDTO request = new AgentTaskFundingCancelDTO();
-        request.setExpectedTaskVersion("01");
-
-        FundedBountyException failure = assertThrows(FundedBountyException.class,
-                () -> controller.cancelTaskFunding("task-1", new cn.jia.core.entity.JsonRequest<>(1, "test-request", request),
-                        "018f0000-0000-7000-8000-000000000005",
-                        jwt("user-1", "Tenant-A", "Client-A")));
-
-        assertEquals("BAD_REQUEST", failure.code());
-        verify(funded, never()).cancel(any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyLong());
+    private static AgentController controller(AgentService service) {
+        return new AgentController(service, mock(AbilityEvaluationService.class));
     }
 
-    @Test
-    void cancelPassesExactScopeAndParsedVersion() {
-        FundedBountyService funded = mock(FundedBountyService.class);
-        AgentTaskFundingCancelDTO request = new AgentTaskFundingCancelDTO();
-        request.setExpectedTaskVersion("8");
-        when(funded.cancel(any(), any(), any(), eq("task-1"), eq(8L))).thenReturn(
-                new AgentTaskFundingCancelReceiptDTO("task-1", "REFUNDED", "etx-1",
-                        "10", "0", "9", "2", "100"));
-        AgentController controller = new AgentController(mock(AgentService.class),
-                mock(AbilityEvaluationService.class), funded);
-
-        Object raw = controller.cancelTaskFunding("task-1", new cn.jia.core.entity.JsonRequest<>(1, "test-request", request),
-                "018f0000-0000-7000-8000-000000000005",
-                jwt("user-1", "Tenant-A", "Client-A"));
-
-        assertEquals("task-1", ((AgentTaskFundingCancelReceiptDTO) ((JsonResult<?>) raw).getData()).taskId());
-        verify(funded).cancel(eq(new FundedBountyActor("0", "Client-A", "Tenant-A", "user-1")),
-                eq("018f0000-0000-7000-8000-000000000005"), any(), eq("task-1"), eq(8L));
+    private static JsonRequest<AgentTaskCreateDTO> body(AgentTaskCreateDTO request) {
+        return new JsonRequest<>(1, "test-request", request);
     }
 
-    private static AgentTaskCreateDTO fundedRequest() {
-        AgentTaskCreateDTO request = new AgentTaskCreateDTO();
-        request.setTitle("funded");
-        request.setDescription("body");
-        request.setRequiredAbilities(List.of("test"));
-        request.setGrossBountyAmountMicro("1000000");
-        request.setSettlementPolicy("GROSS_INCLUSIVE");
-        AgentSkillRequirementDTO skill = new AgentSkillRequirementDTO();
-        skill.setSkillKey("repo-test");
-        skill.setVersionRange(">=1.0.0");
-        request.setRequiredSkillRequirements(List.of(skill));
-        return request;
-    }
-
-    private static JwtAuthenticationToken jwt(String subject, String owner, String client) {
+    private static JwtAuthenticationToken jwt() {
         Jwt token = Jwt.withTokenValue("token").header("alg", "none")
-                .claim("tenant_id", "0").claim("jiacn", owner).claim("client_id", client).subject(subject)
+                .claim("tenant_id", "0").claim("jiacn", "owner-1")
+                .claim("client_id", "Client-A").subject("payer-1")
                 .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();
         return new JwtAuthenticationToken(token, List.of());
     }
