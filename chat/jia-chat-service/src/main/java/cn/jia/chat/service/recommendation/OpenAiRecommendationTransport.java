@@ -76,9 +76,9 @@ public class OpenAiRecommendationTransport {
         if (options.getExtraBody() != null) options.getExtraBody().forEach((key, value) -> put(builder, key, value));
         try {
             var schema = com.openai.core.ObjectMappers.jsonMapper().readValue(options.getOutputSchema(),
-                    com.openai.models.shared.ResponseFormatJsonSchema.JsonSchema.Schema.class);
-            builder.responseFormat(com.openai.models.shared.ResponseFormatJsonSchema.builder().jsonSchema(
-                    com.openai.models.shared.ResponseFormatJsonSchema.JsonSchema.builder()
+                    com.openai.models.ResponseFormatJsonSchema.JsonSchema.Schema.class);
+            builder.responseFormat(com.openai.models.ResponseFormatJsonSchema.builder().jsonSchema(
+                    com.openai.models.ResponseFormatJsonSchema.JsonSchema.builder()
                             .name("json_schema").strict(true).schema(schema).build()).build());
         } catch (java.io.IOException invalid) {
             throw new IllegalArgumentException("Invalid recommendation output schema", invalid);
