@@ -27,4 +27,10 @@ public class EconomyConfiguration {
     public EconomyHostingRentSchemaInitializer economyHostingRentSchemaInitializer(JdbcTemplate jdbcTemplate) {
         return new EconomyHostingRentSchemaInitializer(jdbcTemplate);
     }
+    @org.springframework.context.annotation.Profile("schema-maintenance")
+    @Bean
+    @ConditionalOnProperty(prefix = "economy.usage-cost", name = "schema-enabled", havingValue = "true")
+    public EconomyUsageCostSchemaInitializer economyUsageCostSchemaInitializer(javax.sql.DataSource dataSource) {
+        return new EconomyUsageCostSchemaInitializer(dataSource);
+    }
 }
