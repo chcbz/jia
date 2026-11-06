@@ -2,7 +2,6 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.common.TaskEventPayload;
 import cn.jia.agent.common.TaskEventType;
-import cn.jia.agent.exception.AgentTaskWorkspaceException;
 import cn.jia.agent.dao.AgentTaskArtifactDao;
 import cn.jia.agent.dao.AgentTaskFormalDeliveryDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
@@ -133,10 +132,10 @@ class AgentTaskFormalDeliveryServiceImplTest {
         assertDoesNotThrow(() -> AgentTaskWorkspaceEventValidator.validate(reviewing.getEventType(),
                 TaskEventType.ActorType.SYSTEM, null, reviewing.getAggregateType(),
                 reviewing.getAggregateId(), reviewingPayload, TASK));
-        assertThrows(AgentTaskWorkspaceException.class, () -> AgentTaskWorkspaceEventValidator.validate(
+        assertThrows(IllegalArgumentException.class, () -> AgentTaskWorkspaceEventValidator.validate(
                 reviewing.getEventType(), TaskEventType.ActorType.AGENT, null,
                 reviewing.getAggregateType(), reviewing.getAggregateId(), reviewingPayload, TASK));
-        assertThrows(AgentTaskWorkspaceException.class, () -> AgentTaskWorkspaceEventValidator.validate(
+        assertThrows(IllegalArgumentException.class, () -> AgentTaskWorkspaceEventValidator.validate(
                 TaskEventType.TASK_STARTED, reviewing.getActorType(), reviewing.getActorId(),
                 reviewing.getAggregateType(), reviewing.getAggregateId(), reviewingPayload, TASK));
 
