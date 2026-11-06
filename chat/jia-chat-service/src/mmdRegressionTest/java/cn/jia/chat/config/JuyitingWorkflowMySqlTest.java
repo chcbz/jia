@@ -511,7 +511,7 @@ class JuyitingWorkflowMySqlTest {
         initialize();
         jdbc.execute("DROP TABLE agent_task_formal_delivery");
         jdbc.execute("DROP TABLE agent_task_meta");
-        for (String table : List.of("agent_task_meta", "agent_task_member", "agent_task_work_item", "agent_task_event"))
+        for (String table : List.of("agent_task_meta", "agent_task_member", "agent_task_work_item", "agent_task_event", "agent_task_artifact"))
             jdbc.execute(productionTable(table));
         for (String sql : resource("db/agent-task-formal-delivery-r2.sql").split(";"))
             if (!sql.isBlank()) jdbc.execute(sql);
@@ -520,6 +520,8 @@ class JuyitingWorkflowMySqlTest {
         jdbc.update("INSERT INTO agent_task_work_item(tenant_id,client_id,owner_jiacn,task_id,work_item_id,title,work_type,assignee_agent_id,status,result_artifact_id,submitted_at,version) VALUES('0','client','owner','task','work','本轮成果','document','wuyong','submitted','manifest',1,0)");
         jdbc.update("INSERT INTO agent_task_formal_delivery(tenant_id,client_id,task_id,work_item_id,delivery_id,revision,producer_agent_id,run_id,summary,state,submission_digest,manifest_artifact_id,manifest_artifact_version,submitted_at,version) VALUES('0','client','task','work','delivery',1,'wuyong','run','本轮成果','submitted',?,'manifest',1,1,0)","f".repeat(64));
         jdbc.update("INSERT INTO agent_task_formal_delivery_item(tenant_id,client_id,delivery_id,artifact_id,artifact_version,content_hash,purpose,item_order) VALUES('0','client','delivery','result',1,?,'RESULT',0),('0','client','delivery','manifest',1,?,'MANIFEST',1)","a".repeat(64),"b".repeat(64));
+        // The window read joins immutable artifact-version metadata; use production DDL and real rows.
+        jdbc.update("INSERT INTO agent_task_artifact(artifact_id,task_id,owner_jiacn,producer_agent_id,artifact_type,title,content,content_hash,artifact_version,created_at,tenant_id,client_id) VALUES('result','task','owner','wuyong','document','正文','result',?,1,1,'0','client'),('manifest','task','owner','wuyong','document','清单','manifest',?,1,1,'0','client')", "a".repeat(64), "b".repeat(64));
         // Exact committed workspace provenance used by the production source read projection.
         jdbc.execute("CREATE TABLE agent_personal_workspace_execution(tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),execution_id VARCHAR(100),task_id VARCHAR(100))");
         jdbc.execute("CREATE TABLE agent_personal_workspace_execution_output(tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),execution_id VARCHAR(100),workspace_file_id VARCHAR(100),workspace_file_version INT,formal_delivery_id VARCHAR(100),artifact_id VARCHAR(100),artifact_version INT,content_hash CHAR(64),output_state VARCHAR(24),publication_state VARCHAR(24))");
