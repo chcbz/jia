@@ -47,6 +47,8 @@ dependencies {
     testImplementation project(':economy:jia-economy-service')
     testImplementation project(':economy:jia-economy-mapper')
     testImplementation project(':oauth:jia-oauth-api')
+    testImplementation project(':oauth:jia-oauth-resource')
+    testImplementation project(':chat:jia-chat-service')
     testImplementation 'org.springframework.security:spring-security-oauth2-resource-server'
     testImplementation 'org.springframework.security:spring-security-oauth2-jose'
     testImplementation platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}")

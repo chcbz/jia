@@ -2,7 +2,8 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.common.TaskEventType;
 import cn.jia.agent.api.AgentTaskDeliberationOperationController;
-import cn.jia.agent.api.AgentTaskFormalDeliveryController;
+import cn.jia.chat.api.AgentTaskDeliveryReviewController;
+import cn.jia.chat.service.*;
 import cn.jia.agent.api.AgentTaskCancellationController;
 import cn.jia.core.config.*;
 import cn.jia.core.filter.RequestIdFilter;
@@ -105,6 +106,9 @@ class AgentTaskBillingMySqlTransactionTest {
     private boolean failOccupation;
     private String quoteId;
     private AgentTaskDeliberationOperationReadService operationReads;
+    private AgentTaskFormalDeliveryReadService deliveryReads;
+    private ChatTaskDeliveryReviewService reviews;
+    private ChatTaskDeliveryReviewReadService reviewSources;
     @org.junit.jupiter.api.io.TempDir Path httpDirectory;
     private Tomcat httpServer;
     private AnnotationConfigWebApplicationContext httpContext;
@@ -146,7 +150,7 @@ class AgentTaskBillingMySqlTransactionTest {
         new EconomySchemaInitializer(jdbc).afterPropertiesSet();
         // Read unchanged production definitions; no parallel hand-written table schema.
         String schema = Files.readString(DDL.resolve("schema.sql"));
-        for (String table : List.of("agent_task_meta", "agent_task_member", "agent_task_work_item", "agent_task_event")) {
+        for (String table : List.of("agent_task_meta", "agent_task_member", "agent_task_work_item", "agent_task_event", "agent_task_artifact")) {
             int start = schema.indexOf("CREATE TABLE IF NOT EXISTS " + table + " (");
             assertTrue(start >= 0, table);
             jdbc.execute(schema.substring(start, schema.indexOf(";\n", start)));
@@ -225,6 +229,9 @@ class AgentTaskBillingMySqlTransactionTest {
         when(authority.requireGrantTarget(eq(TENANT), eq(CLIENT), eq(OWNER), anyString(), anyString(), anyLong()))
                 .thenReturn(target);
         assignment.setAssigneeAuthority(authority);
+        deliveryReads = proxy(new AgentTaskFormalDeliveryReadServiceImpl(
+                new AgentTaskFormalDeliveryDaoImpl(sql.getMapper(AgentTaskFormalDeliveryMapper.class)), meta),
+                AgentTaskFormalDeliveryReadService.class);
         decisions = proxy(new AgentTaskFormalDeliveryDecisionServiceImpl(
                 new AgentTaskFormalDeliveryDaoImpl(sql.getMapper(AgentTaskFormalDeliveryMapper.class)),
                 meta, members, work, roots, events, billing), AgentTaskFormalDeliveryDecisionService.class);
@@ -662,9 +669,14 @@ class AgentTaskBillingMySqlTransactionTest {
         assertEquals(50, wallet(independent)); assertEquals("HELD", charge());
         assertEquals(1, count("economy_transaction")); assertEquals(1, count("agent_task_execution_grant"));
         prepareSubmitted();
-        String decision = "{\"expectedTaskVersion\":\"4\",\"expectedDeliveryVersion\":\"0\",\"decision\":\"accepted\"}";
-        httpPost("/formal-deliveries/delivery-1/decision", decision, "accept-http", true, 200);
-        httpPost("/formal-deliveries/delivery-1/decision", decision, "accept-http", true, 200);
+        var batch = deliveryReads.listForTaskOwner(TENANT, CLIENT, OWNER, TASK).getFirst();
+        String decision = ChatDeliveryReviewContract.json(ChatDeliveryReviewContract.body(
+                new ChatDeliveryReviewContract.Accept("delivery-1", 4, 0, 1,
+                        ChatDeliveryReviewContract.batchDigest(TASK, batch))));
+        httpPost("/delivery-review-operations", decision, "accept-http", true, 200);
+        httpPost("/delivery-review-operations", decision, "accept-http", true, 200);
+        assertEquals(1, count("chat_task_delivery_review_operation"));
+        assertEquals("COMMITTED", jdbc.queryForObject("SELECT state FROM chat_task_delivery_review_operation", String.class));
         assertEquals("CAPTURED", charge()); assertEquals("completed", taskState());
         assertEquals(50, wallet(independent)); assertEquals(2, count("economy_transaction"));
     }
@@ -696,6 +708,18 @@ class AgentTaskBillingMySqlTransactionTest {
     }
     private void pointHttp(int expected) throws Exception { httpPost("/point-and-deliberate", pointBody(), "assign-http", true, expected); }
     private void startHttp() throws Exception {
+        // The current Web uses delivery-review-operations, not the legacy raw-body formal decision route.
+        new ResourceDatabasePopulator(new org.springframework.core.io.ClassPathResource("db/chat-task-delivery-review-v1.sql"))
+                .execute(jdbc.getDataSource());
+        var store = new ChatTaskDeliveryReviewStore(jdbc);
+        reviewSources = mock(ChatTaskDeliveryReviewReadService.class);
+        // Material carrier availability is the same declared fixture observation as assignment inputs;
+        // the persisted batch, operation, decision and wallet are all real SQL/services.
+        when(reviewSources.sourceItems(any(), eq(TASK), any())).thenReturn(List.of(
+                new ChatTaskDeliveryReviewReadService.Item("artifact-1", "1", "a".repeat(64), "result", "RESULT", null, null)));
+        var reviewTransactions = proxy(new ChatTaskDeliveryReviewTransaction(roots, store, deliveryReads, decisions, reviewSources),
+                ChatTaskDeliveryReviewTransaction.class);
+        reviews = new ChatTaskDeliveryReviewService(store, reviewTransactions, new ChatSelectedOutputFinalizationStore(jdbc));
         signingKey = new byte[32]; new SecureRandom().nextBytes(signingKey);
         var decoder = NimbusJwtDecoder.withSecretKey(new SecretKeySpec(signingKey, "HmacSHA256"))
                 .macAlgorithm(MacAlgorithm.HS256).build();
@@ -710,15 +734,18 @@ class AgentTaskBillingMySqlTransactionTest {
             factory.registerSingleton("jwtDecoder", decoder);
             factory.registerSingleton("assignmentController", new AgentTaskDeliberationOperationController(operationReads, assignment));
             factory.registerSingleton("cancellationController", new AgentTaskCancellationController(cancellation));
-            factory.registerSingleton("decisionController", new AgentTaskFormalDeliveryController(
-                    mock(AgentTaskFormalDeliveryService.class), decisions, mock(AgentTaskFormalDeliveryReadService.class),
-                    mock(AgentTaskReworkExecutionService.class)));
+            factory.registerSingleton("decisionController", new AgentTaskDeliveryReviewController(reviews,
+                    new HumanSenderIdentityResolver(mock(cn.jia.user.service.UserService.class)),
+                    new TenantScopeResolver(), reviewSources));
         });
         httpContext.refresh();
         Tomcat.addServlet(context, "dispatcher", new DispatcherServlet(httpContext)).setLoadOnStartup(1);
         context.addServletMappingDecoded("/", "dispatcher");
         addHttpFilter(context, "requestId", new RequestIdFilter());
+        addHttpFilter(context, "contextLifecycle", new cn.jia.core.filter.EsContextFilter());
         addHttpFilter(context, "security", new DelegatingFilterProxy("springSecurityFilterChain", httpContext));
+        addHttpFilter(context, "authenticatedContext", new cn.jia.oauth.filter.EsSecurityContextFilter(
+                new cn.jia.core.security.FixedTenantAdmissionPolicy(TENANT, CLIENT)));
         httpServer.start(); origin = "http://127.0.0.1:" + httpServer.getConnector().getLocalPort();
     }
     private static void addHttpFilter(org.apache.catalina.Context context, String name, jakarta.servlet.Filter filter) {
