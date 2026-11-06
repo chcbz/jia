@@ -7,6 +7,9 @@ dependencies {
     testImplementation project(':common:jia-common-test')
     testImplementation libs.spring.security.oauth2.resource.server
     testImplementation libs.spring.security.oauth2.jose
+    testImplementation libs.spring.security.config
+    testImplementation 'org.springframework.security:spring-security-web'
+    testImplementation 'org.apache.tomcat.embed:tomcat-embed-core'
     testRuntimeOnly libs.mysql
 }
 
@@ -45,4 +48,11 @@ tasks.register('economyHostingRegression', Test) {
     testClassesDirs = economyHostingRegressionSourceSet.output.classesDirs
     classpath = economyHostingRegressionSourceSet.runtimeClasspath
     useJUnitPlatform()
+}
+
+// Real HTTP fixtures use the same Servlet/Spring versions as the application artifact.
+gradle.projectsEvaluated {
+    def applicationRuntime = project(':starter').configurations.runtimeClasspath
+    configurations.testCompileClasspath.shouldResolveConsistentlyWith(applicationRuntime)
+    configurations.testRuntimeClasspath.shouldResolveConsistentlyWith(applicationRuntime)
 }
