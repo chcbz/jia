@@ -136,6 +136,19 @@ class ConversationDeliverableReadAdapterTest {
     }
 
     @Test
+    void cancelledTaskKeepsStagedOutputHiddenWithoutClaimingPublicationIsPending() {
+        Map<String, Object> staged = base("TASK", "CANCELLED", "STAGED");
+        staged.put("workspace_file_id", null);
+        staged.put("workspace_file_version", null);
+        staged.put("committed_at", null);
+        jdbc.rows = List.of(staged);
+        var page = adapter.list(SCOPE, CONVERSATION, 100);
+        assertEquals("EMPTY", page.state());
+        assertTrue(page.items().isEmpty());
+        assertFalse(page.publicationPending());
+    }
+
+    @Test
     void publishedTaskOutputRequiresExactArtifactAndFormalDeliveryReferences() {
         Map<String, Object> published = committed("TASK");
         published.put("publication_state", "PUBLISHED");

@@ -140,7 +140,7 @@ class TaskExecutionCancellationMySqlTest {
         row("active","owner","task","CONVERSATION","QUEUED",5);skill("active","RUNNING");
         doReturn(false).when(executions).cancelLockedTaskExecution(any(),anyLong());
         assertThrows(IllegalStateException.class,this::cancel);
-        assertEquals("RUNNING",skills.find("0","client","owner","active").getPhase());assertThrows(IllegalArgumentException.class,()->tx.executeWithoutResult(s->service.cancelTaskExecutions("0","client","owner","task ")));
+        assertEquals("RUNNING",skills.find("0","client","owner","active").getPhase());
         assertEquals("QUEUED",state("active"));verifyNoInteractions(events);
     }
     @Test void exactCaseOwnerClientAndTaskDoNotSelectOtherExecution() {

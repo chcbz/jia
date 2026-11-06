@@ -101,7 +101,8 @@ public class ConversationDeliverableReadAdapter {
             if (!Set.of("STAGED", "COMMITTED").contains(outputState)) throw corrupt();
             if ("STAGED".equals(outputState)) {
                 if ("OUTPUT_STAGED".equals(executionState)) pending = true;
-                else if (!"FAILED".equals(executionState)) throw corrupt();
+                else if (!"FAILED".equals(executionState)
+                        && !("TASK".equals(executionMode) && "CANCELLED".equals(executionState))) throw corrupt();
                 continue;
             }
             if (!"OUTPUT_COMMITTED".equals(executionState)) throw corrupt();
