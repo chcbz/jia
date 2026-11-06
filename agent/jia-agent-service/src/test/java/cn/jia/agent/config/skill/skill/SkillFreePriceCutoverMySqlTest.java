@@ -23,8 +23,11 @@ class SkillFreePriceCutoverMySqlTest {
     private JdbcTemplate jdbc;
 
     @BeforeEach void prepare() throws Exception {
-        fixture.start(); database = fixture.newDatabase("freeprice"); jdbc = database.jdbc();
-        new SkillSchemaInitializer(jdbc).afterPropertiesSet(); seed();
+        fixture.start(); scenario("freeprice", null, null);
+    }
+    private void scenario(String suffix, String nonzeroTable, String receiptEscrow) throws Exception {
+        database = fixture.newDatabase(suffix); jdbc = database.jdbc();
+        new SkillSchemaInitializer(jdbc).afterPropertiesSet(); seed(nonzeroTable, receiptEscrow);
         for (String table : PRICED) jdbc.execute("ALTER TABLE " + table + " RENAME COLUMN " + price(table, "wen") + " TO " + price(table, "micro"));
         String operatorSql = new ClassPathResource("db/migrations/20261106-free-skill-price-columns.sql").getContentAsString(StandardCharsets.UTF_8);
         // JDBC sends one CREATE statement; DELIMITER belongs only to the mysql CLI, not SQL semantics.
@@ -49,27 +52,30 @@ class SkillFreePriceCutoverMySqlTest {
         call("WEN"); assertUnit("wen"); assertEquals(rows, rows());
         call("MICRO"); assertUnit("micro"); assertEquals(rows, rows());
     }
-    @Test void eachNonzeroPriceRejectsBeforeAnyRenameAndCannotBeReversedAsOldMoney() {
+    @Test void eachNonzeroPriceRejectsBeforeAnyRenameAndCannotBeReversedAsOldMoney() throws Exception {
+        int index = 0;
         for (String table : PRICED) {
-            jdbc.update("UPDATE " + table + " SET " + price(table, "micro") + "=1");
+            // Published versions, quotes and receipts are immutable. Seed the fact at INSERT,
+            // never remove a trigger or mutate protected history merely to manufacture a fixture.
+            scenario("nonzero_" + index++, table, null);
             var before = rows();
             assertThrows(DataAccessException.class, () -> call("WEN"));
             assertUnit("micro"); assertEquals(before, rows()); assertReleased();
-            jdbc.update("UPDATE " + table + " SET " + price(table, "micro") + "=0");
         }
+        scenario("reverse", null, null);
         call("WEN"); jdbc.update("UPDATE economy_skill_order SET price_wen=1");
         assertThrows(DataAccessException.class, () -> call("MICRO")); assertUnit("wen"); assertReleased();
     }
-    @Test void financialReferencesAndAmbiguousColumnsAreNotErasedOrGuessed() {
+    @Test void financialReferencesAndAmbiguousColumnsAreNotErasedOrGuessed() throws Exception {
         for (String column : List.of("escrow_id", "reserve_transaction_id", "capture_transaction_id", "refund_transaction_id")) {
             jdbc.update("UPDATE economy_skill_order SET " + column + "='historical-reference'");
             var before = rows(); assertThrows(DataAccessException.class, () -> call("WEN"));
             assertUnit("micro"); assertEquals(before, rows()); assertReleased();
             jdbc.update("UPDATE economy_skill_order SET " + column + "=NULL");
         }
-        jdbc.update("UPDATE economy_skill_order_receipt SET escrow_id='historical-reference'");
+        scenario("receiptref", null, "historical-reference");
         assertThrows(DataAccessException.class, () -> call("WEN")); assertUnit("micro");
-        jdbc.update("UPDATE economy_skill_order_receipt SET escrow_id=NULL");
+        scenario("ambiguous", null, null);
         jdbc.execute("ALTER TABLE economy_skill_order ADD price_wen BIGINT NOT NULL DEFAULT 0");
         assertThrows(DataAccessException.class, () -> call("WEN"));
         assertEquals(4, columns("micro")); assertEquals(1, columns("wen")); assertReleased();
@@ -111,28 +117,29 @@ class SkillFreePriceCutoverMySqlTest {
             FROM information_schema.triggers WHERE trigger_schema=DATABASE() ORDER BY value
             """, String.class);
     }
-    private void seed() {
+    private static long amount(String selected, String table) { return table.equals(selected) ? 1L : 0L; }
+    private void seed(String nonzeroTable, String receiptEscrow) {
         jdbc.update("INSERT INTO agent_skill_product(product_id,name,description,status,tenant_id,client_id,create_time,update_time) VALUES('p','skill','synthetic','ACTIVE','tenant','client',1,1)");
         jdbc.update("""
             INSERT INTO agent_skill_product_version(product_version_id,product_id,version_sequence,skill_key,skill_version,price_wen,
               package_sha256,package_size,approved_permissions_manifest,approved_permissions_sha256,deployment_restriction,tenant_id,client_id,create_time)
-            VALUES('v','p',1,'key','1.0.0',0,UNHEX(SHA2('synthetic-package',256)),17,'[]',UNHEX(SHA2('[]',256)),'NONE','tenant','client',1)
-            """);
+            VALUES('v','p',1,'key','1.0.0',?,UNHEX(SHA2('synthetic-package',256)),17,'[]',UNHEX(SHA2('[]',256)),'NONE','tenant','client',1)
+            """, amount(nonzeroTable, "agent_skill_product_version"));
         jdbc.update("""
             INSERT INTO economy_skill_purchase_quote(quote_id,actor_type,actor_id,idempotency_key,request_hash,product_version_id,target_agent_id,
               expected_agent_version,expected_price_wen,approved_permissions_manifest,approved_permissions_sha256,deployment_restriction,expires_at,tenant_id,client_id,create_time)
-            VALUES('q','USER','buyer','quote-key',UNHEX(SHA2('request',256)),'v','agent',1,0,'[]',UNHEX(SHA2('[]',256)),'NONE',10,'tenant','client',1)
-            """);
+            VALUES('q','USER','buyer','quote-key',UNHEX(SHA2('request',256)),'v','agent',1,?,'[]',UNHEX(SHA2('[]',256)),'NONE',10,'tenant','client',1)
+            """, amount(nonzeroTable, "economy_skill_purchase_quote"));
         jdbc.update("""
             INSERT INTO economy_skill_order(order_id,quote_id,product_version_id,target_agent_id,buyer_type,buyer_id,seller_type,seller_id,
               price_wen,expected_agent_version,permission_grant_version,approved_permissions_manifest,approved_permissions_sha256,status,tenant_id,client_id,held_at,active_at,update_time)
-            VALUES('o','q','v','agent','USER','buyer','SYSTEM','SKILL_STORE',0,1,1,'[]',UNHEX(SHA2('[]',256)),'ACTIVE','tenant','client',1,2,2)
-            """);
+            VALUES('o','q','v','agent','USER','buyer','SYSTEM','SKILL_STORE',?,1,1,'[]',UNHEX(SHA2('[]',256)),'ACTIVE','tenant','client',1,2,2)
+            """, amount(nonzeroTable, "economy_skill_order"));
         jdbc.update("""
             INSERT INTO economy_skill_order_receipt(order_id,actor_type,actor_id,idempotency_key,request_hash,order_version,order_status,
-              price_wen,permission_grant_version,approved_permissions_sha256,tenant_id,client_id,create_time)
-            VALUES('o','USER','buyer','receipt-key',UNHEX(SHA2('request',256)),1,'ACTIVE',0,1,UNHEX(SHA2('[]',256)),'tenant','client',2)
-            """);
+              price_wen,permission_grant_version,approved_permissions_sha256,escrow_id,tenant_id,client_id,create_time)
+            VALUES('o','USER','buyer','receipt-key',UNHEX(SHA2('request',256)),1,'ACTIVE',?,1,UNHEX(SHA2('[]',256)),?,'tenant','client',2)
+            """, amount(nonzeroTable, "economy_skill_order_receipt"), receiptEscrow);
         jdbc.update("""
             INSERT INTO agent_skill_installation(installation_id,order_id,product_version_id,target_agent_id,message_id,request_id,command_id,
               attempt,fencing_token,delivery_epoch,skill_key,skill_version,package_size,package_sha256,download_path,status,tenant_id,client_id,create_time,installed_at,update_time)
