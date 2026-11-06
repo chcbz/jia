@@ -136,7 +136,7 @@ let browser, ws, server;
   assert.equal(posts.length, 1);
   assert.equal(posts[0].status, input.scenario === 'reserve' ? 200 : 409);
   progress('financial-response');
-  if (input.scenario === 'reserve') await wait("document.body.innerText.includes('正在准备会话')", 'authoritative assignment pending feedback');
+  if (input.scenario === 'reserve') await wait("document.querySelector('.matter-send-status [role=status]')?.innerText === '正在准备议事…需求已保存，无需重复提交。'", 'authoritative assignment pending feedback');
   if (input.scenario === 'insufficient') await wait("document.body.innerText.includes('可用文余额不足，无法确认承办；本次未预占费用。')", 'authoritative insufficient-funds feedback');
   // Read through the browser transport again; Java independently checks the same committed DB.
   const wallet = await evaluate(`fetch(${JSON.stringify(walletUrl)},{headers:{Authorization:'Bearer '+JSON.parse(localStorage.getItem('api_token')).data,'X-Request-Id':'browser-wallet-after'}}).then(r=>r.json())`);
