@@ -18,3 +18,11 @@
 本地只读核对Maven官方发布的Spring AI `spring-ai-model`/`spring-ai-openai` 2.0.0 source jar（与项目plugin指定版本一致）：`OpenAiChatModel`将Provider的CompletionUsage保留为nativeUsage，保留真实响应id/model，缓存读取映射自prompt细目。文档与制品摘要证据位于根任务`usage-provider-source-20261106.json`。只读获取源码不运行模型、不修改生产依赖。
 
 官方app-server文档`https://learn.chatgpt.com/docs/app-server`只确认tokenUsage通知；未证明last为整个turn或total可直接归属一次收费。因此Runtime原始证据继续UNVERIFIED，不因直接Chat Completions适配已完成就套用到Codex。
+
+### Recommendation source adapter (candidate 2026-11-06)
+
+- Trusted task context is passed by `AssigneeRecommendationService`; the model never supplies owner/task identity. `RecommendationCostRecorder` writes one independent pending attempt before the paid call and its response evidence before business-JSON validation. Failed inference, crash or response-write failure remains an explicit pending attempt, not free usage and not permission to replay the provider. No wallet/root lock is held across the call; there is no volatile async queue.
+- `ModelPriceCatalog` reuses the configured exact-key index independently of workload estimation. The pre-call manual CNY price is retained. Actual model/channel/tier mismatch or incomplete evidence stays pending; configuration updates cannot silently reprice the original invocation.
+- SDK automatic retries are disabled for this single-shot source so one observed call is not misrepresented as multiple hidden billable attempts. A deliberate new recommendation has a distinct source attempt. This does not assert that an unknown network failure incurred zero upstream cost.
+- Spring AI 2.0.0 drops the SDK's standard `serviceTier` property from ChatResponseMetadata. The adapter retains raw usage and prices only when actual tier evidence exists; missing tier is not replaced with requested tier. Direct provider-tier capture remains to be completed, so this candidate is **not** full priced-source coverage. Likewise, no cross-process response journal/reconciliation is claimed for the narrow response-before-database-failure window.
+- Regression: `RecommendationCostRecorderTest`, `AssigneeRecommendationModelTest` (real HTTP 500 verifies no hidden SDK retries), and `AssigneeRecommendationServiceTest` trusted binding. Formal evidence belongs to the subsequent fixed-source Flow run, not the earlier ledger Run560.

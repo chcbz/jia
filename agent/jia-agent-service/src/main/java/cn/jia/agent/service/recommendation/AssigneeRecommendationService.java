@@ -56,7 +56,8 @@ public final class AssigneeRecommendationService {
                 String inputJson = JSON.writeValueAsString(input);
                 String schema = outputSchema(candidates);
                 modelStarted = System.nanoTime();
-                try { raw = model.judge(inputJson, schema); }
+                try { raw = model.judge(new AgentAssigneeRecommendationModel.Context(
+                        actor.tenantId(), actor.clientId(), actor.ownerJiacn(), taskId), inputJson, schema); }
                 finally { modelEnded = System.nanoTime(); }
             } catch (Failure error) { throw error; }
             catch (Exception unavailable) { throw new Failure(503, "RECOMMENDATION_UNAVAILABLE"); }

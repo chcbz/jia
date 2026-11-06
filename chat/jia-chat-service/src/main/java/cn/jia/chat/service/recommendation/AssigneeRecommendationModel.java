@@ -15,12 +15,14 @@ import static cn.jia.agent.entity.AssigneeRecommendation.*;
 @Component
 public final class AssigneeRecommendationModel implements cn.jia.agent.service.AgentAssigneeRecommendationModel {
     private final ChatModel model;
+    private final RecommendationCostRecorder costs;
     private final String recommendationModel;
     private final String reasoningEffort;
-    public AssigneeRecommendationModel(@Lazy ChatModel model,
+    public AssigneeRecommendationModel(@Lazy ChatModel model, RecommendationCostRecorder costs,
             @org.springframework.beans.factory.annotation.Value("${jia.chat.recommendation.model:}") String recommendationModel,
             @org.springframework.beans.factory.annotation.Value("${jia.chat.recommendation.reasoning-effort:}") String reasoningEffort) {
         this.model = model;
+        this.costs = costs;
         this.recommendationModel = recommendationModel.strip();
         this.reasoningEffort = reasoningEffort.strip();
     }
@@ -69,7 +71,7 @@ public final class AssigneeRecommendationModel implements cn.jia.agent.service.A
         上例仅示意一个候选，实际必须填写JSON Schema要求的全部候选键，包括LOW和UNKNOWN。
         """;
     @Override
-    public String judge(String inputJson, String outputSchema) {
+    public String judge(Context context, String inputJson, String outputSchema) {
         // A global model with implicit tool defaults is not safe for this read-only purpose.
         ChatOptions modelOptions = model.getOptions();
         if (modelOptions instanceof ToolCallingChatOptions defaults
@@ -91,8 +93,11 @@ public final class AssigneeRecommendationModel implements cn.jia.agent.service.A
         }
         if (!(options instanceof org.springframework.ai.openai.OpenAiChatOptions structured))
             throw new Failure(503, "RECOMMENDATION_UNAVAILABLE");
-        options = structured.mutate().outputSchema(outputSchema).build();
+        // A recommendation is one billable attempt, not an opaque SDK retry group.
+        options = structured.mutate().outputSchema(outputSchema).maxRetries(0).build();
+        var attempt = costs.begin(context, options.getModel());
         var response = model.call(new Prompt(List.of(new SystemMessage(INSTRUCTIONS), new UserMessage(inputJson)), options));
+        costs.complete(attempt, response);
         if (response == null || response.getResult() == null || response.getResult().getOutput() == null
                 || response.getResult().getOutput().hasToolCalls())
             throw new Failure(502, "RECOMMENDATION_INVALID_RESULT");
