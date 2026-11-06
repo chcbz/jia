@@ -11,6 +11,9 @@ import reactor.core.Disposable;
 import reactor.core.publisher.BaseSubscriber;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
+import reactor.core.publisher.Sinks;
+import org.springframework.http.codec.ServerSentEvent;
+import java.util.ArrayList;
 
 import java.time.Duration;
 import java.util.List;
@@ -103,6 +106,94 @@ class ChatStreamPolicyTest {
         assertTrue(subscriber.failed.await(1, TimeUnit.SECONDS));
         assertEquals(ChatStreamPolicy.OUTBOUND_BUFFER_LIMIT, subscriber.received.get());
         assertTrue(subscriber.failure.get() instanceof IllegalStateException);
+    }
+
+    @Test
+    void keepAliveEmitsOnlyCommentsAndStopsWhenBusinessCompletes() {
+        Sinks.Many<ServerSentEvent<String>> business = Sinks.many().unicast().onBackpressureBuffer();
+        Sinks.Many<Long> ticks = Sinks.many().multicast().directBestEffort();
+        AtomicBoolean timerCancelled = new AtomicBoolean();
+        AtomicBoolean completed = new AtomicBoolean();
+        List<ServerSentEvent<String>> received = new ArrayList<>();
+        ChatStreamPolicy.keepAlive(business.asFlux(),
+                () -> ServerSentEvent.<String>builder().comment("keep-alive").build(),
+                ticks.asFlux().doOnCancel(() -> timerCancelled.set(true)))
+                .subscribe(received::add, failure -> { throw new AssertionError(failure); },
+                        () -> completed.set(true));
+        ticks.tryEmitNext(0L);
+        ServerSentEvent<String> comment = received.get(0);
+        assertEquals("keep-alive", comment.comment());
+        assertEquals(null, comment.data());
+        assertEquals(null, comment.id());
+        assertEquals(null, comment.event());
+        ServerSentEvent<String> event = ServerSentEvent.builder("body").id("cursor-1").build();
+        business.tryEmitNext(event);
+        business.tryEmitComplete();
+        assertEquals(List.of(comment, event), received);
+        assertTrue(completed.get());
+        assertTrue(timerCancelled.get());
+    }
+
+    @Test
+    void keepAlivePreservesErrorAndDisposesTimer() {
+        Sinks.Many<String> business = Sinks.many().unicast().onBackpressureBuffer();
+        AtomicBoolean timerCancelled = new AtomicBoolean();
+        AtomicReference<Throwable> actual = new AtomicReference<>();
+        RuntimeException expected = new IllegalStateException("business failure");
+        ChatStreamPolicy.keepAlive(business.asFlux(), () -> "comment",
+                Flux.<Long>never().doOnCancel(() -> timerCancelled.set(true)))
+                .subscribe(ignored -> { }, actual::set);
+        business.tryEmitError(expected);
+        assertEquals(expected, actual.get());
+        assertTrue(timerCancelled.get());
+    }
+
+    @Test
+    void keepAliveCancellationDisposesBusinessAndTimer() {
+        AtomicBoolean businessCancelled = new AtomicBoolean();
+        AtomicBoolean timerCancelled = new AtomicBoolean();
+        Disposable subscription = ChatStreamPolicy.keepAlive(
+                Flux.<String>never().doOnCancel(() -> businessCancelled.set(true)), () -> "comment",
+                Flux.<Long>never().doOnCancel(() -> timerCancelled.set(true)))
+                .subscribe();
+        subscription.dispose();
+        assertTrue(businessCancelled.get());
+        assertTrue(timerCancelled.get());
+    }
+
+    @Test
+    void synchronousBusinessCompletionDoesNotLeaveHeartbeatOpen() {
+        assertEquals(List.of("a", "b"), ChatStreamPolicy.keepAlive(
+                Flux.just("a", "b"), () -> "comment", Flux.never())
+                .collectList().block(Duration.ofSeconds(1)));
+        assertEquals(List.of(), ChatStreamPolicy.keepAlive(
+                Flux.empty(), () -> "comment", Flux.never())
+                .collectList().block(Duration.ofSeconds(1)));
+    }
+
+    @Test
+    void keepAliveSubscribesOnceAndDoesNotEagerlyDrainReplay() {
+        AtomicInteger subscriptions = new AtomicInteger();
+        AtomicInteger produced = new AtomicInteger();
+        AtomicInteger comments = new AtomicInteger();
+        AtomicBoolean businessCancelled = new AtomicBoolean();
+        Sinks.Many<Long> ticks = Sinks.many().multicast().directBestEffort();
+        NoDemandSubscriber<Integer> subscriber = new NoDemandSubscriber<>();
+        ChatStreamPolicy.keepAlive(Flux.range(0, 10000)
+                        .doOnSubscribe(ignored -> subscriptions.incrementAndGet())
+                        .doOnNext(ignored -> produced.incrementAndGet())
+                        .doOnCancel(() -> businessCancelled.set(true)),
+                () -> { comments.incrementAndGet(); return -1; }, ticks.asFlux())
+                .subscribe(subscriber);
+        for (long i = 0; i < 10000; i++) ticks.tryEmitNext(i);
+        assertEquals(1, subscriptions.get());
+        assertEquals(1, produced.get());
+        assertEquals(1, comments.get());
+        assertEquals(0, subscriber.received.get());
+        assertEquals(null, subscriber.failure.get());
+        subscriber.dispose();
+        assertTrue(businessCancelled.get());
+        assertEquals(0, ticks.currentSubscriberCount());
     }
 
     private static List<ILoggingEvent> captureLogs(Runnable action) {

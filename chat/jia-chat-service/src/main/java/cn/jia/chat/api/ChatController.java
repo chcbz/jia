@@ -772,7 +772,9 @@ public class ChatController {
             // onBackpressureBuffer here requests the entire history and overflows
             // before MVC can drain it. Only the broker's live hint queue is bounded;
             // missing live hints are recovered from the durable event sequence.
-            return ChatStreamPolicy.firstFrame(stream);
+            return ChatStreamPolicy.keepAlive(ChatStreamPolicy.firstFrame(stream),
+                    () -> ServerSentEvent.<ProtocolMessage<Map<String, Object>>>builder()
+                            .comment("keep-alive").build());
         } catch (RuntimeException failure) {
             liveSubscription.close();
             throw failure;
