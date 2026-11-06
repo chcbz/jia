@@ -28,6 +28,7 @@ class EconomyPricingPropertiesTest {
         RUNNER.run(context -> {
             assertNull(context.getStartupFailure());
             assertTrue(context.getBean(EconomyPricingProperties.class).models().isEmpty());
+            assertTrue(context.getBean(ModelPriceCatalog.class).find("channel-a", "model-a", "standard").isEmpty());
             assertEquals(ESTIMATE_RULE_MISSING, assertThrows(TaskPricingService.Unavailable.class,
                     () -> context.getBean(TaskPricingService.class).prepare(WORK, MODEL)).reason());
         });
@@ -101,6 +102,18 @@ class EconomyPricingPropertiesTest {
         assertEquals(BigDecimal.ONE, before.modelPrice().yuanPerMillionTokens().get(INPUT));
         assertEquals(BigDecimal.TEN, after.modelPrice().yuanPerMillionTokens().get(INPUT));
     }
+    @Test void costCatalogDoesNotRequireTaskWorkloadOrEstimationRules() {
+        var snapshot = price("channel-a", "standard", Map.of(INPUT, BigDecimal.ONE));
+        ModelPriceCatalog catalog = service(List.of(snapshot), List.of(), List.of());
+        assertSame(snapshot, catalog.find("channel-a", "model-a", "standard").orElseThrow());
+        assertTrue(catalog.find("channel-b", "model-a", "standard").isEmpty());
+        assertTrue(catalog.find("channel-a", "other-model", "standard").isEmpty());
+        assertTrue(catalog.find("channel-a", "model-a", "batch").isEmpty());
+        assertTrue(catalog.find(null, "model-a", "standard").isEmpty());
+        assertThrows(UnsupportedOperationException.class,
+                () -> snapshot.yuanPerMillionTokens().put(INPUT, BigDecimal.TEN));
+    }
+
     private static ConfiguredTaskPricingService service(List<ModelTokenPrice> models,
             List<EconomyPricingProperties.ToolEntry> tools, List<TaskEstimateRule> rules) {
         return new ConfiguredTaskPricingService(new EconomyPricingProperties(models, tools, rules));

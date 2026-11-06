@@ -2,6 +2,7 @@ package cn.jia.economy.service.impl;
 
 import cn.jia.economy.config.EconomyPricingProperties;
 import cn.jia.economy.pricing.ModelTokenPrice;
+import cn.jia.economy.pricing.ModelPriceCatalog;
 import cn.jia.economy.pricing.TaskEstimateRule;
 import cn.jia.economy.pricing.TaskPricingService;
 import cn.jia.economy.pricing.TaskQuoteCalculator;
@@ -15,7 +16,7 @@ import static cn.jia.economy.pricing.TaskPricingService.Unavailable.Reason.*;
 
 /** Build exact-key indexes once. A request resolves only its rule/model and requested billable tools. */
 @Service
-public final class ConfiguredTaskPricingService implements TaskPricingService {
+public final class ConfiguredTaskPricingService implements TaskPricingService, ModelPriceCatalog {
     private record RuleKey(String kind, TaskWorkload.Complexity complexity) { }
     private final Map<ModelKey, ModelTokenPrice> models;
     private final Map<TaskQuoteCalculator.ToolKey, TaskQuoteCalculator.ToolPrice> tools;
@@ -40,6 +41,11 @@ public final class ConfiguredTaskPricingService implements TaskPricingService {
         this.models = Map.copyOf(models);
         this.tools = Map.copyOf(tools);
         this.rules = Map.copyOf(rules);
+    }
+
+    @Override
+    public java.util.Optional<ModelTokenPrice> find(String channel, String model, String tier) {
+        return java.util.Optional.ofNullable(models.get(new ModelKey(channel, model, tier)));
     }
 
     @Override
