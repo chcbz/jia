@@ -223,11 +223,14 @@ class AgentTaskCancellationTransactionTest {
             assertInstanceOf(AgentTaskStateException.class,failure.getCause()); assertEquals("cancelled",text("root","status"));
         } finally { release.countDown(); pool.shutdownNow(); }
     }
-    @Test void startWinsCancelDoesNotFakeTerminalSuccess() {
+    @Test void startWinsStaleCancelFailsButCurrentVersionCancelsRunningTask() {
         var request=new AgentTaskStateTransitionDTO(); request.setTargetStatus("running"); request.setExpectedVersion(1L);
         states.transitionTask("0","client","owner","417",request);
-        assertThrows(AgentTaskStateException.class,() -> service.cancel("0","client","owner","actor","417",2));
+        assertThrows(AgentTaskStateException.class,() -> service.cancel("0","client","owner","actor","417",1));
         assertEquals("running",text("root","status")); assertEquals("accepted",text("member","status"));
+        var cancelled=service.cancel("0","client","owner","actor","417",2);
+        assertEquals(3,cancelled.taskVersion());
+        assertEquals("cancelled",text("root","status")); assertEquals("left",text("member","status"));
     }
     @Test void cancelledTaskRejectsLeaseAdmissionAndChildStateResurrection() {
         cancel();
