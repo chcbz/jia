@@ -67,6 +67,19 @@ public final class AgentTaskDeliveryReviewController {
             HttpServletRequest request, Authentication authentication) {
         noQuery(request); return response(HttpStatus.OK, JsonResult.success(reads.read(scope(authentication), taskId)));
     }
+    @GetMapping(value = "/delivery-review-history", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<JsonResult<ChatTaskDeliveryReviewReadService.HistoryPage>> history(@PathVariable String taskId,
+            HttpServletRequest request, Authentication authentication) {
+        Long before = null;
+        var params = request.getParameterMap();
+        if (!params.isEmpty()) {
+            if (params.size() != 1 || !params.containsKey("beforeRevision") || params.get("beforeRevision").length != 1) throw new BadRequest();
+            String value = params.get("beforeRevision")[0];
+            if (!value.matches("[1-9][0-9]{0,18}")) throw new BadRequest();
+            try { before = Long.valueOf(value); } catch (NumberFormatException invalid) { throw new BadRequest(); }
+        }
+        return response(HttpStatus.OK, JsonResult.success(reads.history(scope(authentication), taskId, before)));
+    }
     @ExceptionHandler(ChatSelectedOutputFinalizationStore.Missing.class)
     public ResponseEntity<JsonResult<Void>> rootMissing() { return missing(); }
     @ExceptionHandler(BadRequest.class) public ResponseEntity<JsonResult<Void>> bad() { return error(HttpStatus.BAD_REQUEST, "DELIVERY_REVIEW_BAD_REQUEST"); }

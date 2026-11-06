@@ -1,0 +1,42 @@
+{
+  "protocolVersion": 1,
+  "requestId": "hall-message-outcome-fixture",
+  "code": "E0",
+  "msg": "",
+  "data": {
+    "schemaVersion": 6,
+    "route": "CHAT",
+    "conversationId": "42",
+    "conversationGeneration": "1",
+    "requestId": "request",
+    "requestRevision": "1",
+    "turnId": "turn",
+    "state": "READY",
+    "outcome": {
+      "outcomeContractVersion": 3,
+      "outcomeId": "action-outcome_2e73906e2d5109ae1253d51ecef0a48b82aa1a95",
+      "taskId": "task",
+      "assignmentRevision": "3",
+      "assistantMessageId": "9",
+      "kind": "ANSWER",
+      "text": "处理中",
+      "deliverable": true,
+      "messageSource": {
+        "messageId": "9",
+        "snapshotId": "snapshot",
+        "turnId": "turn",
+        "finalSha256": "efefeb5d5de44cc6dbdb9fd4ace843d72cd68f1775034e25241d3bc1aa7f796f"
+      },
+      "clarification": null,
+      "action": null,
+      "proposal": null,
+      "deliveryRelation": null,
+      "revision": null,
+      "finalSha256": "efefeb5d5de44cc6dbdb9fd4ace843d72cd68f1775034e25241d3bc1aa7f796f"
+    },
+    "inspection": null,
+    "actionProgress": null,
+    "submissionProgress": null,
+    "reviewProgress": null
+  }
+}

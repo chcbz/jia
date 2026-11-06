@@ -43,7 +43,7 @@ class MinimalGreyTenantRouteFilterTest {
                 {"POST","/agent/runtime/v1/installations/rti_1/revoke"},{"POST","/agent/runtime/v1/enroll"},
                 {"POST","/agent/runtime/v1/session"},{"POST","/agent/runtime/v1/heartbeat"},
                 {"POST","/agent/runtime/v1/commands/msg-1/acks"},{"GET","/ws/agent/channel"},
-                {"POST","/chat/stream"},{"GET","/chat/conversation/events"}})
+                {"POST","/chat/stream"},{"GET","/chat/conversation/events"},{"GET","/chat/conversation/messages"}})
             assertPassed(route[0], route[1]);
         for (String[] route : new String[][]{{"POST","/agent/tasks"},{"GET","/agent/tasks/task-1"},{"POST","/user/my"},
                 {"GET","/user/get"},{"GET","/user/list"},{"GET","/user/my/"},{"GET","/user/my-extra"},

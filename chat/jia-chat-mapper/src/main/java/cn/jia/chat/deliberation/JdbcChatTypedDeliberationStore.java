@@ -35,12 +35,14 @@ public final class JdbcChatTypedDeliberationStore implements ChatTypedDeliberati
                 INSERT INTO chat_typed_outcome
                 (outcome_id,tenant_id,owner_jiacn,client_id,conversation_id,conversation_generation,
                  request_id,request_revision,turn_id,task_id,assignment_revision,assistant_message_id,
-                 final_digest,kind,text,binding_json,facts_json,outcome_json,source_catalog_json,created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 final_digest,kind,text,binding_json,facts_json,outcome_json,source_catalog_json,created_at,
+                 delivery_target_agent_id,delivery_parent_outcome_id)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, o.outcomeId(), o.scope().tenantId(), o.scope().ownerJiacn(), o.scope().clientId(),
                 o.scope().conversationId(), o.scope().conversationGeneration(), o.requestId(), o.requestRevision(),
                 o.turnId(), o.taskId(), o.assignmentRevision(), o.assistantMessageId(), o.finalDigest(), o.kind(),
-                o.text(), o.bindingJson(), o.factsJson(), o.outcomeJson(), o.sourceCatalogJson(), o.createdAt());
+                o.text(), o.bindingJson(), o.factsJson(), o.outcomeJson(), o.sourceCatalogJson(), o.createdAt(),
+                o.deliveryTargetAgentId(), o.deliveryParentOutcomeId());
     }
 
     @Override public PendingQuestion findPendingByOutcome(Scope s, String outcomeId, boolean lock) {
@@ -139,7 +141,8 @@ public final class JdbcChatTypedDeliberationStore implements ChatTypedDeliberati
             scope(r),r.getString("request_id"),r.getLong("request_revision"),r.getString("turn_id"),
             r.getString("task_id"),r.getLong("assignment_revision"),r.getLong("assistant_message_id"),
             r.getString("final_digest"),r.getString("kind"),r.getString("text"),r.getString("binding_json"),
-            r.getString("facts_json"),r.getString("outcome_json"),r.getString("source_catalog_json"),r.getLong("created_at")); }
+            r.getString("facts_json"),r.getString("outcome_json"),r.getString("source_catalog_json"),r.getLong("created_at"),
+            r.getString("delivery_target_agent_id"),r.getString("delivery_parent_outcome_id")); }
     private RowMapper<PendingQuestion> pendingMapper() { return (r,n) -> new PendingQuestion(
             r.getString("pending_question_id"),r.getString("outcome_id"),scope(r),r.getString("state"),
             r.getLong("state_version"),r.getString("question"),r.getString("required_facts_json"),

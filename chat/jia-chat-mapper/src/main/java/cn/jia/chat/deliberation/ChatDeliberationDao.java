@@ -11,7 +11,6 @@ public interface ChatDeliberationDao {
     int insertTurn(ChatTurnEntity entity);
     int insertOutbox(ChatDispatchOutboxEntity entity);
     int insertEvent(ChatConversationEventEntity entity);
-    int assignEventVersion(long eventSequence);
     ChatRequestEntity lockRequest(String tenantId, String ownerJiacn, String clientId, String requestId, long revision);
     ChatRequestEntity findRequest(String tenantId, String ownerJiacn, String clientId, String requestId);
     List<ChatTurnEntity> findTurnsByRequest(String tenantId, String ownerJiacn, String clientId, String requestId);

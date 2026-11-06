@@ -109,6 +109,11 @@ public class ChatController {
     private ChatDeliberationService chatDeliberationService;
     private TenantScopeResolver tenantScopeResolver = new TenantScopeResolver();
     private ChatBountyAssetProjector bountyAssets;
+    private cn.jia.chat.service.ChatHallMessagePageService hallMessagePages;
+
+    @Autowired(required = false)
+    public void setHallMessagePages(cn.jia.chat.service.ChatHallMessagePageService service) { this.hallMessagePages = service; }
+
 
     @Autowired(required = false)
     public void setBountyAssets(ChatBountyAssetProjector bountyAssets) { this.bountyAssets = bountyAssets; }
@@ -628,6 +633,27 @@ public class ChatController {
                 .toList();
         return JsonResult.success(messages);
     }
+
+    @RequestMapping(value = "/conversation/messages", method = RequestMethod.GET)
+    public Object getConversationMessages(@RequestParam(name = "id") String id,
+            @RequestParam(name = "cursor", required = false) String cursor) {
+        var aggregate = hallMessagePages == null ? null : hallMessagePages.read(id, cursor);
+        var page = aggregate == null ? chatConversationService.findMessagePage(id, cursor) : aggregate.messages();
+        var owned = page.messages();
+        var parts = owned.isEmpty() || bountyAssets == null
+                ? Map.<String, List<ChatBountyAssetProjector.Part>>of()
+                : bountyAssets.partsFor(new PersonalWorkspaceExecutionService.OwnerScope(
+                        owned.getFirst().getTenantId(), owned.getFirst().getClientId(),
+                        owned.getFirst().getJiacn()), id,
+                        owned.stream().map(ChatMessageEntity::getId).toList());
+        var messages = owned.stream().map(message -> ConversationMessageResponse.from(message,
+                parts.getOrDefault(ExactWireIds.decimal(message.getId()), List.of()))).toList();
+        return ResponseEntity.ok().cacheControl(org.springframework.http.CacheControl.noStore())
+                .body(JsonResult.success(new ConversationMessagePageResponse(messages, page.hasMore(), page.nextBefore(), aggregate == null ? null : aggregate.requestPage(), aggregate == null ? List.of() : aggregate.outcomeSummaries())));
+    }
+
+    private record ConversationMessagePageResponse(List<ConversationMessageResponse> items,
+            boolean hasMore, String nextCursor, cn.jia.chat.service.ChatBountyRequestIndexService.Page requestPage, List<Map<String, Object>> outcomeSummaries) { }
 
     private record ConversationMessageResponse(
             // The response sanitizer reflects beans into maps before Jackson, so wire IDs must already be strings.

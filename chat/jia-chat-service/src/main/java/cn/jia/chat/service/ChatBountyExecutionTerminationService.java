@@ -146,10 +146,9 @@ public class ChatBountyExecutionTerminationService {
             ChatConversationEventEntity event=new ChatConversationEventEntity().setEventId(eventId)
                     .setTenantId(scope.tenantId()).setOwnerJiacn(scope.ownerJiacn()).setClientId(scope.clientId())
                     .setConversationId(scope.conversationId()).setConversationGeneration(row.generation())
-                    .setRequestId(requestId).setEventType("execution_abandoned").setEventVersion(0L)
+                    .setRequestId(requestId).setEventType("execution_abandoned")
                     .setPayloadJson(JsonUtil.toJson(audit)).setOccurredAt(now);
-            if(events.insertEvent(event)!=1||event.getEventSequence()==null
-                    ||events.assignEventVersion(event.getEventSequence())!=1)throw fail(Reason.UNAVAILABLE);
+            if(events.insertEvent(event)!=1||event.getEventSequence()==null)throw fail(Reason.UNAVAILABLE);
             publishAfterCommit(scope,row,event,receipt);
             return receipt;
         });

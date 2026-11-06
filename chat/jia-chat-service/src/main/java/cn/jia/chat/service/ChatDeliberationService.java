@@ -1244,12 +1244,10 @@ public class ChatDeliberationService implements TaskDiscussionCancellation {
                 .setClientId(turn.getClientId()).setConversationId(turn.getConversationId())
                 .setConversationGeneration(turn.getConversationGeneration()).setRequestId(turn.getRequestId())
                 .setTurnId(turn.getTurnId()).setDispatchId(turn.getDispatchId()).setEventType(eventType)
-                .setEventVersion(0L).setPayloadJson(CanonicalContextJson.write(wire)).setOccurredAt(now);
-        if (dao.insertEvent(event) != 1 || event.getEventSequence() == null
-                || dao.assignEventVersion(event.getEventSequence()) != 1) {
+                .setPayloadJson(CanonicalContextJson.write(wire)).setOccurredAt(now);
+        if (dao.insertEvent(event) != 1 || event.getEventSequence() == null) {
             throw persistence("Unable to persist conversation event");
         }
-        event.setEventVersion(event.getEventSequence());
         closePreviewAfterCommit(turn);
         return event;
     }
@@ -1289,6 +1287,27 @@ public class ChatDeliberationService implements TaskDiscussionCancellation {
         return persistEvent(turn, stableId("evt", submissionId, "DELIVERY_SUBMISSION_COMPLETED"),
                 "delivery_submission_completed", Map.of("parentOutcomeId", outcome.outcomeId(),
                         "submissionId", submissionId, "deliveryId", deliveryId), now);
+    }
+
+    /** The review operation changed; this is a read invalidation, not task/turn completion. */
+    @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
+    public ChatConversationEventEntity persistDeliveryReviewChanged(
+            cn.jia.chat.deliberation.ChatTypedDeliberationStore.Outcome outcome,
+            ChatDeliveryReviewContract.Receipt receipt, long now) {
+        var scope = outcome.scope();
+        var turn = requireLockedTurn(scope.tenantId(), scope.ownerJiacn(), scope.clientId(), outcome.turnId());
+        if (!outcome.finalDigest().equals(turn.getFinalDigest())
+                || !scope.conversationId().equals(turn.getConversationId())
+                || !Objects.equals(scope.conversationGeneration(), turn.getConversationGeneration())
+                || !outcome.requestId().equals(turn.getRequestId())) throw conflict("Review final changed");
+        var payload = new LinkedHashMap<String, Object>();
+        payload.put("parentOutcomeId", outcome.outcomeId());
+        payload.put("operationId", receipt.operationId());
+        payload.put("operationState", receipt.state());
+        payload.put("operationStateVersion", receipt.stateVersion());
+        payload.put("childRequestId", receipt.requestId());
+        return persistEvent(turn, stableId("evt", receipt.operationId(), "DELIVERY_REVIEW_CHANGED", receipt.stateVersion()),
+                "delivery_review_changed", payload, now);
     }
 
     public ChatConversationEventEntity persistTypedQuestionAnswered(ChatTurnEntity turn,

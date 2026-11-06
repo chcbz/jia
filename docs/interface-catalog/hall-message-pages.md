@@ -1,0 +1,201 @@
+# 聚义厅消息页（2026-11-05 候选，未上线）
+
+遵循 docs/interface-standard.md。仅增加读取接口，不变更执行/完成事实。
+
+`GET /chat/conversation/messages?id=<conversationId>&cursor=<createTime>:<messageId>`
+
+- cursor可省略，首次取最新20条；否则严格取该排序键以前20条。按(create_time,id)倒序LIMIT 21查库，以额外一条判断hasMore，响应items正序，nextCursor为本页最早消息键，仅hasMore时非null。不COUNT、无OFFSET、不自动翻完，不以页大小拒绝长会话。
+- data: `{items: [...既有ConversationMessageResponse], hasMore: boolean, nextCursor: string|null}`。消息ID保持十进制字符串，附件parts仅批量查询本页消息；沿用现有live parent及owner/client/tenant隔离和任务线程禁入，不重新逐行鉴权。
+- cursor为无授权含义的排序位置，格式为两个非负/正规范十进制long(createTime>=0,id>0)；schema允许的无时间戳记录以n:id标识，按SQL NULL最后规则读取，不伪造创建时间，无效参数400；不允许注入SQL。游标不代替身份，始终在已授权会话内查询。新消息到达不改变旧页边界；同时间戳以id断开。
+- 保留旧content接口供未迁移调用方，本次聚义厅改用messages；不以此声称整个系统无全量读取。
+- 展示加载旧页不得触发最终回复回调、SSE重启、当前轮恢复或消息发送；切换身份/会话后旧响应丢弃；失败保留已显示消息且可重试。页大小是展示批次，不是业务容量上限。
+- 验证入口：ChatConversationMessagePageTest、ChatMessageScopedQueryTest、ChatBountyAssetProjector相关回归及Web hall message page测试。正式运行结果见根handoff，本文不是通过证据。
+
+- 查询索引候选：chat/jia-chat-mapper/src/main/resources/db/chat-message-history-page-index-20261105.sql。2026-11-05只读EXPLAIN确认现有单列conversation_id索引仍filesort，需受控迁移后复验；不能仅凭LIMIT宣称数据库查询成本已经恒定。尚未改生产DDL。
+
+## 请求目录内部读取（2026-11-05 追加候选，未上线）
+
+`GET /chat/conversations/{conversationId}/requests`的wire、分页顺序及入口授权不变。
+本页request/turn/step+execution-link投影改为3次集合查询（空页0次），不含原有会话/任务权限查询、watermark及目录页查询。仅传入已经选中的页行id，探针行不做投影；子行在SQL中绑定同一owner/client/tenant/conversation/generation/request/revision。可变执行进度实时读取，无历史缓存；不调用逐条`ChatDeliberationService.getRequest`，也不读取snapshot/final或运行成果提交校验。
+
+原有缺失执行关联、PLANNING缺步骤的读失败语义保留。写入授权、完成事实、摘要校验不变。回归入口：`ChatBountyRequestIndexStoreTest`（实际H2 SQL、页大小1/100固定查询数、页外/身份大小写/代际/版本排除、进度变化、空页）与`ChatBountyRequestIndexPageTest`（映射、探针、权限、必要失败）。Java测试仍待Flow，不以新增测试源码代表通过。
+
+此改动仅消除目录页内部N+1；前端自动翻完整目录、逐条typed-outcome和发送依赖全历史尚未收口。不得据此宣称长会话整体开销已经有界。
+
+## 事件定向读取（2026-11-05 候选，未上线）
+
+现有目录GET增加可选`requestId`，与`after/through/pageSize`互斥，可带`expectedGeneration`。只查已授权会话/代际中的这一请求，仍返回原Page：`after="0"`、`through=该项ordinal`、一个entry、`hasMore=false`、`nextAfter=null`。没有匹配项走既有NOT_FOUND_OR_FORBIDDEN，不泄露其他会话记录。不查询全目录watermark，不展开其他回合。互斥参数避免把单项查询误当分页；入口重复参数按现有公共协议拒绝。页面合并单项不得删除其他已加载项。
+
+- API与Web共享报文：`chat/jia-chat-service/src/test/resources/contracts/hall-request-index-entry.json`、Web `tests/fixtures/hall-request-index-entry.json`，SHA256 `0acc016394c3e88d3859522db84038b5d5f9fdee0483bdd4e7c95b2d3e7a4fe9`。真实公共HTTP信封测试入口`ChatBountyRequestIndexHttpTest`；Java未运行。
+- Web实时事件按requestId及已知父/子成果关系读取目录与typed-outcome；不是仅凭READY停止更新。删除目录深监听导致的全成果重查，同轮并发读取复用，身份/会话切换中止旧读。重放期间合并更新，在stream_ready统一恢复；断线前已推进游标但未恢复的提示跨重连保留。如果重连核对已执行完整恢复，不在ready重复读取。失败保留可重试状态，不用新轮询兜底。
+
+### 改稿操作状态事件
+
+`delivery_review_changed`复用既有`conversation.event`信封与持久事件日志。API是生产者，Web是消费者，Runtime不消费该浏览器投影事件。
+
+改稿操作首次结算COMMITTED/REJECTED时，与操作结算和outbox确认同事务写事件，提交后由既有relay发布。重放已结算操作不重复写事件。除既有request/turn/conversation绑定字段，业务data含`parentOutcomeId`、`operationId`、`operationState`、字符串`operationStateVersion`、`childRequestId`（拒绝时null）。事件ID由operationId和状态版本稳定生成。
+
+这是原成果状态发生变化的通知，**不是最终回复、任务完成或turn状态转换**，不写消息/覆盖turn stateVersion。Web读取原回合与新子回合的权威投影，不能依据事件直接宣布完成。已删除/不可访问任务的原拒绝处理仍不发布可读事件，不新增极端场景恢复机制。回归入口`ChatDeliveryReviewChangedEventTest`、`ChatDeliveryRevisionServiceTest`及Web重连/定向读取测试。
+
+本阶段仍保留首次与显式resync全目录/全成果恢复。发送父成果仍依赖完整上下文，不能提前截断，也不能把本阶段当作全部历史读取有界。
+
+## 当前轮恢复（2026-11-05 追加候选，未上线）
+
+同一目录GET支持`latest=true`，与`requestId/after/through/pageSize`互斥，可携带`expectedGeneration`。该selector用于恢复当前回合，不用于发送时选择父成果；不以“最新”代替成果因果链。仍返回Page：after为0、through为最大ordinal、至多一个entry，无后续页；空会话through为0、entries为空。其他latest值走INVALID_REQUEST，避免歧义查询。授权及精确代际边界不变。
+
+存储在精确scope内`ORDER BY id DESC LIMIT 1`，仅对这一轮执行既有集合投影查询，不先取全目录/全部成果。Web恢复取消逐页循环及历史request ID集合；旧状态重放只推进已认证会话游标，不接管当前轮。实时非当前轮状态仍触发该轮投影更新；未知其他会话事件不据此准入。切换会话/身份仍丢弃旧读，取消动作仍绑定恢复轮的精确turn/checkpoint。
+
+回归入口：`ChatBountyRequestIndexStoreTest.latestSelectsOneOrdinalAfterExactScopeFiltering`、`ChatBountyRequestIndexPageTest`最新/空会话/互斥参数用例、`ChatBountyRequestIndexHttpTest.latestSelectorPreservesTheSharedPageEnvelope`、Web `juyiting-restored-request.test.js`（最大ordinal10001只发一次查询、历史重放与实时其他回合、空会话和切换竞态）。HTTP复用相同单项Page完整fixture；不新增公共信封。Java测试待Flow。
+
+2026-11-05真实MySQL只读EXPLAIN：现有`idx_chat_request_context_order`已含scope+id，但11行样本优化器选择`idx_chat_request_conversation`并Using filesort。单次SQL约1ms只说明该样本，不是接口/长会话性能；未添加强制索引或生产DDL。上线前长会话查询计划仍需验证，不能将LIMIT1等同数据库常量工作量。
+
+
+## 首次恢复与SSE接续（2026-11-05 追加候选，未上线）
+
+确认另一个全量入口：`conversation/events`缺省after=0，旧事件重放可能重新追加页外旧消息。消息分页不能单独解决这个放大。
+
+- latest=true的Page增加`eventCursor`（非负十进制long字符串）。与最新request及其投影在既有REPEATABLE_READ只读事务中读取已提交事件的MAX(event_sequence)，绑定同一owner/client/tenant/conversation/generation。普通分页和requestId单项读的该字段为null，不额外读watermark。
+- 前端事项会话恢复按“最新回合及cursor → 最新消息页 → 从cursor建立SSE”执行。消息页可能比回合快照更新，依靠既有消息ID去重；快照后至连接建立之间的提交仍由原事件重放补齐，不使用连接时最新watermark跳过这一窗口。不新增连接/轮询/缓存或消息副本。
+- cursor只初始化尚未建连且没有cursor的恢复会话。显示刷新不覆盖已运行/重连中的cursor；加载旧消息页不接触它。身份/会话生命周期继续清理，其他会话事件不获准。首次latest响应缺少/格式错误的cursor使该次恢复失败可重试，不能静默回到全历史重放。
+- `eventCursor`是只读接续位置，不是身份或写入授权。业务完成/幂等/成果校验保持原责任层，不新增逐帧检查。它沿用现有事件序列提交/重放语义，不在本次重建事件协议。
+- 此补充只覆盖已有latest=true事项会话恢复入口；bootstrap/typed receipt直接接管、普通非事项会话等旁路尚未据此声明已优化。发送上下文及主议事页的后续候选切换见下节；本条本身不证明所有页面已优化。
+
+共享fixture：单项`hall-request-index-entry.json`新增eventCursor:null，SHA256 `0acc016394c3e88d3859522db84038b5d5f9fdee0483bdd4e7c95b2d3e7a4fe9`；最新快照`hall-request-latest.json`使用大于JS安全整数的字符串cursor，SHA256 `f65865e99b408f1e0fe1efe1e566da1fe26f369687093c4131e85b37b1bafb91`。两端完整报文相同，前端既有解码器接受新增字段；其他分页核心字段不变。
+
+回归：SQL cursor精确scope/空会话、服务latest才查询cursor、HTTP shared fixture、ChatConversationEventsHttpTest.restoredSnapshotCursorSkipsOldEventsButReplaysTheConnectionGap；Web恢复50条消息后使用精确大整数Last-Event-ID、收到窗口内新delta而非旧历史。Java编译/并发事务验证待Flow，不能以测试源码或mock证明上线。2026-11-05真实库只读查询使用idx_chat_conversation_event_replay覆盖索引，13行样本单次约0.674ms，无事件正文读取；仅SQL样本，不是端到端/长历史性能结论。
+
+## 2026-11-05 候选：发送上下文的关系索引（读写候选已接入，未上线）
+
+本节为发送摘要查询的持久化基础。候选已取消发送前的全历史依赖；主议事页显示窗口接入情况见末节，不代表数据库迁移、正式验证或上线已经完成。
+
+在现有 `chat_typed_outcome` 增加两个可空字段，不能作为新的执行授权：
+
+- `delivery_target_agent_id`：已验证 `CHAT` final 的 `targetAgentId`；仅可交付 `ANSWER`、`ACTION_REQUEST`、`SUBMISSION_REQUEST` 填写。
+- `delivery_parent_outcome_id`：上述 final 已验证 `deliveryRelation.parentOutcomeId`；独立根为空。不能用 admission 的 parent 替代，该 parent 也可能表示澄清或其他上下文关系。
+- 两个复合索引以现有精确 scope、task、assignment revision、agent 为前缀，分别支持成果消息顺序与父子关系查询；不对 MEDIUMTEXT JSON 扫描/排序。查询执行计划与长历史耗时尚未验证，不能由新增索引推出恒定成本。
+
+责任及成本：`ChatActionFinalService.persist` 使用已经验证的 final，在原事务的同一个 INSERT 写关系字段；无额外 SELECT/UPDATE、后台扫描、缓存表或 Runtime 字段。重复 final 仍直接返回原记录，不重写关系；canonical `outcome_json`、binding、facts 与 final digest 不变。普通回答、澄清及 INSPECT 不被标记为可交付成果。原历史写入构造器保留空值，不把旧合同猜测升级为当前成果。
+
+`ACTION_REQUEST` 的索引项仅为候选，**绝不证明执行完成**。后续发送上下文查询须使用真实 child/step/execution 的提交状态；失败子动作不得遮蔽可用父成果，进行中动作不得冒充成功。多独立根/分支仍须明确选择，不按最大 message ID 选父成果。明确选中父成果的准入沿用既有权威权限、状态、保留输出与幂等处理，不重算已接纳请求的正文摘要。
+
+迁移边界：`db/chat-outcome-delivery-index-20261105.sql` 仅为加字段/索引候选，与新建库 DDL 和 schema-maintenance 描述同步，无 CHECK。未在生产执行。旧库须在获授权的备份/受控迁移中先加列，不能直接安装会写这些列的代码；该脚本**没有完成历史回填**。切换新读路径前必须完成各历史合同的关系提取与覆盖核对，不得将未回填 null 行当成没有成果，也不得在每次请求中全历史 JSON 扫描作为兼容兜底。已添加下节只读端点及单页消费模块；发送主入口已在候选中接入；主议事页已改为下述显示窗口读取，任务详情/历史验收独立的全量读取仍保留。
+
+定向回归入口（已添加源码、尚未运行Java）：
+- `ChatTypedOutcomeDeliveryIndexTest`：实际JDBC插入/三种现有读取入口、原正文/摘要、空历史关系、大小写owner/代际隔离；插入不增元数据查询。
+- `ChatOutcomeDeliveryIndexTest`：当前已验证文字/提交关系、独立根、非交付回答、INSPECT、admission parent 不混用、重复 final 不改写。
+- `ChatActionOutcomeV5Test`：真实native v6 facts/v5 final写入路径的候选关系、动作仍QUEUED；澄清不产生关系索引。
+
+
+## 2026-11-05 候选：当前成果选择页
+
+`GET /chat/conversations/{conversationId}/delivery-context`。响应沿用公共信封；完整两端fixture为 `hall-delivery-context.json`。只读、no-store，不授予执行/修改/提交权限。
+
+查询参数：
+- `expectedGeneration`、`expectedAssignmentRevision`：可选当前界面上下文；不匹配返回409，不将换指派误判为空列表。
+- `beforeMessageId`、`beforeOutcomeId`：必须成对提供；翻页必须同时提供上述两个上下文值。按 `(assistant_message_id,outcome_id)` 倒序keyset读取50+1项；不使用offset或COUNT。
+- `outcomeId`：可选精确选择，不能与before游标组合。复用同一scope及可用head条件，最多返回一项，缺失/被后继替代返回空，不自动改选第一页；用于已选第二页成果的发送前读取。
+- task、好汉由已有会话/任务授权及binding确定，不接受客户端覆盖。每页使用同一REPEATABLE_READ事务，不锁task或成果。
+
+数据字段：`schemaVersion=1`，`scope={conversationId,conversationGeneration,taskId}`，`assignmentRevision`、`targetAgentId`，`pendingExecution`，`items`，`hasMore`，`nextBeforeMessageId`、`nextBeforeOutcomeId`。所有BIGINT为规范十进制字符串；items仅含 `outcomeId/requestId/assistantMessageId/finalSha256/kind/label`，label是已存正文前60字符，无正文、snapshot、facts或sourceCatalog展开。无更多时两个next字段均null。
+
+选择规则由API负责：仅标记的CHAT成果候选；最终turn必须已提交并绑定该消息。ACTION需实际outbox→同key admission→child request→EXECUTE step→execution link的已提交状态，非执行动作/计划文本不能制造可用成果。仅真实可用子成果才排除其父成果；独立根和分支全部保留为选择，不把最新一项当唯一父成果。进度读取无副作用，不重跑final校验器或调用重型逐条详情。
+
+`pendingExecution`只表示尚未完成/无法确认终态的动作存在，用于避免自动选取旧成果；**不是拒绝新议事的条件**。失败或取消动作不成为可用成果，也不遮蔽父成果；SUBMISSION候选延续现有成果选择语义，不冒充任务完成。
+
+单页存储读为当前binding、候选heads、pending EXISTS（另有复用的会话/任务授权读取），不是逐行SQL/HTTP循环。查询头部使用关系反关联，返回及应用对象有界，但索引扫描工作仍可能随历史长度增加；正式MySQL EXPLAIN/长历史成本未验证。两个分页请求之间成果可变化；发送时仍由原准入重新验证显式父成果与幂等，不能把只读页当写授权或永久快照。
+
+实现入口：`ChatBountyRequestIndexController/Service` 复用已有身份与会话/任务授权方法；`ChatDeliveryContextStore`执行关系及提交事实查询；Web `hallDeliveryContext.js`只做服务端结果解析与一次GET，没有全历史fallback或自动翻完所有页。候选已接入 `useHallTypedDeliberation.submit/refresh/refreshRequests`：发送最多一次摘要GET，不读取全目录或重建因果图；唯一head且无pending时自动关联，多根要求明确选择，pending只抑制自动选择。显式选中按outcomeId读取并核对原digest；选择列表50项，更多仅手动读取，刷新第一页保留显式后页选择。读取前设置busy，沿用身份/指派生命周期隔离，失效/销毁取消请求；UNKNOWN恢复只重发原冻结body/key，不重新选成果。澄清继续沿用原CAS且跳过摘要读取。主议事页已切换下述显示窗口，不再自动展开全目录及全部成果；本候选不得在历史关系未回填的旧库直接启用。
+
+回归：`ChatDeliveryContextStoreTest`（隔离SQL、独立根/分支、真实执行、失败/取消/缺失link、scope/指派/好汉隔离、keyset）；`ChatDeliveryContextPageTest`（复用授权、上下文冲突、50+1、无历史目录展开）；`ChatBountyRequestIndexHttpTest`（真实信封、完整fixture）；Web `juyiting-delivery-context.test.js`（BIGINT、绑定、分页、单次GET及无扫描fallback）。Java回归源码尚未运行，前端轻量420项通过（含发送与选择分页；不是Java/数据库或线上性能证据），不是线上验收。
+
+
+## 2026-11-05 候选：主议事页按已加载消息取请求/成果
+
+### 批量选择合同
+
+`GET /chat/conversations/{id}/requests?expectedGeneration=1&requestIds=r7&requestIds=r9000`。`requestIds`是重复query字段（非逗号拆分），1～100个不同ID；100沿用既有目录最大页大小，不是按会话长度拒绝请求的新门槛。与`requestId/latest/after/through/pageSize`互斥；`expectedGeneration`仍为上下文条件。身份、会话/任务授权由既有责任层执行，客户端ID不能扩大授权范围。
+
+响应仍为Page/公共信封：`after=0`、`through=所选最大ordinal`，entries按ordinal升序，`hasMore=false/nextAfter=null/eventCursor=null`。此处false只表示**本次显式选择已全部返回，不表示整个会话历史已加载**。任一所选请求缺失/不可见，整批404，不把不完整选择作为完整窗口；格式、重复或混合发现模式400。避免返回外部scope记录、把被遗漏的成果默认为不存在，是这些校验的依据；不新增执行/验收权限。
+
+存储一次按scope/请求ID集合选择，随后复用三次集合投影；无highWatermark、COUNT或历史page扫描。返回对象随显式选择数量增长，不随未选择的历史数量增长；真实数据库查询代价/执行计划仍需MySQL验证。批量参数已通过URLSearchParams编码到URI，避免现有useHttp只检查对象键而丢失URLSearchParams参数；未修改全局HTTP行为。完整双端fixture为`hall-request-index-window.json`。
+
+### 主议事页消费者
+
+- JuyiHall的显示集合由已加载消息的requestId与当前活动requestId构成；首次通常来自最新20条消息。请求记录通过`refreshWindow`每批最多100项取得；旧消息显式加载后只补新增请求，不自动发现其他历史。
+- 只读这些请求的typed详情，并补**直接ACTION执行子请求**（执行没有独立聊天消息）；不沿review child链递归读取整个后续历史。SSE事实事件继续定向刷新；token文本变化不改变请求ID集合，不触发该加载路径。
+- `typed.refresh`不再追加sessionStorage中所有ACCEPTED receipt；已知路由的显示读取也不逐条反复解析整个本地receipt历史。UNKNOWN原请求恢复仍不变；此条不声明所有本地状态存储已做容量优化。
+- Inline成果组件复用父页面已读的请求快照和typed cards，只移除`purpose/key`两个展示注解后按原文字成果映射处理；不二次GET请求详情/typed-outcome，不构造全历史交付图。执行结果与文件清单仍按具体可见请求读取，身份/摘要保护保留。
+- 当前窗口仅决定显示候选；选择某版本的验收仍由`useHallSelectedOutputReview`及后端权威review事实确认，不把局部窗口拼成整个任务交付集合。独立任务详情的BountyAcceptancePanel仍使用原完整目录实例，尚待单独收口，不能机械截断其依赖。取消任务文字历史的后续窗口候选见下节。
+
+回归入口：`ChatBountyRequestIndexStoreTest`一次批量查询/精确scope与ID、`ChatBountyRequestIndexPageTest`批量无watermark/互斥/缺失、`ChatBountyRequestIndexHttpTest`重复query字段和完整共享信封；这些Java用例尚未执行。Web实际composable覆盖10000个合成历史ID仅选择50个的一次批量请求、旧页只补新增、100项分批、合并等待/失效与不完整结果；实际SFC覆盖inline无重复请求、复用文字成果精确来源、选择事件仅传outcomeId。轻量420项通过约6秒是测试耗时，不是生产延迟或压测。
+
+## 2026-11-05 历史交付索引维护候选
+
+新增显式 `ChatTypedDeliberationSchemaInitializer.backfillDeliveryIndex(configuredTenant)`，复用原维护上下文/schema锁，正常initialize、HTTP、流式链路不调用。详情见 `ops/schema/README.md`。只补两个派生列，按主键100条/事务，幂等核对；正文/摘要/完成事实不改，不重验当前工具授权或重放旧执行。既有v1/v2非交付语义保留，v5从持久化deliveryRelation抽取，未知语义/冲突不猜测覆盖。
+
+这是维护源码候选，不是历史数据已经回填：Java尚未运行，MySQL演练、主机安装器调用、备份/停旧writer和实际迁移仍待完成。仅加列不能启用新读取。主议事页与任务历史/验收页的优化完成范围仍按前节，不因增加维护方法扩大完成声明。
+
+## 2026-11-05 取消事项文字历史窗口候选
+
+Web `useHallTerminalTextHistory`复用现有owner/task会话发现，但不扫描完整请求目录；首读最近20条消息，按metadata中的requestId批量取得原请求快照，仅对已持久化CHAT读取一次typed成果，不重复GET请求详情。显式加载旧页只补新增ID，普通CHAT无typed成果的404不作为错误。空窗口不是全历史为空；旧页/详情失败保留已读成果并重试当前窗口，不跳过失败页。显式刷新重置窗口，身份/事项切换及卸载隔离迟到响应。无新增接口、轮询、SSE或持久缓存。
+
+正式验收面板的完整因果图不变。轻量Web465项通过，仅证明候选消费者行为；Java/真实数据库/Flow/上线均未完成，不能据此声明接口已发布或实际延迟下降。
+
+## 2026-11-05 正式验收页责任收口（Web后续候选）
+BountyAcceptancePanel保留父页面deliveryReview的正式currentDelivery/history及预览/验收；删除另挂的BountyExecutionOutputs和其完整请求目录、逐条request/typed/steps读取及客户端交付图推导。原会话发现仅供继续议事，不读取请求目录或独立订阅SSE。未提交成果和历史版选择仍在原议事中，无接口/验收写入变化，不以截断图判定当前成果。前节“独立验收页仍读完整请求目录”由本候选覆盖，未上线。
+
+未完成：ChatTaskDeliveryReviewReadService.read仍COUNT正式批次，超过100直接Conflict，否则listForTaskOwner读取全部批次并逐批sourceItems；折叠Web history不减少这部分读。需以独立当前正式交付查询+显式历史分页替代，不放大上限或简单截断。真实消费者含useHallDeliveryReview/hallDeliveryReviewIntent、BountyAcceptancePanel、HallCompletedRecords，后者还会为补显示名称追取成果目录，需一并核对必要性；本轮未修改这些后端/已完成记录路径。
+
+## 2026-11-05 正式交付当前/历史分读候选（覆盖上一节待改项）
+
+- `GET /agent/tasks/{taskId}/delivery-review-context`返回Context业务`schemaVersion=2`，其余字段/公共信封不变；`history=[]`明确表示此读模型只含当前交付，不代表没有历史。当前查询复用owner授权；submitted最多读2条以检查唯一当前，已完成/归档无submitted时取最新accepted。不读取COUNT，不加载历史批次。不改变验收操作/批次摘要schema1、任务版本、pending操作和CAS。
+- `GET /agent/tasks/{taskId}/delivery-review-history[?beforeRevision=<正整数字符串>]`返回标准Page `{items,nextCursor,hasMore}`，固定20批，额外取1行判断后续但不读取其items/sources。cursor是最后返回批次的不可变revision（task内唯一），降序keyset；无OFFSET/COUNT。不提供客户端pageSize/tenant覆盖；重复cursor参数、非规范数字/溢出400。Page可包含当前批次，但allowedActions恒为`["VIEW"]`，不能获得验收权限；Web按deliveryId去重并排除当前展示，历史页不参与当前资格判定。
+- 采用既有task/revision唯一索引与task/state索引，不新增表/缓存/轮询/DDL。页内复用既有workItem/item/source完整性与来源投影；失败返回本页失败，不拿局部页充当完整批次。真实MySQL EXPLAIN及Java执行尚未完成，不保证执行计划。
+- 新增批次在已读游标之前时，不自动回头追取；显式刷新或任务权威版本变化重置历史。允许历史跨页最终一致，不为只读历史锁住整个任务。每次仍在原授权与只读事务边界取得当前结果。
+- Web `useHallDeliveryReview`独立管理history窗口，`context`仅当前权威，`historyContext`只供BountyAcceptancePanel/HallCompletedRecords展示。首读/确认验收不发历史请求；展开读一页，更多显式追加；失败保留窗口并重试同cursor，摘要不符不推进。身份/事项/任务版本变化/卸载取消并隔离迟到页。旧Context v1仍按其明确的完整history消费，不探测新history接口；因此发布应Web先、API后，不让旧Web接收schema2。
+- 完整双端公共信封fixture `delivery-review-pages.json`，复用原批次摘要向量；Java Controller/source/mapper/window测试覆盖授权、cursor、只读actions、lookahead不hydrate、205批逐页及多submitted冲突，均待Flow运行。旧其他调用者的`listForTaskOwner`原100上限未扩改；本轮只收口聚义厅review路径。
+- 剩余独立读取：HallCompletedRecords还会为固定成果元数据补齐自动翻outputs页，以及按已加载记录取原成果名称；本轮没有宣称这些路径已经有界。此处完成为源码候选，非线上完成。
+
+## 2026-11-06 候选：正式交付页直接提供固定版本展示元数据
+
+`delivery-review-context`及`delivery-review-history`的每个item增加可空`display`：
+
+```json
+{"title":"正式文本.txt","contentMimeType":"text/plain","contentByteLength":12,"unavailableReason":null}
+```
+
+- `display`不参与batchSha256，不改变写命令、验收CAS、source或原`unavailableReason`。历史/混合响应可无此字段；新Web按已声明的可选字段接收，不猜测最新版、不自动目录补查。
+- 版本缺失/hash不匹配：display的title/MIME/size为空，原因VERSION_UNAVAILABLE；元数据缺失/无法解析：尽量保留title，原因METADATA_UNAVAILABLE。仅代表显示/预览可用性，不更改已提交交付/验收事实。
+- 后端先授权task owner并选择交付窗口，再一次集合查询正式item+工作项版本+精确artifact版本的元数据。仅把DB长度/元数据取入应用，不加载内容或storageUri，不在GET做内容sha重算。已有内容接口继续负责下载/预览的授权及内容完整性。
+- Chat展示来源改用页级promotion、selection、workspace查询（有promotion时3次，否则2次），不逐批读取操作回执重算摘要、不逐文件查询workspace。写入验收事务仍调用原sourceItems校验，不把展示projection当写授权。
+- 正文页级投影、议事SSE衔接与前端长列表仍未完成；本节不能标为整个历史优化已完成。
+- 共享fixture两端`delivery-review-pages.json`同步，当前SHA-256为`9afd79b5b93f22252ef696422c35784cf79d0fca2d45ffc980131c416b0e8e80`。Java/真实MySQL/云端验证待执行；本候选未部署。旧Web严格字段检查尚不认识display，最终统一发布须核对Web先行兼容及旧页面刷新，不能直接沿用未核实的API先行顺序。
+
+## 2026-11-06 收口候选：消息页直接携带展示关联（覆盖上文显示补查方案）
+
+**源码候选，尚未经过Flow/安装/线上验收。** `GET /chat/conversation/messages?id=...&cursor=...`仍一次返回最多20条消息。当前响应为：
+
+- `items / hasMore / nextCursor`：原消息页字段；持久消息的正文只在`items.content`携带一次。
+- `requestPage`：本页消息对应的请求/回合/步骤展示投影；最新页额外带当前请求及同一数据库快照的`eventCursor`。普通非悬赏会话为null。旧页不更新活动订阅游标。只追加当前页成果指向的直接子请求，不递归历史请求图。
+- `outcomeSummaries`：消息页上下文中的schemaVersion=1成果摘要数组。字段沿用独立typed-outcome的展示投影，但`outcome`不含`text`；其`assistantMessageId`必须引用同页消息。待完成回合可以没有`outcome`。
+- 无法解析的历史结构化成果返回`{schemaVersion:1,requestId,turnId,unavailableReason:"STORED_OUTCOME_UNAVAILABLE"}`。歧义进度也只影响对应回合；其他摘要及消息正文继续可读，不推断完成状态、不重放任务。
+
+服务端`ChatHallMessagePageService`在一个REPEATABLE_READ只读事务内组装消息页、请求展示与成果摘要。`ChatMessageOutcomeStore`按已授权scope、页内request及消息ID范围执行两组集合SQL（无最终消息回合保留）；正文范围在SQL中限制，不先读取请求全部成果后再丢弃；不调用执行验收reader，不重读完整材料目录/合同，不重新计算原成果摘要。JSON结果去掉旧正文副本后传到Java。身份/任务归属仍由原责任层检查，最终回复写入、事务、幂等不变。
+
+Web`useHallMessagePages`只从同页message还原内部展示对象的text，不发ID集合补查或逐请求typed GET；`useHallTerminalTextHistory`复用同一页。`useHallBountyRequestCatalog.refreshRequests/refreshWindow`已删除，`adoptPage`接收服务端页投影。`useHallTypedDeliberation.refresh/refreshRequests/relatedRequestIds`亦已删除；发送/明确恢复仍保留独立readOne。独立发送/恢复读取接口保留；展示端旧catalog完整扫描、独立acceptance SSE/定时刷新已删除，发现会话后统一消费消息聚合页。
+
+恢复持久消息同时恢复其metadata.turnId，用于把同一回合的旧流式占位替换为最终消息。另一个尚在回复的回合不能被清掉。结构化成果不可用时不进入无限“正在读取答复”状态，显示原文与独立不可用提示。
+
+### 验证与剩余边界
+
+- 前端轻量测试覆盖同页正文还原、无后续网络读取、同请求不同回合、游标/身份切换、原文保留和流式→最终替换。准确数量/源码见根handoff，不是线上耗时。
+- 新Java测试含`ChatMessageOutcomeReadServiceTest`、`ChatHallMessagePageServiceTest`、`ChatMessageOutcomeStoreTest`；现有`JuyitingWorkflowMySqlTest`新增真实MySQL下的成果/修改进度/scope隔离用例，**尚未运行**。
+- Web连续窗口与旧全量扫描消费者删除已实现；本机浏览器1440/390验证可见锚点、变高锚点、展开编辑和正文释放/重取。真实MySQL计划、迁移演练和正式Flow仍待执行，不能据此当作上线。
+- event_version物理列暂保留为旧协议占位，当前candidate以event_sequence作为wire eventVersion，删除每次INSERT后的重复UPDATE。已核实旧二进制读取物理event_version；必须先停止writer并按配置租户把0值恢复为event_sequence，详见ops/schema/README.md，不允许直接二进制回退；不得恢复旧库快照覆盖新业务事实。
+
+### 2026-11-06 连续窗口的稳定重读游标（候选，未部署）
+
+- 无cursor仍返回最新20条；`time:id`仍读取该位置之前的20条。新增`at:time:id`包含该锚点，返回截至该位置的20条，所有items始终按时间、ID升序。`n`代表历史NULL时间，排序在有时间值之前。
+- 前端由页末消息构造at游标。释放正文后的页只需保留游标和实测高度，向任一方向滚回时准确重取；新消息不使旧页的范围漂移。无需新表、全历史COUNT、偏移分页或完整历史缓存。
+- hasMore/nextCursor仍描述更早方向，nextCursor保持原格式。at不是订阅初始化，不更新eventCursor；最新页才携带同快照当前请求与订阅起点。
+- 查询由既有DAO/Mapper负责，精确scope在排序与LIMIT之前落实。原20条与向前分页契约不变。

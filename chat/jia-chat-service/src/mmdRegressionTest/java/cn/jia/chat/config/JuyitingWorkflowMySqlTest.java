@@ -511,7 +511,7 @@ class JuyitingWorkflowMySqlTest {
         initialize();
         jdbc.execute("DROP TABLE agent_task_formal_delivery");
         jdbc.execute("DROP TABLE agent_task_meta");
-        for (String table : List.of("agent_task_meta", "agent_task_member", "agent_task_work_item", "agent_task_event"))
+        for (String table : List.of("agent_task_meta", "agent_task_member", "agent_task_work_item", "agent_task_event", "agent_task_artifact"))
             jdbc.execute(productionTable(table));
         for (String sql : resource("db/agent-task-formal-delivery-r2.sql").split(";"))
             if (!sql.isBlank()) jdbc.execute(sql);
@@ -520,6 +520,8 @@ class JuyitingWorkflowMySqlTest {
         jdbc.update("INSERT INTO agent_task_work_item(tenant_id,client_id,owner_jiacn,task_id,work_item_id,title,work_type,assignee_agent_id,status,result_artifact_id,submitted_at,version) VALUES('0','client','owner','task','work','本轮成果','document','wuyong','submitted','manifest',1,0)");
         jdbc.update("INSERT INTO agent_task_formal_delivery(tenant_id,client_id,task_id,work_item_id,delivery_id,revision,producer_agent_id,run_id,summary,state,submission_digest,manifest_artifact_id,manifest_artifact_version,submitted_at,version) VALUES('0','client','task','work','delivery',1,'wuyong','run','本轮成果','submitted',?,'manifest',1,1,0)","f".repeat(64));
         jdbc.update("INSERT INTO agent_task_formal_delivery_item(tenant_id,client_id,delivery_id,artifact_id,artifact_version,content_hash,purpose,item_order) VALUES('0','client','delivery','result',1,?,'RESULT',0),('0','client','delivery','manifest',1,?,'MANIFEST',1)","a".repeat(64),"b".repeat(64));
+        // The window read joins immutable artifact-version metadata; use production DDL and real rows.
+        jdbc.update("INSERT INTO agent_task_artifact(artifact_id,task_id,owner_jiacn,producer_agent_id,artifact_type,title,content,content_hash,artifact_version,created_at,tenant_id,client_id) VALUES('result','task','owner','wuyong','document','正文','result',?,1,1,'0','client'),('manifest','task','owner','wuyong','document','清单','manifest',?,1,1,'0','client')", "a".repeat(64), "b".repeat(64));
         // Exact committed workspace provenance used by the production source read projection.
         jdbc.execute("CREATE TABLE agent_personal_workspace_execution(tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),execution_id VARCHAR(100),task_id VARCHAR(100))");
         jdbc.execute("CREATE TABLE agent_personal_workspace_execution_output(tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),execution_id VARCHAR(100),workspace_file_id VARCHAR(100),workspace_file_version INT,formal_delivery_id VARCHAR(100),artifact_id VARCHAR(100),artifact_version INT,content_hash CHAR(64),output_state VARCHAR(24),publication_state VARCHAR(24))");
@@ -577,7 +579,7 @@ class JuyitingWorkflowMySqlTest {
             context.registerBean(cn.jia.agent.service.AgentTaskEventAfterCommitPublisher.class,()->new cn.jia.agent.service.AgentTaskEventAfterCommitPublisher(context.getBean(cn.jia.agent.service.AgentTaskEventBroker.class),manager));
             context.registerBean(cn.jia.agent.service.AgentTaskEventWriter.class,()->new cn.jia.agent.service.impl.AgentTaskEventWriterImpl(events,manager,context.getBean(cn.jia.agent.service.AgentTaskEventAfterCommitPublisher.class)));
             context.registerBean(cn.jia.agent.service.AgentTaskFormalDeliveryDecisionService.class,()->new cn.jia.agent.service.impl.AgentTaskFormalDeliveryDecisionServiceImpl(deliveries,roots,members,work,locks,context.getBean(cn.jia.agent.service.AgentTaskEventWriter.class)));
-            context.registerBean(cn.jia.agent.service.AgentTaskFormalDeliveryReadService.class,()->new cn.jia.agent.service.impl.AgentTaskFormalDeliveryReadServiceImpl(deliveries,roots,work));
+            context.registerBean(cn.jia.agent.service.AgentTaskFormalDeliveryReadService.class,()->new cn.jia.agent.service.impl.AgentTaskFormalDeliveryReadServiceImpl(deliveries,roots));
             context.registerBean(cn.jia.chat.service.ChatTaskDeliveryReviewReadService.class,()->new cn.jia.chat.service.ChatTaskDeliveryReviewReadService(jdbc,context.getBean(cn.jia.agent.service.AgentTaskFormalDeliveryReadService.class),promotions));
             context.registerBean(cn.jia.chat.service.ChatTaskDeliveryReviewTransaction.class,()->new cn.jia.chat.service.ChatTaskDeliveryReviewTransaction(locks,reviews,context.getBean(cn.jia.agent.service.AgentTaskFormalDeliveryReadService.class),context.getBean(cn.jia.agent.service.AgentTaskFormalDeliveryDecisionService.class),context.getBean(cn.jia.chat.service.ChatTaskDeliveryReviewReadService.class)));
             context.refresh();
@@ -674,6 +676,91 @@ class JuyitingWorkflowMySqlTest {
             assertEquals(artifacts,jdbc.queryForList("SELECT * FROM agent_task_formal_delivery_item ORDER BY item_order"));
             assertEquals("PROCESSING",reviews.require(OWNER,"task",admitted.operationId(),false).state());
             assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_event WHERE event_type='FORMAL_DELIVERY_ACCEPTED'",Integer.class));
+        }
+    }
+
+    @Test void messageHistoryIndexSupportsBoundedReloadOnRealMysql() {
+        jdbc.execute("DROP TABLE chat_message"); jdbc.execute("DROP TABLE chat_conversation");
+        for (String statement : resource("contracts/revision-chat-tables.sql").split(";"))
+            if (!statement.isBlank()) jdbc.execute(statement);
+        jdbc.update("INSERT INTO chat_conversation(id,tenant_id,jiacn,client_id) VALUES(7,'0','owner','client')");
+        var inserts = new ArrayList<Object[]>();
+        for (long id = 1; id <= 2000; id++) inserts.add(new Object[]{id});
+        jdbc.batchUpdate("INSERT INTO chat_message(id,tenant_id,jiacn,client_id,conversation_id,create_time,content) VALUES(?,'0','owner','client','7',1000,'fixture')", inserts);
+        jdbc.execute("ANALYZE TABLE chat_message");
+        var config = new com.baomidou.mybatisplus.core.MybatisConfiguration();
+        config.setEnvironment(new org.apache.ibatis.mapping.Environment("owned-history-mysql",
+                new org.mybatis.spring.transaction.SpringManagedTransactionFactory(), jdbc.getDataSource()));
+        config.addMapper(cn.jia.chat.mapper.ChatMessageMapper.class);
+        var mapper = new org.mybatis.spring.SqlSessionTemplate(new org.apache.ibatis.session.SqlSessionFactoryBuilder().build(config))
+                .getMapper(cn.jia.chat.mapper.ChatMessageMapper.class);
+        var rows = mapper.findExactOwnedMessagePageAt("0", "owner", "client", "7", 7L, 1000L, 1500L, 21);
+        assertEquals(java.util.stream.LongStream.iterate(1500, id -> id - 1).limit(21).boxed().toList(),
+                rows.stream().map(cn.jia.chat.entity.ChatMessageEntity::getId).toList());
+        assertTrue(mapper.findExactOwnedMessagePageAt("0", "Owner", "client", "7", 7L, 1000L, 1500L, 21).isEmpty());
+        var parameters = new HashMap<String, Object>();
+        parameters.put("tenantId", "0"); parameters.put("ownerJiacn", "owner"); parameters.put("clientId", "client");
+        parameters.put("conversationId", "7"); parameters.put("numericConversationId", 7L);
+        parameters.put("anchorTime", 1000L); parameters.put("anchorId", 1500L); parameters.put("limit", 21);
+        var bound = config.getMappedStatement(cn.jia.chat.mapper.ChatMessageMapper.class.getName() + ".findExactOwnedMessagePageAt").getBoundSql(parameters);
+        var plan = jdbc.queryForList("EXPLAIN " + bound.getSql(), bound.getParameterMappings().stream().map(parameter -> parameters.get(parameter.getProperty())).toArray());
+        assertTrue(plan.stream().anyMatch(row -> "idx_chat_message_history_page".equals(row.get("key"))), plan.toString());
+        assertFalse(plan.stream().anyMatch(row -> String.valueOf(row.get("Extra")).contains("filesort")), plan.toString());
+        System.out.println("HALL_HISTORY_WINDOW_EXPLAIN=" + CanonicalContextJson.write(plan));
+    }
+
+    @Test void deliveryIndexMaintenanceRehearsalPreservesCommittedBytesOnRealMysql() throws Exception {
+        try (var revision = new RevisionHarness()) {
+            // Synthetic committed ANSWER on the real typed schema; never invokes model execution.
+            var answer = new ChatActionOutcomeContract.Outcome(5, "ANSWER", "历史正文", null, null, true, null, null);
+            var envelope = new LinkedHashMap<String, Object>();
+            envelope.put("schemaVersion", 5);
+            envelope.put("interactionOutcome", ChatActionFinalValidator.outcomeMap(answer));
+            envelope.put("inspectionInputReceipt", null);
+            jdbc.update("UPDATE chat_typed_outcome SET kind='ANSWER',outcome_json=?,delivery_target_agent_id=NULL,delivery_parent_outcome_id=NULL",
+                    CanonicalContextJson.write(envelope));
+            var before = jdbc.queryForList("SELECT outcome_id,HEX(binding_json) binding_bytes,HEX(outcome_json) outcome_bytes,final_digest,text FROM chat_typed_outcome");
+            var maintenance = new ChatTypedDeliberationSchemaInitializer(jdbc, true, true);
+            var first = maintenance.backfillDeliveryIndex("0");
+            assertEquals(1, first.scanned()); assertEquals(1, first.updated());
+            assertEquals("wuyong", jdbc.queryForObject("SELECT delivery_target_agent_id FROM chat_typed_outcome WHERE outcome_id='parent-outcome'", String.class));
+            assertEquals(before, jdbc.queryForList("SELECT outcome_id,HEX(binding_json) binding_bytes,HEX(outcome_json) outcome_bytes,final_digest,text FROM chat_typed_outcome"));
+            assertEquals(0, maintenance.backfillDeliveryIndex("0").updated());
+            assertEquals(0, maintenance.backfillDeliveryIndex("other").scanned());
+            assertFalse(maintenance.ready()); // Explicit backfill does not pretend startup/catalog activation.
+        }
+    }
+
+    @Test void messagePageOutcomeQueriesReadCommittedFactsWithExactScopeOnRealMysql() throws Exception {
+        try (var revision = new RevisionHarness()) {
+            for (String sql : resource("db/agent-skill-execution-v1.sql").split(";"))
+                if (!sql.isBlank()) jdbc.execute(sql);
+            // The existing revision harness seeds its execution validator separately. Give this
+            // display test the exact production persisted envelope rather than a validator mock.
+            jdbc.update("UPDATE chat_typed_outcome SET outcome_json=JSON_SET(outcome_json,'$.schemaVersion',5)");
+            var scope = new ChatBountyRequestIndexStore.Scope("0", "owner", "client", "7", 1);
+            var store = new ChatMessageOutcomeStore(jdbc);
+            var rows = store.read(scope, List.of("parent"), List.of(101L));
+            assertEquals(1, rows.outcomes().size());
+            assertTrue(store.read(scope, List.of("parent"), List.of(102L)).outcomes().isEmpty());
+            assertFalse(rows.outcomes().getFirst().containsKey("text"));
+            assertEquals(1, rows.progress().size());
+            assertEquals("REVIEW_REQUESTED", rows.progress().getFirst().get("event_type"));
+            var reader = new ChatMessageOutcomeReadService(store);
+            var before = reader.read(scope, List.of("parent"), List.of(101L)).getFirst();
+            assertEquals("READY", before.get("state"));
+            assertEquals("QUEUED", ((Map<?, ?>) before.get("reviewProgress")).get("state"));
+            revision.consume();
+            var after = reader.read(scope, List.of("parent"), List.of(101L)).getFirst();
+            assertNotNull(((Map<?, ?>) after.get("reviewProgress")).get("childRequestId"));
+            for (var wrong : List.of(
+                    new ChatBountyRequestIndexStore.Scope("other", "owner", "client", "7", 1),
+                    new ChatBountyRequestIndexStore.Scope("0", "Owner", "client", "7", 1),
+                    new ChatBountyRequestIndexStore.Scope("0", "owner", "other", "7", 1),
+                    new ChatBountyRequestIndexStore.Scope("0", "owner", "client", "07", 1),
+                    new ChatBountyRequestIndexStore.Scope("0", "owner", "client", "7", 2)))
+                assertTrue(store.read(wrong, List.of("parent"), List.of(101L)).outcomes().isEmpty());
+            assertTrue(store.read(scope, List.of("Parent"), List.of(101L)).outcomes().isEmpty());
         }
     }
 

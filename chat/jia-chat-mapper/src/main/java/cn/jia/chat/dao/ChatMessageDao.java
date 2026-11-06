@@ -7,6 +7,14 @@ import java.util.List;
 
 /** Chat message DAO boundary. */
 public interface ChatMessageDao extends IBaseDao<ChatMessageEntity> {
+    /** Descending, keyset-bounded display rows; scope is enforced by the mapper before LIMIT. */
+    List<ChatMessageEntity> findOwnedMessagePage(String tenantId, String ownerJiacn,
+            String clientId, String conversationId, Long beforeTime, Long beforeId, int limit);
+
+    /** Descending inclusive keyset page for reloading an evicted history window. */
+    List<ChatMessageEntity> findOwnedMessagePageAt(String tenantId, String ownerJiacn,
+            String clientId, String conversationId, Long anchorTime, Long anchorId, int limit);
+
     /** Scoped task-thread write boundary; intentionally separate from generic conversations. */
     int insertScoped(String tenantId, String clientId, ChatMessageEntity message);
 

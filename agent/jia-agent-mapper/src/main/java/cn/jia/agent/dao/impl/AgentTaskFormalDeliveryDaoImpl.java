@@ -68,10 +68,27 @@ public class AgentTaskFormalDeliveryDaoImpl implements AgentTaskFormalDeliveryDa
     }
 
     @Override
+    public List<AgentTaskFormalDeliveryEntity> listTaskDeliveryWindow(
+            String tenantId, String clientId, String taskId, String state, Long beforeRevision, int limit) {
+        scope(tenantId, clientId); id(taskId, "taskId");
+        if (state != null) state(state);
+        if (beforeRevision != null) positive(beforeRevision, "beforeRevision");
+        if (limit < 1 || limit > 100) throw new IllegalArgumentException("formal delivery window limit is invalid");
+        return mapper.selectTaskDeliveryWindow(tenantId, clientId, taskId, state, beforeRevision, limit);
+    }
+
+    @Override
     public List<AgentTaskFormalDeliveryItemEntity> listItems(
             String tenantId, String clientId, String deliveryId) {
         scope(tenantId, clientId); id(deliveryId, "deliveryId");
         return mapper.selectItems(tenantId, clientId, deliveryId);
+    }
+
+    @Override
+    public List<DisplayItem> listDisplayItems(String tenantId, String clientId, String ownerJiacn,
+            String taskId, List<String> deliveryIds) {
+        if (deliveryIds.isEmpty()) return List.of();
+        return mapper.selectDisplayItems(tenantId, clientId, ownerJiacn, taskId, deliveryIds);
     }
 
     @Override

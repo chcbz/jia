@@ -153,9 +153,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     @Autowired public void setChatDispatchAuthority(cn.jia.chat.service.ChatDispatchAuthorityService value) { chatDispatchAuthority=value; }
     @org.springframework.beans.factory.annotation.Value("${jia.agent.conversation-execution.enabled:false}")
     private boolean nativeWorkNotificationsEnabled;
-    // Same static condition as ArchiveMaintenanceRuntimeController, not inferred from an HTTP 404.
-    @org.springframework.beans.factory.annotation.Value("${agent.position-skills.enabled:false}")
-    private boolean archiveJobDiscoveryEnabled;
+    // Legacy job execution is retired; native maintenance is discovered in the current-turn tool catalog.
     private final Set<String> nativeWorkNotificationSessions = ConcurrentHashMap.newKeySet();
     private final Set<String> workspaceFileWorkNotificationSessions = ConcurrentHashMap.newKeySet();
     private TypedDeliberationSessionRegistry typedDeliberationSessions;
@@ -956,7 +954,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             if (nativeWorkNotifications) event.put("nativeWorkNotifications",1);
             boolean workspaceFileWorkNotifications=Integer.valueOf(1).equals(payload.get("workspaceFileWorkNotifications"));
             if (workspaceFileWorkNotifications) event.put("workspaceFileWorkNotifications",1);
-            event.put("archiveJobDiscovery", archiveJobDiscoveryEnabled ? 1 : 0);
+            event.put("archiveJobDiscovery", 0);
             event.put("durableStateHealthy", Boolean.TRUE.equals(payload.get("durableStateHealthy")));
             event.put("runtimeCapabilities", runtimeCapabilities.normalizedForReceipt());
             event.put("nativeBountyExecution", nativeBountyExecution.normalizedForReceipt());

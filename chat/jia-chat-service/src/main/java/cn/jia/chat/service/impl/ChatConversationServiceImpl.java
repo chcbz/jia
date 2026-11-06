@@ -150,6 +150,45 @@ public class ChatConversationServiceImpl implements ChatConversationService {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public MessagePage findMessagePage(String conversationId, String before) {
+        EsContext context = requireIdentity();
+        ChatConversationEntity conversation = requireGenericConversationForIdentity(
+                context.getTenantId(), context.getJiacn(), context.getClientId(), conversationId);
+        Long beforeTime = null;
+        Long beforeId = null;
+        boolean anchored = before != null && before.startsWith("at:");
+        if (anchored) before = before.substring("at:".length());
+        if (before != null) {
+            if (!before.matches("(n|0|[1-9][0-9]*):[1-9][0-9]*")) throw invalidMessageCursor();
+            String[] parts = before.split(":", -1);
+            try { beforeTime = "n".equals(parts[0]) ? -1L : Long.valueOf(parts[0]); beforeId = Long.valueOf(parts[1]); }
+            catch (NumberFormatException invalid) { throw invalidMessageCursor(); }
+        }
+        final int pageSize = 20;
+        List<ChatMessageEntity> rows = anchored
+                ? chatMessageDao.findOwnedMessagePageAt(
+                    context.getTenantId(), context.getJiacn(), context.getClientId(),
+                    Long.toString(conversation.getId()), beforeTime, beforeId, pageSize + 1)
+                : chatMessageDao.findOwnedMessagePage(
+                context.getTenantId(), context.getJiacn(), context.getClientId(),
+                Long.toString(conversation.getId()), beforeTime, beforeId, pageSize + 1);
+        boolean hasMore = rows.size() > pageSize;
+        var messages = new java.util.ArrayList<>(rows.subList(0, Math.min(rows.size(), pageSize)));
+        java.util.Collections.reverse(messages);
+        ChatMessageEntity boundary = messages.isEmpty() ? null : messages.getFirst();
+        String nextBefore = hasMore
+                ? (boundary.getCreateTime() == null ? "n" : boundary.getCreateTime().toString())
+                        + ":" + boundary.getId() : null;
+        return new MessagePage(List.copyOf(messages), hasMore, nextBefore, conversation);
+    }
+
+    private static cn.jia.chat.service.ChatDeliberationException invalidMessageCursor() {
+        return new cn.jia.chat.service.ChatDeliberationException(
+                cn.jia.chat.service.ChatDeliberationException.Reason.INVALID_REQUEST, "Invalid message cursor");
+    }
+
+    @Override
     @Transactional(rollbackFor = Exception.class)
     public ChatConversationEntity create(ChatConversationEntity entity) {
         if (entity == null) {

@@ -22,6 +22,30 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentTaskFormalDeliveryMapperContractTest {
 
+    @Test void displayWindowJoinsOnlyFixedVersionsWithoutLoadingContentOrLocking() throws Exception {
+        var method = AgentTaskFormalDeliveryMapper.class.getDeclaredMethod("selectDisplayItems", String.class,
+                String.class, String.class, String.class, java.util.List.class);
+        String sql = String.join("\n", method.getAnnotation(Select.class).value());
+        assertTrue(sql.contains("a.artifact_version=i.artifact_version"));
+        assertTrue(sql.contains("BINARY a.content_hash=BINARY i.content_hash"));
+        assertTrue(sql.contains("BINARY a.owner_jiacn=BINARY #{ownerJiacn}"));
+        assertTrue(sql.contains("BINARY w.owner_jiacn=BINARY #{ownerJiacn}"));
+        assertTrue(sql.contains("collection=\"deliveryIds\""));
+        assertTrue(sql.contains("OCTET_LENGTH(a.content)"));
+        assertFalse(sql.contains("a.*")); assertFalse(sql.contains("storage_uri"));
+        assertFalse(sql.contains("FOR UPDATE")); assertFalse(sql.contains("MAX(artifact_version)"));
+    }
+
+    @Test void historyWindowIsScopedKeysetBeforeLimitWithoutCountOrOffset() throws Exception {
+        var method=AgentTaskFormalDeliveryMapper.class.getDeclaredMethod("selectTaskDeliveryWindow",String.class,String.class,String.class,String.class,Long.class,int.class);
+        String sql=String.join("\n",method.getAnnotation(Select.class).value());
+        assertTrue(sql.contains("d.revision &lt; #{beforeRevision}"));
+        assertTrue(sql.contains("AND d.state=#{state}"));
+        assertTrue(sql.indexOf("d.task_id=#{taskId}")<sql.indexOf("LIMIT #{limit}"));
+        assertTrue(sql.contains("CAST(d.task_id AS BINARY)"));
+        assertFalse(sql.contains("COUNT("));assertFalse(sql.contains("OFFSET"));assertFalse(sql.contains("FOR UPDATE"));
+    }
+
     @Test
     void lockAndReviewCasAreByteExactAndScoped() throws Exception {
         Method lock = AgentTaskFormalDeliveryMapper.class.getDeclaredMethod(

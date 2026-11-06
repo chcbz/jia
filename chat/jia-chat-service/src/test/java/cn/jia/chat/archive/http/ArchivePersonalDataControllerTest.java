@@ -23,7 +23,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
@@ -89,7 +89,7 @@ class ArchivePersonalDataControllerTest {
                 org.mockito.ArgumentMatchers.eq("/archive/v1/me/progress/" + EDITION),
                 org.mockito.ArgumentMatchers.eq("valid-key"), any()))
                 .thenReturn(new ArchiveMutationResult(
-                        200, "application/json;charset=UTF-8", new byte[]{'{', '}'}, false));
+                        200, "application/json;charset=UTF-8", "{\"protocolVersion\":1,\"requestId\":null,\"code\":\"E0\",\"data\":null}".getBytes(StandardCharsets.UTF_8), false));
         when(service.notes(any(), org.mockito.ArgumentMatchers.eq(EDITION),
                 org.mockito.ArgumentMatchers.eq(EDITION + "-c001"), any(),
                 org.mockito.ArgumentMatchers.anyInt()))
@@ -118,7 +118,7 @@ class ArchivePersonalDataControllerTest {
     }
 
     @Test
-    void deleteAcceptsOnlyExactStrongSingleVersionAndSuccessfulReplayBytesAreUntouched() {
+    void deleteAcceptsOnlyExactStrongSingleVersionAndSuccessfulReplayBusinessResultIsPreserved() {
         ArchivePersonalDataService service = mock(ArchivePersonalDataService.class);
         ArchivePersonalDataController controller = new ArchivePersonalDataController(service, enabledPolicy());
         HttpServletRequest request = mock(HttpServletRequest.class);
@@ -130,14 +130,15 @@ class ArchivePersonalDataControllerTest {
             assertEquals("INVALID_VERSION", ((JsonResult<?>) response.getBody()).getCode());
         }
 
-        byte[] stored = "{\"status\":200,\"data\":{\"version\":\"2\"}}".getBytes(StandardCharsets.UTF_8);
+        byte[] stored = "{\"protocolVersion\":1,\"requestId\":null,\"code\":\"E0\",\"msg\":\"ok\",\"data\":{\"version\":\"2\"}}".getBytes(StandardCharsets.UTF_8);
         when(service.deleteNote(any(), org.mockito.ArgumentMatchers.eq(ID), org.mockito.ArgumentMatchers.eq("1"),
                 org.mockito.ArgumentMatchers.eq("/archive/v1/me/notes/" + ID),
                 org.mockito.ArgumentMatchers.eq("key")))
                 .thenReturn(new ArchiveMutationResult(200, "application/json;charset=UTF-8", stored, true));
         var response = controller.deleteNote(ID, "\"v1\"", "key", request, valid);
         assertEquals(HttpStatus.OK, response.getStatusCode());
-        assertArrayEquals(stored, (byte[]) response.getBody());
+        assertEquals(cn.jia.core.util.JsonUtil.getMapper().readTree(stored).get("data"),
+                cn.jia.core.util.JsonUtil.getMapper().valueToTree(((JsonResult<?>) response.getBody()).getData()));
     }
 
     @Test
@@ -147,7 +148,7 @@ class ArchivePersonalDataControllerTest {
         HttpServletRequest request = mock(HttpServletRequest.class);
         JwtAuthenticationToken valid = jwt(Map.of("jiacn", "owner-a", "client_id", "client-a"));
         when(service.putBookmark(any(), any(), any(), any(), any()))
-                .thenReturn(new ArchiveMutationResult(200, "application/json;charset=UTF-8", new byte[]{'{', '}'}, false));
+                .thenReturn(new ArchiveMutationResult(200, "application/json;charset=UTF-8", "{\"protocolVersion\":1,\"requestId\":null,\"code\":\"E0\",\"data\":null}".getBytes(StandardCharsets.UTF_8), false));
 
         for (String id : List.of("123e4567-e89b-82d3-a456-426614174000",
                 "123e4567-e89b-f2d3-a456-426614174000")) {

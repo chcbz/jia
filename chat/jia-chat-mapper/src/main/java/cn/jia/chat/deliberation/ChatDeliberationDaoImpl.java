@@ -17,7 +17,6 @@ public class ChatDeliberationDaoImpl implements ChatDeliberationDao {
     public int insertTurn(ChatTurnEntity e) { return mapper.insertTurn(e); }
     public int insertOutbox(ChatDispatchOutboxEntity e) { return mapper.insertOutbox(e); }
     public int insertEvent(ChatConversationEventEntity e) { return mapper.insertEvent(e); }
-    public int assignEventVersion(long s) { return mapper.assignEventVersion(s); }
     public ChatRequestEntity lockRequest(String t,String o,String c,String r,long v){return mapper.lockRequest(t,o,c,r,v);}
     public ChatRequestEntity findRequest(String t,String o,String c,String r){return mapper.findRequest(t,o,c,r);}
     public List<ChatTurnEntity> findTurnsByRequest(String t,String o,String c,String r){return mapper.findTurnsByRequest(t,o,c,r);}

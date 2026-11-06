@@ -274,7 +274,7 @@ public class ChatDeliverySubmissionService {
         result.put("deliveryId",deliveryId);result.put("errorCode",error);result.put("retryable",retryable);
         return Collections.unmodifiableMap(result);
     }
-    private static String publicError(String reason) {
+    static String publicError(String reason) {
         return reason!=null && Set.of("DELIVERY_SOURCE_UNAVAILABLE","DELIVERY_REVIEW_REQUIRED","DELIVERY_TASK_CHANGED","DELIVERY_ASSIGNMENT_CHANGED",
                 "DELIVERY_CONVERSATION_CHANGED","DELIVERY_OPERATION_CONFLICT").contains(reason)?reason:"DELIVERY_SUBMISSION_REJECTED";
     }

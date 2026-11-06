@@ -223,7 +223,6 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
                 LEFT JOIN chat_dispatch_outbox o ON o.turn_id=t.turn_id AND o.event_type='FINAL_PERSISTED'
                 WHERE t.state IN ('FINAL_PERSISTED','PUBLISHED') AND t.final_digest IS NOT NULL
                 """);
-        jdbc.update("UPDATE chat_conversation_event SET event_version=event_sequence WHERE event_version=0");
         jdbc.update("""
                 UPDATE chat_dispatch_outbox o
                 JOIN chat_turn t ON t.turn_id=o.turn_id AND t.dispatch_id=o.dispatch_id
@@ -234,7 +233,7 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
                   'contextSnapshotId',t.snapshot_id,'messageId',CAST(m.id AS CHAR),
                   'conversationId',t.conversation_id,'conversationGeneration',CAST(t.conversation_generation AS CHAR),
                   'content',m.content,'senderName',COALESCE(m.sender_name,t.target_agent_id),
-                  'eventSequence',CAST(e.event_sequence AS CHAR),'eventVersion',CAST(e.event_version AS CHAR),
+                  'eventSequence',CAST(e.event_sequence AS CHAR),'eventVersion',CAST(e.event_sequence AS CHAR),
                   'finalDigest',t.final_digest),
                   o.status=CASE WHEN o.status IN ('SENT','DEAD') THEN o.status ELSE 'READY' END,
                   o.available_at=COALESCE(o.available_at,o.created_at),o.last_error=NULL
@@ -299,7 +298,6 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
                 FROM chat_turn t LEFT JOIN chat_message m ON m.id=t.final_message_id
                 WHERE t.state IN ('FINAL_PERSISTED','PUBLISHED') AND (t.final_digest IS NULL OR m.id IS NULL)
                 """);
-        jdbc.update("UPDATE chat_conversation_event SET event_version=event_sequence WHERE event_version=0");
         recordMigrationStage("DATA_BACKFILLED");
     }
 

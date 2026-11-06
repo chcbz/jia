@@ -7,6 +7,7 @@ import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.chat.dao.ChatConversationDao;
 import cn.jia.chat.deliberation.ChatBountyBindingStore;
 import cn.jia.chat.deliberation.ChatDeliberationDao;
+import cn.jia.chat.deliberation.ChatConversationEventEntity;
 import cn.jia.chat.deliberation.ChatDispatchOutboxEntity;
 import cn.jia.chat.deliberation.ChatTypedDeliberationStore;
 import org.springframework.beans.factory.ObjectProvider;
@@ -87,7 +88,7 @@ public class ChatDeliveryRevisionService {
         ChatDeliberationOutboxWakeup.afterCommit(outboxEvents, event.getAvailableAt());
     }
     @Transactional(propagation=Propagation.NOT_SUPPORTED)
-    public void consume(ChatDeliberationOutboxService.Claim claim) {
+    public ChatConversationEventEntity consume(ChatDeliberationOutboxService.Claim claim) {
         var bound=finals.getObject().loadRevision(claim.row());var row=bound.parent().outcome();var s=row.scope();
         String target=(String)bound.parent().validated().binding().get("targetAgentId");
         try {
@@ -101,14 +102,14 @@ public class ChatDeliveryRevisionService {
                 if("PROCESSING".equals(prior.state()))return false;
                 ChatTaskDeliveryReviewStore.committedReceipt(prior);ack(claim);return true;
             });
-            if(settled)return;
+            if(settled)return null;
             var executor=revisionExecutor(bound);
             // Cold package I/O is strictly outside every task/Chat/outbox lock. The saved
             // dispatch grant supplies B's identity; A still owns the task and its documents.
             packages.prepare(new cn.jia.agent.service.SkillCapabilityLookup.Scope(s.tenantId(),s.clientId(),executor.executorOwner(),target));
             if(retention==null)throw new IllegalStateException("Revision source service unavailable");
             var formalSources=retention.prepareRevisionSources(bound);
-            tasks.executeWithLockedTaskRootInOwnerScope(s.tenantId(),s.clientId(),s.ownerJiacn(),row.taskId(),root->{
+            return tasks.executeWithLockedTaskRootInOwnerScope(s.tenantId(),s.clientId(),s.ownerJiacn(),row.taskId(),root->{
                 var op=operations.admitRevision(bound);var owner=new ChatDeliveryReviewContract.Scope(s.tenantId(),s.clientId(),s.ownerJiacn());
                 if(!"PROCESSING".equals(op.state())) {ChatTaskDeliveryReviewStore.committedReceipt(op);ack(claim);return null;}
                 var b=bound.basis();
@@ -160,24 +161,26 @@ public class ChatDeliveryRevisionService {
                 var receipt=new ChatDeliveryReviewContract.Receipt(1,op.operationId(),row.taskId(),b.deliveryId(),"REQUEST_CHANGES","COMMITTED",
                         Long.toString(op.stateVersion()+1),"RUNNING",result.getTaskVersion().toString(),"CHANGES_REQUESTED",result.getDeliveryVersion().toString(),
                         child,row.requestId(),s.conversationId(),null,false);
-                operations.settle(owner,op,receipt);ack(claim);return null;
+                operations.settle(owner,op,receipt);
+                var changed=deliberation.getObject().persistDeliveryReviewChanged(row,receipt,now);
+                ack(claim);return changed;
             });
         } catch(cn.jia.agent.service.InstalledSkillDescriptorLookup.SourceUnavailable unavailable) {
             if(unavailable.reason()==cn.jia.agent.service.InstalledSkillDescriptorLookup.SourceUnavailable.Reason.FORBIDDEN)
-                reject(claim,bound,"DELIVERY_REVIEW_FORBIDDEN");
+                return reject(claim,bound,"DELIVERY_REVIEW_FORBIDDEN");
             else throw unavailable; // An unavailable dependency is not proof of revoked authority.
-        } catch(ChatDeliveryReviewContract.SourceUnavailable unavailable) {reject(claim,bound,"DELIVERY_SOURCE_UNAVAILABLE");}
-        catch(ChatDeliveryReviewContract.Conflict conflict) {reject(claim,bound,"DELIVERY_REVIEW_CONFLICT");}
+        } catch(ChatDeliveryReviewContract.SourceUnavailable unavailable) {return reject(claim,bound,"DELIVERY_SOURCE_UNAVAILABLE");}
+        catch(ChatDeliveryReviewContract.Conflict conflict) {return reject(claim,bound,"DELIVERY_REVIEW_CONFLICT");}
         catch(cn.jia.agent.exception.AgentTaskCollaborationException failure) {
             switch(failure.getReason()) {
-                case INVALID_TRANSITION, VERSION_CONFLICT -> reject(claim,bound,"DELIVERY_REVIEW_CONFLICT");
-                case FORBIDDEN -> reject(claim,bound,"DELIVERY_REVIEW_FORBIDDEN");
-                case NOT_FOUND -> reject(claim,bound,"DELIVERY_REVIEW_NOT_FOUND");
+                case INVALID_TRANSITION, VERSION_CONFLICT -> {return reject(claim,bound,"DELIVERY_REVIEW_CONFLICT");}
+                case FORBIDDEN -> {return reject(claim,bound,"DELIVERY_REVIEW_FORBIDDEN");}
+                case NOT_FOUND -> {return reject(claim,bound,"DELIVERY_REVIEW_NOT_FOUND");}
                 default -> throw failure;
             }
         } catch(ChatDeliberationException failure) {
-            if(failure.reason()==ChatDeliberationException.Reason.CONFLICT)reject(claim,bound,"DELIVERY_REVIEW_CONFLICT");
-            else if(failure.reason()==ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN)reject(claim,bound,"DELIVERY_REVIEW_FORBIDDEN");
+            if(failure.reason()==ChatDeliberationException.Reason.CONFLICT)return reject(claim,bound,"DELIVERY_REVIEW_CONFLICT");
+            else if(failure.reason()==ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN)return reject(claim,bound,"DELIVERY_REVIEW_FORBIDDEN");
             else throw failure;
         }
     }
@@ -193,22 +196,26 @@ public class ChatDeliveryRevisionService {
             throw new ChatDeliberationException(ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN,"Revision authority unavailable");
         return dispatchAuthority.forTurn(turn);
     }
-    private void reject(ChatDeliberationOutboxService.Claim claim,BoundRevision bound,String code) {
+    private ChatConversationEventEntity reject(ChatDeliberationOutboxService.Claim claim,BoundRevision bound,String code) {
         var row=bound.parent().outcome();var s=row.scope();
-        try { tasks.executeWithLockedTaskRootInOwnerScope(s.tenantId(),s.clientId(),s.ownerJiacn(),row.taskId(),root->{
+        try { return tasks.executeWithLockedTaskRootInOwnerScope(s.tenantId(),s.clientId(),s.ownerJiacn(),row.taskId(),root->{
             var op=operations.admitRevision(bound);var owner=new ChatDeliveryReviewContract.Scope(s.tenantId(),s.clientId(),s.ownerJiacn());
+            ChatConversationEventEntity changed=null;
             if("PROCESSING".equals(op.state())) {
                 var batch=deliveries.listForTaskOwner(s.tenantId(),s.clientId(),s.ownerJiacn(),row.taskId()).stream()
                         .filter(v->bound.basis().deliveryId().equals(v.getDeliveryId())).findFirst().orElse(null);
-                operations.settle(owner,op,new ChatDeliveryReviewContract.Receipt(1,op.operationId(),row.taskId(),bound.basis().deliveryId(),"REQUEST_CHANGES","REJECTED",
+                var receipt=new ChatDeliveryReviewContract.Receipt(1,op.operationId(),row.taskId(),bound.basis().deliveryId(),"REQUEST_CHANGES","REJECTED",
                         Long.toString(op.stateVersion()+1),root.getRewardStatus().toUpperCase(java.util.Locale.ROOT),root.getTaskVersion().toString(),
-                        batch==null?null:batch.getState().toUpperCase(java.util.Locale.ROOT),batch==null?null:batch.getDeliveryVersion().toString(),null,row.requestId(),s.conversationId(),code,false));
+                        batch==null?null:batch.getState().toUpperCase(java.util.Locale.ROOT),batch==null?null:batch.getDeliveryVersion().toString(),null,row.requestId(),s.conversationId(),code,false);
+                operations.settle(owner,op,receipt);
+                changed=deliberation.getObject().persistDeliveryReviewChanged(row,receipt,System.currentTimeMillis());
             }
-            ack(claim);return null;
+            ack(claim);return changed;
         }); } catch(cn.jia.agent.exception.AgentTaskCollaborationException unavailable) {
             if(unavailable.getReason()!=cn.jia.agent.exception.AgentTaskCollaborationException.Reason.NOT_FOUND
                     && unavailable.getReason()!=cn.jia.agent.exception.AgentTaskCollaborationException.Reason.FORBIDDEN)throw unavailable;
             operations.rejectUnavailableRevision(bound,outbox,claim,code);
+            return null;
         }
     }
     /** Independent mutable projection. GET never creates/retries an operation or dispatch. */

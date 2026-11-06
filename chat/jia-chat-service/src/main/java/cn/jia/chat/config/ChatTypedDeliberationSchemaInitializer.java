@@ -76,6 +76,48 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
         }
     }
 
+    public record DeliveryIndexBackfillResult(long scanned, long updated, int batches) { }
+
+    /** One-shot host maintenance entry. No Spring context, web server or business worker. */
+    public static void main(String[] args) throws Exception {
+        Map<String, String> environment = System.getenv();
+        validateBackfillCommand(args, environment);
+        var source = new org.springframework.jdbc.datasource.DriverManagerDataSource(
+                environment.get("SPRING_DATASOURCE_URL"), environment.get("SPRING_DATASOURCE_USERNAME"),
+                environment.get("SPRING_DATASOURCE_PASSWORD"));
+        var maintenance = new ChatTypedDeliberationSchemaInitializer(new JdbcTemplate(source), true, true);
+        var result = maintenance.backfillDeliveryIndex(environment.get("CYF_SECURITY_FIXED_TENANT_TENANT_ID"));
+        System.out.printf("{\"scanned\":%d,\"updated\":%d,\"batches\":%d}%n", result.scanned(), result.updated(), result.batches());
+    }
+
+    static void validateBackfillCommand(String[] args, Map<String, String> environment) {
+        if (args.length != 1 || !"--backfill-delivery-index".equals(args[0]))
+            throw new IllegalArgumentException("Expected --backfill-delivery-index; this entry never initializes schemas");
+        for (String key : List.of("SPRING_DATASOURCE_URL", "SPRING_DATASOURCE_USERNAME", "SPRING_DATASOURCE_PASSWORD",
+                "CYF_SECURITY_FIXED_TENANT_TENANT_ID")) {
+            if (environment.get(key) == null || (!"SPRING_DATASOURCE_PASSWORD".equals(key) && environment.get(key).isBlank()))
+                throw new IllegalArgumentException("Missing maintenance environment: " + key);
+        }
+    }
+
+
+    /** Explicit, separately authorized maintenance action; not part of startup/initialize.
+     * The operator must stop old writers and retain a fixed backup before calling. */
+    public synchronized DeliveryIndexBackfillResult backfillDeliveryIndex(String tenant) throws Exception {
+        if (!enabled || !allowMigration) throw new IllegalStateException("Typed maintenance is not enabled");
+        DataSource source = jdbc.getDataSource();
+        if (source == null) throw new IllegalStateException("Typed deliberation DataSource unavailable");
+        try (Connection connection = source.getConnection()) {
+            requireMySql8(connection);
+            JdbcTemplate locked = new JdbcTemplate(new SingleConnectionDataSource(connection, true));
+            acquire(locked);
+            try {
+                validateCatalog(locked);
+                return ChatOutcomeDeliveryIndexBackfill.run(connection, tenant);
+            } finally { release(locked); }
+        }
+    }
+
     private boolean initializeSchema() throws Exception {
         if (deliberationSchema != null) deliberationSchema.ensureInitialized();
         DataSource source = jdbc.getDataSource();
@@ -331,7 +373,8 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
                         col("task_id",v100,false,null), num("assignment_revision",b,false,null), num("assistant_message_id",b,false,null),
                         col("final_digest",v100,false,null), col("kind","varchar(30)",false,null), col("text","mediumtext",false,null),
                         col("binding_json","mediumtext",false,null), col("facts_json","mediumtext",false,null),
-                        col("outcome_json","mediumtext",false,null), col("source_catalog_json","mediumtext",false,null), num("created_at",b,false,null)),
+                        col("outcome_json","mediumtext",false,null), col("source_catalog_json","mediumtext",false,null), num("created_at",b,false,null),
+                        col("delivery_target_agent_id",v100,true,null), col("delivery_parent_outcome_id",v64,true,null)),
                 "chat_typed_pending_question", List.of(
                         col("pending_question_id",v64,false,null), col("outcome_id",v64,false,null), col("tenant_id",v50,false,null),
                         col("owner_jiacn",v50,false,null), col("client_id",v50,false,null), col("conversation_id",v100,false,null),
@@ -366,6 +409,8 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
                         "uk_chat_typed_outcome_scope_turn", idx(true,scope,"turn_id"),
                         "uk_chat_typed_outcome_scope_request", idx(true,scope,"request_id","request_revision"),
                         "idx_chat_typed_outcome_message", idx(false,scope,"assistant_message_id"),
+                        "idx_chat_typed_outcome_delivery_order", idx(false,scope,"task_id","assignment_revision","delivery_target_agent_id","assistant_message_id"),
+                        "idx_chat_typed_outcome_delivery_parent", idx(false,scope,"task_id","assignment_revision","delivery_target_agent_id","delivery_parent_outcome_id"),
                         "idx_chat_typed_outcome_turn_fk", idx(false,"turn_id")),
                 "chat_typed_pending_question", Map.of(
                         "PRIMARY", idx(true,"pending_question_id"),

@@ -1,0 +1,49 @@
+{
+  "protocolVersion": 1,
+  "requestId": "hall-request-index-window",
+  "code": "E0",
+  "msg": "",
+  "data": {
+    "schemaVersion": 1,
+    "scope": {
+      "conversationId": "101",
+      "conversationGeneration": "1",
+      "taskId": "task"
+    },
+    "after": "0",
+    "through": "9000",
+    "nextAfter": null,
+    "hasMore": false,
+    "entries": [
+      {
+        "ordinal": "7",
+        "request": {
+          "requestId": "r7",
+          "requestRevision": "1",
+          "conversationId": "101",
+          "conversationGeneration": "1",
+          "userMessageId": "9007199254740993",
+          "state": "RUNNING",
+          "stateVersion": "2",
+          "turns": [],
+          "steps": []
+        }
+      },
+      {
+        "ordinal": "9000",
+        "request": {
+          "requestId": "r9000",
+          "requestRevision": "1",
+          "conversationId": "101",
+          "conversationGeneration": "1",
+          "userMessageId": "9007199254740995",
+          "state": "RUNNING",
+          "stateVersion": "2",
+          "turns": [],
+          "steps": []
+        }
+      }
+    ],
+    "eventCursor": null
+  }
+}

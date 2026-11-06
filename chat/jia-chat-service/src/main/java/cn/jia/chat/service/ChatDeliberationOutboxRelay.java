@@ -283,7 +283,7 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
                     try {outbox.renew(claim,System.currentTimeMillis(),leaseMillis);}
                     catch(RuntimeException failure) {claim.invalidate();}
                 },heartbeatMillis,heartbeatMillis,TimeUnit.MILLISECONDS);
-                try {revisions.consume(claim);} finally {heartbeat.cancel(false);}
+                try {publishPersistedEvent(revisions.consume(claim));} finally {heartbeat.cancel(false);}
             }
             case ChatDeliverySubmissionService.EVENT -> {
                 if(submissions==null)throw new IllegalStateException("Delivery submission service is unavailable");

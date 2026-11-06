@@ -88,6 +88,7 @@ class ChatDeliveryRevisionServiceTest {
         var captor=org.mockito.ArgumentCaptor.forClass(ChatDeliveryReviewContract.Receipt.class);
         verify(operations).settle(eq(owner),eq(op),captor.capture());
         var receipt=ChatDeliveryReviewContract.receipt(ChatDeliveryReviewContract.json(captor.getValue()));
+        verify(deliberation).persistDeliveryReviewChanged(eq(row),eq(captor.getValue()),anyLong());
         assertEquals("REJECTED",receipt.state());assertEquals(code,receipt.errorCode());assertNull(receipt.requestId());
         verify(outbox).sent(eq(claim),anyLong());verifyNoInteractions(decisions,typed);
         verify(deliberation,never()).admitDeliveryRevisionContinuation(any(),anyString(),any(),any());
@@ -102,6 +103,7 @@ class ChatDeliveryRevisionServiceTest {
         var receipt=org.mockito.ArgumentCaptor.forClass(ChatDeliveryReviewContract.Receipt.class);
         verify(operations).settle(eq(owner),eq(op),receipt.capture());assertEquals("COMMITTED",receipt.getValue().state());
         assertEquals("RUNNING",receipt.getValue().taskState());assertNotNull(receipt.getValue().requestId());
+        verify(deliberation).persistDeliveryReviewChanged(eq(row),eq(receipt.getValue()),anyLong());
         verify(outbox).sent(eq(claim),anyLong());
     }
     @Test void sameOwnerUsesTheSameAuthorityPath() {
@@ -143,7 +145,8 @@ class ChatDeliveryRevisionServiceTest {
         var prior=new ChatTaskDeliveryReviewStore.Operation(op.operationId(),op.taskId(),op.key(),op.digest(),op.deliveryId(),"COMMITTED",2,
                 ChatDeliveryReviewContract.json(receipt));
         when(operations.byKey(owner,"task_fixture",event.getEventId(),true)).thenReturn(prior);
-        service.consume(claim);verifyNoInteractions(authority,packages,retention,decisions,typed);verify(outbox).sent(eq(claim),anyLong());
+        assertNull(service.consume(claim));verifyNoInteractions(authority,packages,retention,decisions,typed);verify(outbox).sent(eq(claim),anyLong());
+        verify(deliberation,never()).persistDeliveryReviewChanged(any(),any(),anyLong());
     }
     @Test void transientPreparationCanRecoverOnSameEventWithoutDuplicateExecution() {
         doThrow(new InstalledSkillDescriptorLookup.SourceUnavailable()).doNothing().when(packages).prepare(any());
@@ -156,5 +159,12 @@ class ChatDeliveryRevisionServiceTest {
     }
     private static ChatDeliberationException denied() {
         return new ChatDeliberationException(ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN,"authority unavailable");
+    }
+    @Test void committedEventIsReturnedOnlyAfterTheOwningTransactionCompletes() {
+        var event=new ChatConversationEventEntity().setEventType("delivery_review_changed");
+        when(deliberation.persistDeliveryReviewChanged(eq(row),any(),anyLong())).thenAnswer(call->{
+            assertTrue(inRoot);return event;
+        });
+        assertSame(event,service.consume(claim));assertFalse(inRoot);
     }
 }

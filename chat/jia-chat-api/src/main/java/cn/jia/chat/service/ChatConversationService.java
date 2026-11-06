@@ -16,6 +16,15 @@ public interface ChatConversationService {
 
     List<ChatMessageEntity> findByConversationId(String conversationId);
 
+    /** Latest/older display page, independent of execution history and final-reply recovery. */
+    record MessagePage(List<ChatMessageEntity> messages, boolean hasMore, String nextBefore,
+            ChatConversationEntity conversation) {
+        public MessagePage(List<ChatMessageEntity> messages, boolean hasMore, String nextBefore) {
+            this(messages, hasMore, nextBefore, null);
+        }
+    }
+    MessagePage findMessagePage(String conversationId, String before);
+
     ChatConversationEntity create(ChatConversationEntity entity);
 
     ChatConversationEntity get(String conversationId);

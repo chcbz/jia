@@ -25,7 +25,6 @@ import com.baomidou.mybatisplus.core.config.GlobalConfig;
 import com.baomidou.mybatisplus.core.incrementer.DefaultIdentifierGenerator;
 import com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean;
 import org.junit.jupiter.api.*;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.api.io.TempDir;
 import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.core.io.ClassPathResource;
@@ -56,8 +55,7 @@ import static org.mockito.Mockito.*;
  * Task-root and conversation DAO fixture adapters use scoped locking SQL, not mocked row states.
  * No Provider, production DB, or business task is used.
  */
-@EnabledIfEnvironmentVariable(named="MMD_U1_REFERENCE_MYSQL_URL",matches=".+")
-class ChatBountyExecutionTerminationMySqlTest {
+class ChatBountyExecutionTerminationMySqlTest extends cn.jia.agent.skill.SkillManagementMySqlFixture {
     private static final Scope OWNER=new Scope("0","owner","client","42");
     private static final String KEY="abandon-test-001";
     private static final Command COMMAND=new Command("step","exec","0","2",ChatBountyExecutionTerminationService.REASON);
@@ -76,15 +74,13 @@ class ChatBountyExecutionTerminationMySqlTest {
     private final AtomicBoolean failEvent=new AtomicBoolean();
 
     @BeforeEach void setup() throws Exception {
-        var target=ChatConversationArchiveMySqlTestGuard.requireDisposable(System.getenv());
-        admin=new JdbcTemplate(ds(target.adminUrl(),target.user(),target.password()));
+        // Reuse the existing owned-worker MySQL fixture; never silently skip on Flow
+        // or accept a configured/production database for this changed event writer.
+        admin=new JdbcTemplate(source("mysql"));
         assertTrue(admin.queryForObject("SELECT VERSION()",String.class).startsWith("8."));
-        database=target.databasePrefix()+"_termination_"+UUID.randomUUID().toString().substring(0,8);
+        database="mmd_ac12main_termination_"+UUID.randomUUID().toString().substring(0,8);
         admin.execute("CREATE DATABASE `"+database+"` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin");
-        int query=target.adminUrl().indexOf('?');
-        String base=query<0?target.adminUrl():target.adminUrl().substring(0,query);
-        String url=base.substring(0,base.lastIndexOf('/')+1)+database+(query<0?"":target.adminUrl().substring(query));
-        var source=ds(url,target.user(),target.password());jdbc=new JdbcTemplate(source);
+        var source=source(database);jdbc=new JdbcTemplate(source);
         tx=new TransactionTemplate(new DataSourceTransactionManager(source));
         tx.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
         var schema = new ResourceDatabasePopulator();
@@ -125,7 +121,7 @@ class ChatBountyExecutionTerminationMySqlTest {
         var session=new SqlSessionTemplate(Objects.requireNonNull(factory.getObject()));
         events=spy(new ChatDeliberationDaoImpl(session.getMapper(ChatDeliberationMapper.class)));
         doAnswer(i->{if(failEvent.get())throw new IllegalStateException("injected journal failure");return i.callRealMethod();})
-                .when(events).assignEventVersion(anyLong());
+                .when(events).insertEvent(any(ChatConversationEventEntity.class));
         executions=new PersonalWorkspaceExecutionDaoImpl(session.getMapper(PersonalWorkspaceExecutionMapper.class),
                 session.getMapper(PersonalWorkspaceExecutionInputMapper.class),session.getMapper(PersonalWorkspaceExecutionOutputMapper.class));
         roots=mock(AgentTaskMutationTransaction.class);
@@ -178,7 +174,7 @@ class ChatBountyExecutionTerminationMySqlTest {
                 jdbc.queryForObject("SELECT failure_code FROM agent_personal_workspace_execution",String.class));
         assertEquals(receipt,inTx(()->service.get(OWNER,"req",KEY)));
         assertEquals(receipt,abandon());assertEquals(1,countEvents());
-        assertEquals(1L,jdbc.queryForObject("SELECT event_version FROM chat_conversation_event",Long.class));
+        assertEquals(1L,jdbc.queryForObject("SELECT event_sequence FROM chat_conversation_event",Long.class));
         verify(broker,times(1)).publishIfSubscribed(eq("42"),eq(1L),any(),any());
     }
 

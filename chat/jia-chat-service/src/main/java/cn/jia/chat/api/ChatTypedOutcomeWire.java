@@ -5,7 +5,7 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 import java.util.*;
 
-/** Read-only HTTP projection AFTER the service verifies immutable model facts and original hashes.
+/** Read-only HTTP formatting of service-owned facts (validated writes or committed display reads).
  * Never pass this display object back to canonical validators, persistence, or dispatch. */
 public final class ChatTypedOutcomeWire {
     private static final JsonMapper JSON = JsonMapper.builder().build();

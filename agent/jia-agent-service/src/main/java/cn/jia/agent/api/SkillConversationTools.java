@@ -2,7 +2,7 @@ package cn.jia.agent.api;
 
 import cn.jia.agent.skill.SkillPackagePublicationService;
 import cn.jia.agent.skill.SkillPublicationToolArchive;
-import org.springframework.security.core.Authentication;
+import cn.jia.chat.service.ConversationToolProvider;
 import tools.jackson.databind.JsonNode;
 import java.util.*;
 import static cn.jia.agent.skill.SkillMarketplaceException.require;
@@ -31,7 +31,7 @@ public final class SkillConversationTools {
                 Map.entry("approvedPermissionsManifest",TEXT),Map.entry("expectedProductVersion",DECIMAL),
                 Map.entry("files",Map.of("type","array","items",schema(Map.of("path",TEXT,"content",TEXT,"encoding",Map.of("type","string","enum",List.of("utf8","base64")))))))));
     }
-    public static Object call(SkillConversationToolAdapter service,Authentication principal,String request,String turn,String tool,JsonNode args) {
+    public static Object call(SkillConversationToolAdapter service,ConversationToolProvider.Context context,ConversationToolProvider.Boundary boundary,String tool,JsonNode args) {
         var spec=catalog().stream().filter(value->tool.equals(value.get("name"))).findFirst().orElse(null);
         require(spec!=null,400,"CONVERSATION_TOOL_UNKNOWN");
         require(args!=null&&args.isObject(),400,"BAD_REQUEST");
@@ -39,22 +39,35 @@ public final class SkillConversationTools {
         var fields=(Map<?,?>)((Map<?,?>)spec.get("inputSchema")).get("properties");
         require(actual.equals(fields.keySet()),400,"BAD_REQUEST");
         return switch(tool) {
-            case "skill_list" -> service.list(principal,request,turn,integer(args,"offset"),integer(args,"limit"));
-            case "skill_read" -> service.read(principal,request,turn,text(args,"productId"));
-            case "skill_package_files" -> service.readPackage(principal,request,turn,text(args,"productVersionId"),text(args,"path"));
-            case "skill_update_metadata" -> service.updateMetadata(principal,request,turn,new SkillPackagePublicationService.UpdateMetadata(
+            case "skill_list" -> service.list(context,boundary,integer(args,"offset"),integer(args,"limit"));
+            case "skill_read" -> service.read(context,boundary,text(args,"productId"));
+            case "skill_package_files" -> service.readPackage(context,boundary,text(args,"productVersionId"),text(args,"path"));
+            case "skill_update_metadata" -> service.updateMetadata(context,boundary,new SkillPackagePublicationService.UpdateMetadata(
                     text(args,"productId"),text(args,"name"),text(args,"description"),number(args,"expectedProductVersion")));
-            case "skill_retire" -> service.retire(principal,request,turn,new SkillPackagePublicationService.RetireProduct(text(args,"productId"),number(args,"expectedProductVersion")));
+            case "skill_retire" -> service.retire(context,boundary,new SkillPackagePublicationService.RetireProduct(text(args,"productId"),number(args,"expectedProductVersion")));
             case "skill_publish" -> {
                 require(args.get("files").isArray(),400,"BAD_REQUEST");
                 var files=new ArrayList<SkillPublicationToolArchive.File>();
                 for(var file:args.get("files"))files.add(new SkillPublicationToolArchive.File(text(file,"path"),text(file,"content"),text(file,"encoding")));
                 var command=new SkillPackagePublicationService.Publish(text(args,"productId"),text(args,"productVersionId"),text(args,"name"),text(args,"description"),
                         text(args,"skillKey"),text(args,"skillVersion"),number(args,"priceWen"),"NONE",text(args,"approvedPermissionsManifest"),null,null,number(args,"expectedProductVersion"),null);
-                yield service.publish(principal,request,turn,command,files);
+                yield service.publish(context,boundary,command,files);
             }
             default -> throw new IllegalArgumentException();
         };
+    }
+    public static Object wire(Object value) {
+        var result=new LinkedHashMap<String,Object>();
+        if(value instanceof SkillPackagePublicationService.MetadataReceipt r) {
+            result.put("productId",r.productId());result.put("name",r.name());result.put("description",r.description());
+            result.put("productVersion",Long.toString(r.productVersion()));result.put("disposition",r.disposition());
+        } else if(value instanceof SkillPackagePublicationService.RetirementReceipt r) {
+            result.put("productId",r.productId());result.put("status",r.status());result.put("productVersion",Long.toString(r.productVersion()));result.put("disposition",r.disposition());
+        } else if(value instanceof SkillPackagePublicationService.Receipt r) {
+            result.put("productId",r.productId());result.put("productVersionId",r.productVersionId());result.put("productVersion",Long.toString(r.productVersion()));
+            result.put("packageSha256",r.packageSha256());result.put("manifestSha256",r.manifestSha256());result.put("disposition",r.disposition());
+        } else return value;
+        return result;
     }
     private static String text(JsonNode node,String field) {require(node!=null&&node.isObject(),400,"BAD_REQUEST");var value=node.get(field);require(value!=null&&value.isTextual(),400,"BAD_REQUEST");return value.textValue();}
     private static int integer(JsonNode node,String field) {long value=number(node,field);require(value<=Integer.MAX_VALUE,400,"BAD_REQUEST");return (int)value;}

@@ -36,7 +36,7 @@ class ChatCancellationVersionTest {
             event.setEventSequence(101L);
             return 1;
         });
-        when(dao.assignEventVersion(101L)).thenReturn(1);
+
     }
 
     @Test

@@ -81,7 +81,7 @@ class ChatDeliverySubmissionServiceTest {
                 .setConversationScopeKey("task:task").setTaskId("task").setLifecycleGeneration(1L).setTargetAgentIds("[\"agent\"]");
         c.setTenantId("0");c.setClientId("client");when(conversations.lockScopedById("owner","client","123")).thenReturn(c);
         when(scopes.parsePersistedTargetAgentIds(any())).thenReturn(List.of("agent"));when(outbox.requireActiveClaim(eq(claim),anyLong())).thenReturn(event);
-        when(reviews.read(any(),eq("task"))).thenReturn(new ChatTaskDeliveryReviewReadService.Context(1,"task","7","RUNNING","1",null,List.of(),null));
+        when(reviews.read(any(),eq("task"))).thenReturn(new ChatTaskDeliveryReviewReadService.Context(2,"task","7","RUNNING","1",null,List.of(),null));
         when(typed.findOutcome(scope,"outcome",false)).thenReturn(row);when(dao.findTurn("0","owner","client","turn")).thenReturn(turn());
         when(operations.create(anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyLong(),anyLong(),anyString(),anyList())).thenReturn(operation(7));
     }

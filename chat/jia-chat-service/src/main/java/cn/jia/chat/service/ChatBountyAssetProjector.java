@@ -215,10 +215,9 @@ public class ChatBountyAssetProjector {
                     .setTenantId(candidate.tenantId()).setOwnerJiacn(candidate.ownerJiacn())
                     .setClientId(candidate.clientId()).setConversationId(request.conversationId())
                     .setConversationGeneration(live.getLifecycleGeneration()).setRequestId(candidate.requestId())
-                    .setEventType("agent_message").setEventVersion(0L)
+                    .setEventType("agent_message")
                     .setPayloadJson(JsonUtil.toJson(frame)).setOccurredAt(now);
-            if (events.insertEvent(event) != 1 || event.getEventSequence() == null
-                    || events.assignEventVersion(event.getEventSequence()) != 1)
+            if (events.insertEvent(event) != 1 || event.getEventSequence() == null)
                 throw new IllegalStateException("Unable to publish result event");
             if (TransactionSynchronizationManager.isSynchronizationActive()) {
                 long generation = live.getLifecycleGeneration();
@@ -297,8 +296,8 @@ public class ChatBountyAssetProjector {
         frame.put("messageId",Long.toString(message.getId()));frame.put("senderType","agent");frame.put("senderName","好汉");frame.put("content",text);frame.put("parts",List.of());
         var event=new ChatConversationEventEntity().setEventId(id).setTenantId(c.tenantId()).setOwnerJiacn(c.ownerJiacn()).setClientId(c.clientId())
                 .setConversationId(request.conversationId()).setConversationGeneration(live.getLifecycleGeneration()).setRequestId(c.requestId())
-                .setEventType("agent_message").setEventVersion(0L).setPayloadJson(JsonUtil.toJson(frame)).setOccurredAt(System.currentTimeMillis());
-        if(events.insertEvent(event)!=1||event.getEventSequence()==null||events.assignEventVersion(event.getEventSequence())!=1)throw new IllegalStateException("Result event persistence failed");
+                .setEventType("agent_message").setPayloadJson(JsonUtil.toJson(frame)).setOccurredAt(System.currentTimeMillis());
+        if(events.insertEvent(event)!=1||event.getEventSequence()==null)throw new IllegalStateException("Result event persistence failed");
         if(TransactionSynchronizationManager.isSynchronizationActive()) {
             var signal=new java.util.LinkedHashMap<String,Object>(frame);signal.put("eventId",id);signal.put("eventSequence",Long.toString(event.getEventSequence()));signal.put("eventVersion",Long.toString(event.getEventSequence()));
             long generation=live.getLifecycleGeneration();TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
@@ -361,10 +360,9 @@ public class ChatBountyAssetProjector {
                         candidate.stepId(), "terminal"))
                 .setTenantId(candidate.tenantId()).setOwnerJiacn(candidate.ownerJiacn()).setClientId(candidate.clientId())
                 .setConversationId(request.conversationId()).setConversationGeneration(live.getLifecycleGeneration())
-                .setRequestId(candidate.requestId()).setEventType("execution_terminal").setEventVersion(0L)
+                .setRequestId(candidate.requestId()).setEventType("execution_terminal")
                 .setPayloadJson(CanonicalContextJson.write(frame)).setOccurredAt(now);
-        if (events.insertEvent(event) != 1 || event.getEventSequence() == null
-                || events.assignEventVersion(event.getEventSequence()) != 1)
+        if (events.insertEvent(event) != 1 || event.getEventSequence() == null)
             throw new IllegalStateException("Unable to persist failed execution event");
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             frame.put("eventId", event.getEventId()); frame.put("eventSequence", Long.toString(event.getEventSequence()));
@@ -387,7 +385,21 @@ public class ChatBountyAssetProjector {
     @Transactional(readOnly = true)
     public Map<String, List<Part>> partsFor(PersonalWorkspaceExecutionService.OwnerScope owner,
             String conversationId) {
-        if (owner == null || !safe(conversationId)) return Map.of();
+        return partsFor(owner, conversationId, null);
+    }
+
+    /** Restrict projection reads in SQL to the displayed message page, not all history. */
+    @Transactional(readOnly = true)
+    public Map<String, List<Part>> partsFor(PersonalWorkspaceExecutionService.OwnerScope owner,
+            String conversationId, List<Long> messageIds) {
+        if (owner == null || !safe(conversationId) || (messageIds != null && messageIds.isEmpty())) return Map.of();
+        var arguments = new java.util.ArrayList<Object>();
+        java.util.Collections.addAll(arguments, owner.tenantId(), owner.ownerJiacn(), owner.clientId(), conversationId);
+        String messageFilter = "";
+        if (messageIds != null) {
+            messageFilter = " AND a.message_id IN (" + String.join(",", java.util.Collections.nCopies(messageIds.size(), "?")) + ") ";
+            arguments.addAll(messageIds);
+        }
         var rows = jdbc.query("""
                 SELECT CAST(a.message_id AS CHAR),a.part_id,a.kind,a.asset_id,
                   a.content_mime_type,a.sha256,a.byte_length,a.revision,o.original_filename
@@ -407,11 +419,9 @@ public class ChatBountyAssetProjector {
                   AND o.output_state='COMMITTED' AND BINARY o.content_hash=BINARY a.sha256
                 WHERE BINARY a.tenant_id=BINARY ? AND BINARY a.owner_jiacn=BINARY ?
                   AND BINARY a.client_id=BINARY ? AND BINARY a.conversation_id=BINARY ?
-                ORDER BY a.message_id,a.created_at,a.part_id
-                """, (rs, n) -> Map.entry(rs.getString(1), new Part(rs.getString(2), rs.getString(3),
+                """ + messageFilter + " ORDER BY a.message_id,a.created_at,a.part_id", (rs, n) -> Map.entry(rs.getString(1), new Part(rs.getString(2), rs.getString(3),
                 "ready", rs.getString(4), rs.getString(5), Objects.requireNonNullElse(rs.getString(9), ""), Long.toString(rs.getLong(8)),
-                rs.getString(6), rs.getLong(7))), owner.tenantId(), owner.ownerJiacn(),
-                owner.clientId(), conversationId);
+                rs.getString(6), rs.getLong(7))), arguments.toArray());
         Map<String, List<Part>> collected = new java.util.LinkedHashMap<>();
         for (var row : rows) collected.computeIfAbsent(row.getKey(), ignored -> new java.util.ArrayList<>())
                 .add(row.getValue());

@@ -130,6 +130,8 @@ class ChatActionOutcomeV5Test {
             var eventCaptor=org.mockito.ArgumentCaptor.forClass(ChatDispatchOutboxEntity.class);
             verify(store).insertOutcome(rowCaptor.capture());verify(dao).insertOutbox(eventCaptor.capture());
             var row=rowCaptor.getValue();var event=eventCaptor.getValue();
+            assertEquals("wuyong",row.deliveryTargetAgentId());
+            assertNull(row.deliveryParentOutcomeId());
             turn.setFinalMessageId(101L).setFinalDigest(row.finalDigest()).setState("PUBLISHED");
             when(store.findOutcomeByRequest(scope,"request")).thenReturn(row);
             when(store.findOutcomeByTurn(scope,"turn",true)).thenReturn(row);
@@ -192,6 +194,8 @@ class ChatActionOutcomeV5Test {
         assertEquals(((Map<?,?>)value.get("clarification")).get("question"),clarification.get("question"));
         var captured=org.mockito.ArgumentCaptor.forClass(ChatTypedDeliberationStore.Outcome.class);
         verify(store).insertOutcome(captured.capture());
+        assertNull(captured.getValue().deliveryTargetAgentId());
+        assertNull(captured.getValue().deliveryParentOutcomeId());
         assertEquals(view,service.persist(new ChatActionFinalService.Prepared(validated,scope,admission,captured.getValue()),101,2));
         verify(store,times(1)).insertOutcome(any());verify(store,times(1)).insertPending(any());
         verify(dao,never()).insertOutbox(any());

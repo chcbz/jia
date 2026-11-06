@@ -1,0 +1,116 @@
+{
+  "synthetic": true,
+  "currentResponse": {
+    "protocolVersion": 1,
+    "requestId": "formal-page",
+    "code": "E0",
+    "msg": "ok",
+    "data": {
+      "schemaVersion": 2,
+      "taskId": "task_fixture",
+      "taskVersion": "7",
+      "taskState": "REVIEWING",
+      "assignmentRevision": "1",
+      "currentDelivery": {
+        "deliveryId": "delivery_fixture",
+        "deliveryVersion": "0",
+        "state": "SUBMITTED",
+        "batchSha256": "a7847d54b1184c597c29084c5be98aaddea12660cc19e621d9b916ae0fccf4e3",
+        "summary": "本轮成果",
+        "submittedAt": 123,
+        "items": [
+          {
+            "artifactId": "artifact_manifest",
+            "artifactVersion": "1",
+            "contentHash": "99d35512273e0bf7ceb7a67b0ec97805a5c6cfb2b30a8852e5c452c6cf6a108f",
+            "purpose": "manifest",
+            "displayRole": "MANIFEST",
+            "source": null,
+            "unavailableReason": null,
+            "display": {
+              "title": "manifest.json",
+              "contentMimeType": "text/plain",
+              "contentByteLength": 12,
+              "unavailableReason": null
+            }
+          },
+          {
+            "artifactId": "artifact_text",
+            "artifactVersion": "1",
+            "contentHash": "5c9df06d7bab36422a3204bcf4af382ee5e076269f6dd6dde62c0678d0e0b2bb",
+            "purpose": "正式文本",
+            "displayRole": "RESULT",
+            "source": null,
+            "unavailableReason": "SOURCE_UNAVAILABLE",
+            "display": {
+              "title": "正式文本.txt",
+              "contentMimeType": "text/plain",
+              "contentByteLength": 12,
+              "unavailableReason": null
+            }
+          }
+        ],
+        "allowedActions": [
+          "VIEW"
+        ]
+      },
+      "history": [],
+      "pendingOperation": null
+    }
+  },
+  "historyResponse": {
+    "protocolVersion": 1,
+    "requestId": "formal-page",
+    "code": "E0",
+    "msg": "ok",
+    "data": {
+      "items": [
+        {
+          "deliveryId": "delivery_fixture",
+          "deliveryVersion": "0",
+          "state": "SUBMITTED",
+          "batchSha256": "a7847d54b1184c597c29084c5be98aaddea12660cc19e621d9b916ae0fccf4e3",
+          "summary": "本轮成果",
+          "submittedAt": 123,
+          "items": [
+            {
+              "artifactId": "artifact_manifest",
+              "artifactVersion": "1",
+              "contentHash": "99d35512273e0bf7ceb7a67b0ec97805a5c6cfb2b30a8852e5c452c6cf6a108f",
+              "purpose": "manifest",
+              "displayRole": "MANIFEST",
+              "source": null,
+              "unavailableReason": null,
+              "display": {
+                "title": "manifest.json",
+                "contentMimeType": "text/plain",
+                "contentByteLength": 12,
+                "unavailableReason": null
+              }
+            },
+            {
+              "artifactId": "artifact_text",
+              "artifactVersion": "1",
+              "contentHash": "5c9df06d7bab36422a3204bcf4af382ee5e076269f6dd6dde62c0678d0e0b2bb",
+              "purpose": "正式文本",
+              "displayRole": "RESULT",
+              "source": null,
+              "unavailableReason": "SOURCE_UNAVAILABLE",
+              "display": {
+                "title": "正式文本.txt",
+                "contentMimeType": "text/plain",
+                "contentByteLength": 12,
+                "unavailableReason": null
+              }
+            }
+          ],
+          "allowedActions": [
+            "VIEW"
+          ]
+        }
+      ],
+      "nextCursor": "81",
+      "hasMore": true
+    }
+  }
+}

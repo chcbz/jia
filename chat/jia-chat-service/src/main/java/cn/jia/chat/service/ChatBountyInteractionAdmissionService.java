@@ -164,11 +164,10 @@ public class ChatBountyInteractionAdmissionService {
                 .setTenantId(tenantId).setOwnerJiacn(owner).setClientId(client)
                 .setConversationId(conversationId).setConversationGeneration(locked.getLifecycleGeneration())
                 .setRequestId(requestId).setEventType("interaction.state_changed")
-                .setEventVersion(0L).setOccurredAt(now)
+                .setOccurredAt(now)
                 .setPayloadJson(JsonUtil.toJson(Map.of("requestId", requestId, "state", "PLANNING",
                         "userMessageId", Long.toString(message.getId()), "stepId", stepId)));
-        if (deliberation.insertEvent(event) != 1 || event.getEventSequence() == null
-                || deliberation.assignEventVersion(event.getEventSequence()) != 1) throw unavailable();
+        if (deliberation.insertEvent(event) != 1 || event.getEventSequence() == null) throw unavailable();
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             long generation = locked.getLifecycleGeneration();
             Map<String, Object> frame = Map.of("type", "interaction.state_changed",

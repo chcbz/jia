@@ -10,7 +10,18 @@ public interface ChatTypedDeliberationStore {
     record Outcome(String outcomeId, Scope scope, String requestId, long requestRevision,
             String turnId, String taskId, long assignmentRevision, long assistantMessageId,
             String finalDigest, String kind, String text, String bindingJson,
-            String factsJson, String outcomeJson, String sourceCatalogJson, long createdAt) { }
+            String factsJson, String outcomeJson, String sourceCatalogJson, long createdAt,
+            String deliveryTargetAgentId, String deliveryParentOutcomeId) {
+        /** Historical/non-delivery writers do not manufacture indexed delivery authority. */
+        public Outcome(String outcomeId, Scope scope, String requestId, long requestRevision,
+                String turnId, String taskId, long assignmentRevision, long assistantMessageId,
+                String finalDigest, String kind, String text, String bindingJson,
+                String factsJson, String outcomeJson, String sourceCatalogJson, long createdAt) {
+            this(outcomeId, scope, requestId, requestRevision, turnId, taskId, assignmentRevision,
+                    assistantMessageId, finalDigest, kind, text, bindingJson, factsJson, outcomeJson,
+                    sourceCatalogJson, createdAt, null, null);
+        }
+    }
 
     record PendingQuestion(String pendingQuestionId, String outcomeId, Scope scope,
             String state, long stateVersion, String question, String requiredFactsJson,

@@ -1,0 +1,30 @@
+{
+  "protocolVersion": 1,
+  "requestId": "hall-delivery-context",
+  "code": "E0",
+  "msg": "",
+  "data": {
+    "schemaVersion": 1,
+    "scope": {
+      "conversationId": "101",
+      "conversationGeneration": "1",
+      "taskId": "task"
+    },
+    "assignmentRevision": "3",
+    "targetAgentId": "wuyong",
+    "pendingExecution": false,
+    "items": [
+      {
+        "outcomeId": "outcome-a",
+        "requestId": "request-a",
+        "assistantMessageId": "9007199254740993",
+        "finalSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "kind": "ANSWER",
+        "label": "当前成果"
+      }
+    ],
+    "hasMore": false,
+    "nextBeforeMessageId": null,
+    "nextBeforeOutcomeId": null
+  }
+}
