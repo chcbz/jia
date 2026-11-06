@@ -69,7 +69,7 @@ class UsageCostServiceMySqlTest {
     }
     private static ModelTokenPrice price(String version, String inputRate) {
         return new ModelTokenPrice("channel", "actual-model", "standard", version, "synthetic-cny-price",
-                Map.of(INPUT, new BigDecimal(inputRate), OUTPUT, new BigDecimal("2")));
+                Map.of(INPUT, new BigDecimal(inputRate), OUTPUT, new BigDecimal("2")), null, Map.of());
     }
     private static TokenUsageCost.Usage usage(long input) {
         return new TokenUsageCost.Usage("channel", "actual-model", "standard", "fixture-disjoint-v1", Map.of(INPUT, input));

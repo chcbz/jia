@@ -40,6 +40,9 @@ class EconomyPricingPropertiesTest {
                 "economy.pricing.models[0].basis=synthetic-test-price",
                 "economy.pricing.models[0].yuan-per-million-tokens.input=0.668790",
                 "economy.pricing.models[0].yuan-per-million-tokens.output=3.343950",
+                "economy.pricing.models[0].short-context-max-input-tokens=100",
+                "economy.pricing.models[0].long-context-yuan-per-million-tokens.input=1.337580",
+                "economy.pricing.models[0].long-context-yuan-per-million-tokens.output=5.015925",
                 "economy.pricing.rules[0].id=analysis-standard", "economy.pricing.rules[0].version=test-rule-v1",
                 "economy.pricing.rules[0].basis=synthetic-test-coefficients", "economy.pricing.rules[0].kind=analysis",
                 "economy.pricing.rules[0].complexity=STANDARD", "economy.pricing.rules[0].base-tokens.input=100",
@@ -55,6 +58,10 @@ class EconomyPricingPropertiesTest {
                     assertEquals(new BigDecimal("0.668790"), prepared.modelPrice().yuanPerMillionTokens().get(INPUT));
                     assertEquals("synthetic-test-coefficients", prepared.rule().basis());
                     assertEquals("synthetic-test-price", prepared.modelPrice().basis());
+                    assertEquals(100L, prepared.modelPrice().shortContextMaxInputTokens());
+                    assertEquals(new BigDecimal("1.337580"), prepared.modelPrice().longContextYuanPerMillionTokens().get(INPUT));
+                    assertTrue(prepared.modelPrice().cost(prepared.estimate().tokens()).compareTo(
+                            prepared.modelPrice().estimateCost(prepared.estimate().tokens())) > 0);
                     assertEquals(1L, TaskQuoteCalculator.calculate(prepared.estimate(), prepared.modelPrice(), prepared.toolPrices()).amountWen());
                     var tool = context.getBean(EconomyPricingProperties.class).tools().getFirst();
                     assertEquals(new BigDecimal("0.01"), tool.price().yuanPerUnit());
@@ -122,6 +129,6 @@ class EconomyPricingPropertiesTest {
         return new TaskEstimateRule("analysis-standard", "v1", "synthetic-test-rule", "analysis", STANDARD, Map.of(INPUT, 100L), Map.of(), Map.of());
     }
     private static ModelTokenPrice price(String channel, String tier, Map<ModelTokenPrice.Category, BigDecimal> rates) {
-        return new ModelTokenPrice(channel, "model-a", tier, "v1", "synthetic-test-price", rates);
+        return new ModelTokenPrice(channel, "model-a", tier, "v1", "synthetic-test-price", rates, null, Map.of());
     }
 }

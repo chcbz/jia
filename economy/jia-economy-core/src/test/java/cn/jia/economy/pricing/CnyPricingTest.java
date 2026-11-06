@@ -10,7 +10,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class CnyPricingTest {
     private static BigDecimal d(String value) { return new BigDecimal(value); }
     private static ModelTokenPrice price(Map<ModelTokenPrice.Category, BigDecimal> rates) {
-        return new ModelTokenPrice("test-channel", "test-model", "standard", "v1", "synthetic-test-price", rates);
+        return new ModelTokenPrice("test-channel", "test-model", "standard", "v1", "synthetic-test-price", rates, null, Map.of());
     }
     @Test void quotesRoundUpOnlyAtFinalWenBoundary() {
         assertEquals(13, CnyAmounts.quoteWen(d("0.123456")));

@@ -19,7 +19,7 @@ public final class TaskQuoteCalculator {
         Objects.requireNonNull(estimate, "estimate");
         Objects.requireNonNull(modelPrice, "modelPrice");
         Objects.requireNonNull(toolPrices, "toolPrices");
-        BigDecimal yuan = modelPrice.cost(estimate.tokens());
+        BigDecimal yuan = modelPrice.estimateCost(estimate.tokens());
         Map<ToolKey, ToolPrice> selectedPrices = new LinkedHashMap<>();
         for (var entry : estimate.toolUnits().entrySet()) {
             if (entry.getValue().signum() == 0) continue;

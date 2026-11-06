@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class TokenUsageCostTest {
     private ModelTokenPrice price(Map<ModelTokenPrice.Category, BigDecimal> rates) {
-        return new ModelTokenPrice("channel", "model", "standard", "v1", "manual-cny", rates);
+        return new ModelTokenPrice("channel", "model", "standard", "v1", "manual-cny", rates, null, Map.of());
     }
     private TokenUsageCost.Usage usage(Map<ModelTokenPrice.Category, Long> tokens) {
         return new TokenUsageCost.Usage("channel", "model", "standard", "fixture-disjoint-v1", tokens);

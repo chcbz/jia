@@ -20,7 +20,7 @@ import static org.mockito.ArgumentMatchers.*;
 class RecommendationCostRecorderTest {
     private static final Context CONTEXT = new Context("tenant", "client", "owner", "task");
     private static final ModelTokenPrice PRICE = new ModelTokenPrice("channel", "model", "standard", "v1", "synthetic",
-            Map.of(INPUT, BigDecimal.ONE, CACHED_INPUT, BigDecimal.ZERO, OUTPUT, BigDecimal.TEN));
+            Map.of(INPUT, BigDecimal.ONE, CACHED_INPUT, BigDecimal.ZERO, OUTPUT, BigDecimal.TEN), null, Map.of());
     private final UsageCostService costs = mock(UsageCostService.class);
     private final ModelPriceCatalog prices = mock(ModelPriceCatalog.class);
     private RecommendationCostRecorder recorder() {

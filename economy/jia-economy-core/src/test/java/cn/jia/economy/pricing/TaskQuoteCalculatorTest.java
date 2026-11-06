@@ -12,7 +12,7 @@ class TaskQuoteCalculatorTest {
     private static BigDecimal d(String value) { return new BigDecimal(value); }
     private static ModelTokenPrice price(String rate) {
         return new ModelTokenPrice("fixture-channel", "fixture-model", "standard", "v1", "synthetic-test-price",
-                Map.of(INPUT, d(rate), OUTPUT, d(rate)));
+                Map.of(INPUT, d(rate), OUTPUT, d(rate)), null, Map.of());
     }
     private static Estimate estimate(Map<ModelTokenPrice.Category, Long> tokens,
             Map<ToolKey, BigDecimal> tools) {

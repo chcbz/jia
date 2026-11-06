@@ -139,7 +139,7 @@ class AgentTaskBillingMySqlTransactionTest {
         var ledger = sql.getMapper(EconomyLedgerMapper.class);
         var pricing = new ConfiguredTaskPricingService(new EconomyPricingProperties(
                 List.of(new ModelTokenPrice("fixture", "fixture-model", "standard", "1", "synthetic fixture",
-                        Map.of(ModelTokenPrice.Category.INPUT, new BigDecimal("0.50")))), List.of(),
+                        Map.of(ModelTokenPrice.Category.INPUT, new BigDecimal("0.50")), null, Map.of())), List.of(),
                 List.of(new TaskEstimateRule("fixture", "1", "synthetic fixture", "GENERAL",
                         TaskWorkload.Complexity.STANDARD, Map.of(ModelTokenPrice.Category.INPUT, 1_000_000L),
                         Map.of(), Map.of()))));

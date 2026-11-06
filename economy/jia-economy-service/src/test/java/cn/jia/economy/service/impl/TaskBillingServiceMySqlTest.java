@@ -414,7 +414,7 @@ class TaskBillingServiceMySqlTest {
     }
     private static ModelTokenPrice price(String yuan) {
         return new ModelTokenPrice("test-channel", "test-model-" + yuan, "standard", "1", "synthetic-test-price",
-                Map.of(ModelTokenPrice.Category.INPUT, new BigDecimal(yuan)));
+                Map.of(ModelTokenPrice.Category.INPUT, new BigDecimal(yuan)), null, Map.of());
     }
     private int count(String table) { return jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class); }
     private long wallet() { return jdbc.queryForObject("SELECT balance_wen FROM economy_account WHERE account_id='wallet'", Long.class); }
