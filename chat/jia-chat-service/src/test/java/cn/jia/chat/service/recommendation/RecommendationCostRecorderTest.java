@@ -5,12 +5,9 @@ import cn.jia.economy.pricing.ModelPriceCatalog;
 import cn.jia.economy.pricing.ModelTokenPrice;
 import cn.jia.economy.usage.TokenUsageCost;
 import cn.jia.economy.usage.UsageCostService;
-import com.openai.models.completions.CompletionUsage;
+import com.openai.models.chat.completions.ChatCompletion;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-import org.springframework.ai.chat.metadata.ChatResponseMetadata;
-import org.springframework.ai.chat.metadata.DefaultUsage;
-import org.springframework.ai.chat.model.ChatResponse;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
@@ -31,13 +28,11 @@ class RecommendationCostRecorderTest {
         when(costs.record(any())).thenReturn(new UsageCostService.Receipt("attempt", 1, TokenUsageCost.Status.PENDING_USAGE, null, false));
         return new RecommendationCostRecorder(costs, prices, "channel", "standard");
     }
-    private static ChatResponse response(String actualModel, String tier) throws Exception {
-        var nativeUsage = com.openai.core.ObjectMappers.jsonMapper().readValue(
-                "{\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":120,\"prompt_tokens_details\":{\"cached_tokens\":80}}", CompletionUsage.class);
-        var metadata = ChatResponseMetadata.builder().id("provider-receipt").model(actualModel)
-                .usage(new DefaultUsage(100, 20, 120, nativeUsage, 80L, null));
-        if (tier != null) metadata.keyValue("service_tier", tier);
-        return new ChatResponse(List.of(), metadata.build());
+    private static ChatCompletion response(String actualModel, String tier) throws Exception {
+        String raw = "{\"id\":\"provider-receipt\",\"model\":\"" + actualModel + "\",\"object\":\"chat.completion\",\"created\":1,\"choices\":[],"
+                + (tier == null ? "" : "\"service_tier\":\"" + tier + "\",")
+                + "\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":120,\"prompt_tokens_details\":{\"cached_tokens\":80}}}";
+        return com.openai.core.ObjectMappers.jsonMapper().readValue(raw, ChatCompletion.class);
     }
     @Test void preservesTrustedBindingAndPriceBeforeCallAndActualUsageBeforeBusinessValidation() throws Exception {
         var recorder = recorder(); var attempt = recorder.begin(CONTEXT, "model");

@@ -8,7 +8,7 @@ import cn.jia.economy.service.EconomyScope;
 import cn.jia.economy.usage.UsageCostService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.ai.chat.model.ChatResponse;
+import com.openai.models.chat.completions.ChatCompletion;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -50,19 +50,14 @@ public final class RecommendationCostRecorder {
         return new Attempt(binding, price, receipt.revision());
     }
 
-    /** Save usage before validating the model's business JSON: an invalid answer may still cost money.
-     * Spring AI may omit service_tier. Preserve the receipt, but do not substitute requested tier/model.
-     * The price is the pre-call snapshot even if configuration changed during the provider call.
+    /** Save native usage before validating business JSON; an invalid answer can still cost money.
+     * The price remains the pre-call snapshot even if configuration changes during the call.
      */
-    public void complete(Attempt attempt, ChatResponse response) {
-        Object reportedTier = response == null || response.getMetadata() == null ? null
-                : response.getMetadata().get("service_tier");
-        String tier = reportedTier instanceof String value ? value : null;
-        if ("default".equals(tier)) tier = "standard";
-        var evidence = OpenAiUsageEvidence.capture(response, channel, tier);
+    public void complete(Attempt attempt, ChatCompletion response) {
+        var evidence = OpenAiUsageEvidence.capture(response, channel);
         var raw = new LinkedHashMap<String, Object>();
         raw.put("phase", "RESPONDED"); raw.put("providerReceiptId", evidence.providerReceiptId());
-        raw.put("actualModel", evidence.actualModel()); raw.put("serviceTier", reportedTier);
+        raw.put("actualModel", evidence.actualModel()); raw.put("serviceTier", evidence.actualTier());
         raw.put("usage", evidence.rawUsageJson());
         costs.record(new UsageCostService.Observation(attempt.binding(), "responded", attempt.revision(),
                 json(raw), evidence.normalizedUsage(), attempt.price(), System.currentTimeMillis()));

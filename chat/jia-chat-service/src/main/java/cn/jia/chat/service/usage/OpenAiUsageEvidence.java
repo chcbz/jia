@@ -1,28 +1,26 @@
 package cn.jia.chat.service.usage;
 
 import cn.jia.economy.usage.TokenUsageCost;
-import com.openai.models.completions.CompletionUsage;
-import org.springframework.ai.chat.model.ChatResponse;
+import com.openai.models.chat.completions.ChatCompletion;
 
-/** Captures the actual provider receipt and its native usage, not a text-token estimate. */
-public record OpenAiUsageEvidence(String providerReceiptId, String actualModel, String rawUsageJson,
-        TokenUsageCost.Usage normalizedUsage) {
-    public static OpenAiUsageEvidence capture(ChatResponse response, String channel, String tier) {
-        if (response == null || response.getMetadata() == null)
-            return new OpenAiUsageEvidence(null, null, "null", null);
-        var metadata = response.getMetadata();
-        Object nativeUsage = metadata.getUsage() == null ? null : metadata.getUsage().getNativeUsage();
-        if (!(nativeUsage instanceof CompletionUsage usage))
-            return new OpenAiUsageEvidence(metadata.getId(), metadata.getModel(), "null", null);
+/** Native provider receipt: requested model/tier never substitutes actual billing identity. */
+public record OpenAiUsageEvidence(String providerReceiptId, String actualModel, String actualTier,
+        String rawUsageJson, TokenUsageCost.Usage normalizedUsage) {
+    public static OpenAiUsageEvidence capture(ChatCompletion response, String channel) {
+        if (response == null) return new OpenAiUsageEvidence(null, null, null, "null", null);
+        String id = field(response::id), model = field(response::model);
+        String tier = field(() -> response.serviceTier().map(value -> value.asString()).orElse(null));
+        String normalizedTier = "default".equals(tier) ? "standard" : tier;
         String raw;
-        try {
-            // Use the SDK's own serializer: its Optional/JsonValue fields are not ordinary bean properties.
-            raw = com.openai.core.ObjectMappers.jsonMapper().writeValueAsString(usage);
-        } catch (com.fasterxml.jackson.core.JsonProcessingException invalid) {
-            return new OpenAiUsageEvidence(metadata.getId(), metadata.getModel(), "null", null);
-        }
-        var normalized = metadata.getId() == null || metadata.getId().isBlank() ? null
-                : OpenAiTokenUsageNormalizer.normalize(channel, metadata.getModel(), tier, raw);
-        return new OpenAiUsageEvidence(metadata.getId(), metadata.getModel(), raw, normalized);
+        try { raw = com.openai.core.ObjectMappers.jsonMapper().writeValueAsString(response._usage()); }
+        catch (com.fasterxml.jackson.core.JsonProcessingException invalid) { raw = "null"; }
+        var normalized = id == null || id.isBlank() ? null
+                : OpenAiTokenUsageNormalizer.normalize(channel, model, normalizedTier, raw);
+        return new OpenAiUsageEvidence(id, model, tier, raw, normalized);
+    }
+
+    private static String field(java.util.function.Supplier<String> read) {
+        try { return read.get(); }
+        catch (com.openai.errors.OpenAIInvalidDataException invalid) { return null; }
     }
 }

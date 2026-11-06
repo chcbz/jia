@@ -1,9 +1,6 @@
 package cn.jia.chat.service.recommendation;
 
-import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.context.annotation.Lazy;
@@ -16,13 +13,15 @@ import static cn.jia.agent.entity.AssigneeRecommendation.*;
 public final class AssigneeRecommendationModel implements cn.jia.agent.service.AgentAssigneeRecommendationModel {
     private final ChatModel model;
     private final RecommendationCostRecorder costs;
+    private final OpenAiRecommendationTransport transport;
     private final String recommendationModel;
     private final String reasoningEffort;
-    public AssigneeRecommendationModel(@Lazy ChatModel model, RecommendationCostRecorder costs,
+    public AssigneeRecommendationModel(@Lazy ChatModel model, @Lazy OpenAiRecommendationTransport transport, RecommendationCostRecorder costs,
             @org.springframework.beans.factory.annotation.Value("${jia.chat.recommendation.model:}") String recommendationModel,
             @org.springframework.beans.factory.annotation.Value("${jia.chat.recommendation.reasoning-effort:}") String reasoningEffort) {
         this.model = model;
         this.costs = costs;
+        this.transport = transport;
         this.recommendationModel = recommendationModel.strip();
         this.reasoningEffort = reasoningEffort.strip();
     }
@@ -93,16 +92,15 @@ public final class AssigneeRecommendationModel implements cn.jia.agent.service.A
         }
         if (!(options instanceof org.springframework.ai.openai.OpenAiChatOptions structured))
             throw new Failure(503, "RECOMMENDATION_UNAVAILABLE");
-        // SDK retries are disabled at client construction by AiModelBeanPostProcessor.
-        // Request options cannot change that transport setting in Spring AI 2.0.
-        options = structured.mutate().outputSchema(outputSchema).build();
-        var attempt = costs.begin(context, options.getModel());
-        var response = model.call(new Prompt(List.of(new SystemMessage(INSTRUCTIONS), new UserMessage(inputJson)), options));
+        // Connection pooling and single-shot retries belong to the native provider transport.
+        var requestOptions = structured.mutate().outputSchema(outputSchema).build();
+        var attempt = costs.begin(context, requestOptions.getModel());
+        var response = transport.complete(requestOptions, INSTRUCTIONS, inputJson);
         costs.complete(attempt, response);
-        if (response == null || response.getResult() == null || response.getResult().getOutput() == null
-                || response.getResult().getOutput().hasToolCalls())
-            throw new Failure(502, "RECOMMENDATION_INVALID_RESULT");
-        String text = response.getResult().getOutput().getText();
+        if (response == null || response.choices().isEmpty()) throw new Failure(502, "RECOMMENDATION_INVALID_RESULT");
+        var message = response.choices().getFirst().message();
+        if (!message.toolCalls().orElse(List.of()).isEmpty()) throw new Failure(502, "RECOMMENDATION_INVALID_RESULT");
+        String text = message.content().orElse(null);
         if (text == null || text.isBlank()) throw new Failure(502, "RECOMMENDATION_INVALID_RESULT");
         return text;
     }
