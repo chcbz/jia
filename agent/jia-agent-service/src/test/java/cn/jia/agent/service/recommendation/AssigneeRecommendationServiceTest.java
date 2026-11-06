@@ -295,6 +295,7 @@ class AssigneeRecommendationServiceTest {
         when(model.judge(any(AgentAssigneeRecommendationModel.Context.class), anyString(),anyString())).thenReturn(ANSWER);
         var result=service.recommend(ACTOR,"task",new Request("7"));
         assertEquals("NO_MATCH",result.state());
+        assertEquals(new Workload(Workload.Kind.DOCUMENT, Workload.Complexity.STANDARD, 1), result.workload());
         assertEquals("UNKNOWN",result.recommendations().getFirst().recommendationLevel());
         assertTrue(result.recommendations().getFirst().evidence().isEmpty());
         assertTrue(result.recommendations().getFirst().gaps().stream().anyMatch(g->g.contains("技能当前未就绪")));
