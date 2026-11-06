@@ -105,6 +105,8 @@ class AgentTaskBillingMySqlTransactionTest {
     private boolean failBootstrap;
     private boolean failOccupation;
     private String quoteId;
+    private cn.jia.economy.api.EconomyWalletService walletReads;
+    private EconomyPreviewGate walletGate;
     private AgentTaskDeliberationOperationReadService operationReads;
     private AgentTaskFormalDeliveryReadService deliveryReads;
     private ChatTaskDeliveryReviewService reviews;
@@ -185,6 +187,13 @@ class AgentTaskBillingMySqlTransactionTest {
             return written;
         };
         var ledger = sql.getMapper(EconomyLedgerMapper.class);
+        walletGate = new EconomyPreviewGate(new EconomyPreviewProperties(true,
+                List.of(new EconomyPreviewProperties.AllowedScope(TENANT, CLIENT))));
+        // Issuance is outside this fixture. Wallet/ledger reads use the production SQL;
+        // disabled campaigns cannot call this deliberately unavailable treasury boundary.
+        walletReads = new cn.jia.economy.api.EconomyWalletService(ledger,
+                command -> { throw new AssertionError("browser fixture must not issue funds"); },
+                new org.springframework.core.env.StandardEnvironment(), walletGate);
         var pricing = new ConfiguredTaskPricingService(new EconomyPricingProperties(
                 List.of(new ModelTokenPrice("fixture", "fixture-model", "standard", "1", "synthetic fixture",
                         Map.of(ModelTokenPrice.Category.INPUT, new BigDecimal("0.50")), null, Map.of())), List.of(),
@@ -702,6 +711,46 @@ class AgentTaskBillingMySqlTransactionTest {
         assertEquals(50, wallet(independent)); assertEquals("HELD", charge());
     }
 
+    @Test
+    @EnabledIfEnvironmentVariable(named = "CYF_BILLING_BROWSER", matches = "true")
+    void browserSelectsAssigneeAndReservesRealWallet() throws Exception {
+        startHttp();
+        runBrowser("reserve");
+        assertEquals(50, wallet(independent)); assertEquals("HELD", charge());
+        assertEquals("assigned", taskState()); assertEquals(1, count("economy_transaction"));
+    }
+
+    @Test
+    @EnabledIfEnvironmentVariable(named = "CYF_BILLING_BROWSER", matches = "true")
+    void browserInsufficientFundsDoesNotAssignOrReserve() throws Exception {
+        jdbc.update("UPDATE economy_account SET balance_wen=49 WHERE account_id='wallet'");
+        startHttp();
+        runBrowser("insufficient");
+        assertEquals(49, wallet(independent)); assertEquals("open", taskState());
+        assertEquals(0, count("economy_task_charge")); assertEquals(0, count("economy_transaction"));
+    }
+
+    private void runBrowser(String scenario) throws Exception {
+        Path evidence = Path.of(System.getenv("CYF_BILLING_BROWSER_OUTPUT")).resolve(scenario);
+        Files.createDirectories(evidence);
+        Path input = httpDirectory.resolve("browser-input.json");
+        Files.writeString(input, new ObjectMapper().writeValueAsString(Map.of(
+                "origin", origin, "token", httpToken(), "quoteId", quoteId,
+                "taskId", TASK, "agentId", AGENT, "owner", OWNER, "payer", PAYER,
+                "tenant", TENANT, "scenario", scenario)));
+        Files.setPosixFilePermissions(input, java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
+        var process = new ProcessBuilder("node", "src/test/resources/browser/task-billing.cjs",
+                input.toString(), evidence.toString()).redirectErrorStream(true)
+                .redirectOutput(evidence.resolve("browser.log").toFile()).start();
+        try {
+            assertTrue(process.waitFor(100, TimeUnit.SECONDS), "isolated browser fixture did not finish");
+            assertEquals(0, process.exitValue(), Files.readString(evidence.resolve("browser.log")));
+        } finally {
+            if (process.isAlive()) process.destroyForcibly().waitFor();
+            Files.deleteIfExists(input);
+        }
+    }
+
     private String pointBody() {
         return "{\"targetAgentId\":\"" + AGENT + "\",\"expectedTaskVersion\":\"0\",\"requirementRevision\":\"1\","
                 + "\"quoteId\":\"" + quoteId + "\",\"recommendationId\":\"recommendation-1\"}";
@@ -732,6 +781,7 @@ class AgentTaskBillingMySqlTransactionTest {
         httpContext.register(HttpApp.class);
         httpContext.addBeanFactoryPostProcessor(factory -> {
             factory.registerSingleton("jwtDecoder", decoder);
+            factory.registerSingleton("walletController", new cn.jia.economy.api.EconomyWalletController(walletGate, walletReads));
             factory.registerSingleton("assignmentController", new AgentTaskDeliberationOperationController(operationReads, assignment));
             factory.registerSingleton("cancellationController", new AgentTaskCancellationController(cancellation));
             factory.registerSingleton("decisionController", new AgentTaskDeliveryReviewController(reviews,
