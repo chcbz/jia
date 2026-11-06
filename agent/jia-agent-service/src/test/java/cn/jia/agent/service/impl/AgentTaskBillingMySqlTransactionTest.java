@@ -218,7 +218,7 @@ class AgentTaskBillingMySqlTransactionTest {
         assignment = new AgentTaskExecutionGrantServiceImpl(
                 new AgentTaskExecutionGrantDaoImpl(sql.getMapper(AgentTaskExecutionGrantMapper.class)),
                 outbox, links, mock(PersonalWorkspaceDao.class), legacy, identities, roots,
-                new ObjectMapper(), requirements, billing);
+                new ObjectMapper(), requirements, billing, meta);
         operationReads = new AgentTaskDeliberationOperationReadServiceImpl(
                 new AgentTaskExecutionGrantDaoImpl(sql.getMapper(AgentTaskExecutionGrantMapper.class)), outbox,
                 new ControlledImageBridgeOperationDaoImpl(sql.getMapper(ControlledImageBridgeOperationMapper.class)),
