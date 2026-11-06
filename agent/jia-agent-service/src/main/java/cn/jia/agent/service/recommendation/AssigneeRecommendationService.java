@@ -194,10 +194,10 @@ public final class AssigneeRecommendationService {
             var gaps = new ArrayList<>(old.gaps());
             boolean unavailable = evidence.stream().anyMatch(e -> !e.available());
             if (unavailable) gaps.add("所引用技能当前未就绪；本次建议不代表可以立即执行，请以实际承办准入为准。");
-            return new Recommendation(now.agent(), unavailable ? "UNKNOWN" : old.recommendationLevel(), old.reason(), evidence.stream().filter(Evidence::available).toList(), List.copyOf(gaps));
+            return new Recommendation(now.agent(), unavailable ? "UNKNOWN" : old.recommendationLevel(), old.reason(), evidence.stream().filter(Evidence::available).toList(), List.copyOf(gaps), old.quotation());
         }).toList();
         String state = rows.stream().anyMatch(r -> Set.of("HIGH", "MEDIUM").contains(r.recommendationLevel())) ? "READY" : "NO_MATCH";
-        return new Result(result.taskId(), result.taskVersion(), result.observedAt(), state, result.requirementSummary(), rows, result.questions(), true);
+        return new Result(result.taskId(), result.taskVersion(), result.observedAt(), state, result.requirementSummary(), rows, result.questions(), true, result.workload());
     }
     // Business-specific output contract belongs to API; the model adapter only transports it.
     static String outputSchema(List<Candidate> candidates) throws com.fasterxml.jackson.core.JsonProcessingException {
