@@ -60,6 +60,18 @@ class AgentTaskFormalDeliveryControllerTest {
     }
 
     @Test
+    void ownerListUsesTheCanonicalEnvelopeAndExactScope() throws Exception {
+        when(read.listForTaskOwner("0", CLIENT, TENANT, TASK))
+                .thenReturn(List.of(view("submitted", null, null)));
+        mvc.perform(get("/agent/tasks/" + TASK + "/formal-deliveries").principal(jwt()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].deliveryId").value("fd_test"))
+                .andExpect(jsonPath("$.data.items[0].items[0].artifactId").value("manifest-a"))
+                .andExpect(jsonPath("$.data.items[0].leaseToken").doesNotExist());
+        verify(read).listForTaskOwner("0", CLIENT, TENANT, TASK);
+    }
+
+    @Test
     void submitDerivesOpaqueStableDeliveryIdentityAndNeverReturnsLease() throws Exception {
         when(submission.submit(eq("0"), eq(CLIENT), eq(TENANT), eq(TASK), eq(ACTOR), any()))
                 .thenReturn(view("submitted", null, null));
@@ -77,9 +89,9 @@ class AgentTaskFormalDeliveryControllerTest {
                         .contentType("application/json").content(body).principal(jwt()))
                 .andExpect(status().isOk())
                 .andExpect(header().string("Cache-Control", "private, no-store"))
-                .andExpect(jsonPath("$.deliveryId").value(org.hamcrest.Matchers.startsWith("fd_")))
-                .andExpect(jsonPath("$.leaseToken").doesNotExist())
-                .andExpect(jsonPath("$.submissionDigest").doesNotExist());
+                .andExpect(jsonPath("$.data.deliveryId").value(org.hamcrest.Matchers.startsWith("fd_")))
+                .andExpect(jsonPath("$.data.leaseToken").doesNotExist())
+                .andExpect(jsonPath("$.data.submissionDigest").doesNotExist());
 
         ArgumentCaptor<cn.jia.agent.entity.AgentTaskFormalDeliverySubmitDTO> command =
                 ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskFormalDeliverySubmitDTO.class);
@@ -102,8 +114,8 @@ class AgentTaskFormalDeliveryControllerTest {
                         .header("Idempotency-Key", "decision-key-0001")
                         .contentType("application/json").content(body).principal(jwt()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.state").value("changes_requested"))
-                .andExpect(jsonPath("$.deliveryVersion").value(1));
+                .andExpect(jsonPath("$.data.state").value("changes_requested"))
+                .andExpect(jsonPath("$.data.deliveryVersion").value(1));
         verify(decision).decide(eq("0"), eq(CLIENT), eq(TASK), eq(TENANT), any());
     }
 
@@ -128,10 +140,10 @@ class AgentTaskFormalDeliveryControllerTest {
                         .contentType("application/json").content(body).principal(jwt()))
                 .andExpect(status().isAccepted())
                 .andExpect(header().string("Cache-Control", "private, no-store"))
-                .andExpect(jsonPath("$.executionId").value("exec-rework"))
-                .andExpect(jsonPath("$.leaseToken").doesNotExist())
-                .andExpect(jsonPath("$.storageUri").doesNotExist())
-                .andExpect(jsonPath("$.instruction").doesNotExist());
+                .andExpect(jsonPath("$.data.executionId").value("exec-rework"))
+                .andExpect(jsonPath("$.data.leaseToken").doesNotExist())
+                .andExpect(jsonPath("$.data.storageUri").doesNotExist())
+                .andExpect(jsonPath("$.data.instruction").doesNotExist());
 
         ArgumentCaptor<AgentTaskReworkExecutionService.ReworkCommand> command =
                 ArgumentCaptor.forClass(AgentTaskReworkExecutionService.ReworkCommand.class);
@@ -197,7 +209,7 @@ class AgentTaskFormalDeliveryControllerTest {
 
     private static JwtAuthenticationToken jwtClaims(String tenant, String client, String subject) {
         Jwt token = new Jwt("token", Instant.ofEpochSecond(1), Instant.ofEpochSecond(9_999_999_999L),
-                Map.of("alg", "none"), Map.of("jiacn", tenant, "client_id", client, "sub", subject));
+                Map.of("alg", "none"), Map.of("tenant_id", "0", "jiacn", tenant, "client_id", client, "sub", subject));
         return new JwtAuthenticationToken(token, List.of()) {
             @Override public String getName() { return ACTOR; }
         };
