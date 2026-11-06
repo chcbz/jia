@@ -73,6 +73,29 @@ class AgentTaskProviderCostConsentServiceImplTest {
                         "agent-a","GENERATE_IMAGE",false,List.of(input)));
     }
 
+    @Test void taskCancellationRevokesUnusedConsentButPreservesConsumedAttemptAndReplay() {
+        service.issue(scope(),"task-1","cancel-issued",request("binding-a"));
+        var issued=rows.byConsent.values().iterator().next();
+        var consumed=new AgentTaskProviderCostConsentEntity().setConsentId("paid")
+                .setOwnerJiacn("owner-a").setTaskId("task-1").setState("CONSUMED").setVersion(4L)
+                .setConsumedLeaseId("paid-lease").setConsumedAt(123L);
+        consumed.setTenantId("0"); consumed.setClientId("client-a"); rows.byConsent.put("paid",consumed);
+        service.cancelForTask(scope(),"task-1");
+        assertEquals("REVOKED",issued.getState()); assertEquals(2L,issued.getVersion());
+        assertTrue(issued.getRevokeIdempotencyKey().startsWith("task_cancel_"));
+        assertEquals("CONSUMED",consumed.getState()); assertEquals(4L,consumed.getVersion());
+        assertEquals("paid-lease",consumed.getConsumedLeaseId()); assertEquals(123L,consumed.getConsumedAt());
+        service.cancelForTask(scope(),"task-1"); assertEquals(1,rows.revokes);
+    }
+
+    @Test void taskCancellationDoesNotTouchOtherTaskOrOwner() {
+        service.issue(scope(),"task-1","cancel-scope",request("binding-a"));
+        var row=rows.byConsent.values().iterator().next();
+        service.cancelForTask(scope(),"other-task");
+        service.cancelForTask(new AgentTaskProviderCostConsentService.Scope("0","client-a","other-owner"),"task-1");
+        assertEquals("ISSUED",row.getState()); assertEquals(0,rows.revokes);
+    }
+
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.EnumSource(value = AgentTaskExecutionGrantException.Reason.class,
             names = {"TASK_QUOTE_UNAVAILABLE", "TASK_QUOTE_PAYER_FORBIDDEN", "TASK_FUNDS_INSUFFICIENT"})
@@ -227,6 +250,11 @@ class AgentTaskProviderCostConsentServiceImplTest {
         final Map<String,AgentTaskProviderCostConsentEntity> byKey=new LinkedHashMap<>();
         int inserts;int lockReads;int revokes;
         private String key(String task,String id){return task+"\0"+id;}
+        @Override public List<AgentTaskProviderCostConsentEntity> lockUnconsumedForTask(String t,String c,String o,String task) {
+            return byConsent.values().stream().filter(r->t.equals(r.getTenantId())&&c.equals(r.getClientId())
+                    &&o.equals(r.getOwnerJiacn())&&task.equals(r.getTaskId())
+                    &&List.of("ISSUED","BOUND","RESERVED").contains(r.getState())).toList();
+        }
         @Override public AgentTaskProviderCostConsentEntity findByIdempotencyKey(String t,String c,String o,String task,String id){return byKey.get(key(task,id));}
         @Override public AgentTaskProviderCostConsentEntity findByIdempotencyKeyForUpdate(String t,String c,String o,String task,String id){lockReads++;return byKey.get(key(task,id));}
         @Override public AgentTaskProviderCostConsentEntity findByConsent(String t,String c,String o,String task,String id){return byConsent.get(id);}

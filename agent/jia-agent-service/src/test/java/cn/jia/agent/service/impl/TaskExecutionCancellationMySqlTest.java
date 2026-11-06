@@ -37,6 +37,7 @@ class TaskExecutionCancellationMySqlTest {
     TaskExecutionCancellationService service;
     PersonalWorkspaceExecutionDao executions;
     SkillExecutionDao skills;
+    cn.jia.agent.service.AgentTaskProviderCostConsentService consents;
     ApplicationEventPublisher events;
 
     @BeforeEach void setup() throws Exception {
@@ -60,7 +61,7 @@ class TaskExecutionCancellationMySqlTest {
         new ControlledImageFollowupV3SchemaInitializer(jdbc).afterPropertiesSet();
         var config=new MybatisConfiguration(); config.setMapUnderscoreToCamelCase(true);
         for(Class<?> mapper:List.of(PersonalWorkspaceExecutionMapper.class, PersonalWorkspaceExecutionInputMapper.class,
-                PersonalWorkspaceExecutionOutputMapper.class, SkillExecutionMapper.class)) config.addMapper(mapper);
+                PersonalWorkspaceExecutionOutputMapper.class, SkillExecutionMapper.class, AgentTaskProviderCostConsentMapper.class)) config.addMapper(mapper);
         var global=new GlobalConfig(); global.setIdentifierGenerator(new DefaultIdentifierGenerator());
         var factory=new MybatisSqlSessionFactoryBean(); factory.setDataSource(source); factory.setConfiguration(config); factory.setGlobalConfig(global);
         var sql=new SqlSessionTemplate(Objects.requireNonNull(factory.getObject()));
@@ -71,6 +72,13 @@ class TaskExecutionCancellationMySqlTest {
         var proxy=new ProxyFactory(new TaskExecutionCancellationServiceImpl(executions,skills,events));
         proxy.addAdvice(new TransactionInterceptor(manager,new AnnotationTransactionAttributeSource()));
         service=(TaskExecutionCancellationService)proxy.getProxy();
+        var consentProxy=new ProxyFactory(new AgentTaskProviderCostConsentServiceImpl(
+                new AgentTaskProviderCostConsentDaoImpl(sql.getMapper(AgentTaskProviderCostConsentMapper.class)),
+                mock(cn.jia.agent.service.AgentTaskExecutionGrantService.class),
+                mock(cn.jia.agent.service.AgentTaskMutationTransaction.class),
+                mock(ControlledImageProviderOperatorPolicy.class),new tools.jackson.databind.ObjectMapper()));
+        consentProxy.addAdvice(new TransactionInterceptor(manager,new AnnotationTransactionAttributeSource()));
+        consents=(cn.jia.agent.service.AgentTaskProviderCostConsentService)consentProxy.getProxy();
     }
     @AfterEach void cleanup() {
         if(database!=null&&admin!=null) {
@@ -96,6 +104,56 @@ class TaskExecutionCancellationMySqlTest {
     }
     void cancel(){tx.executeWithoutResult(s->service.cancelTaskExecutions("0","client","owner","task"));}
     String state(String id){return jdbc.queryForObject("SELECT execution_state FROM agent_personal_workspace_execution WHERE execution_id=?",String.class,id);}
+
+    void consent(String id,String purpose,String state) {
+        jdbc.update("""
+            INSERT INTO agent_task_provider_cost_consent
+            (consent_id,owner_jiacn,task_id,target_agent_id,idempotency_key,request_digest,
+             assignment_idempotency_key,assignment_base_hash,task_version,requirement_revision,
+             requirement_sha256,input_snapshot_digest,input_snapshot_json,provider_lane,binding_id,
+             binding_epoch,model_id,custody,operator_issuer,operator_policy_revision,pricing_mode,
+             max_outbound_request_attempts,expires_at,state,version,created_at,tenant_id,client_id,
+             consent_purpose,operation_grant_id,bound_grant_id,bound_grant_version,bound_assignment_revision,
+             reserved_execution_id,reserved_run_id,consumed_lease_id,consumed_at)
+            VALUES (?,'owner','task','agent',?,REPEAT('a',64),'assign',REPEAT('b',64),5,2,
+                    REPEAT('c',64),REPEAT('d',64),JSON_ARRAY(),'CONTROLLED_IMAGE_HTTP_V1','binding',
+                    7,'fixture-model','OWNER_EXTERNAL_ACCOUNT','operator','policy','UNPRICED_EXTERNAL_ACCOUNT',
+                    1,2000000000000,?,4,100,'0','client',?,?,'grant',1,6,'execution','run',?,?)
+            """,id,id,state,purpose,"INITIAL_ASSIGN_AND_START".equals(purpose)?null:"grant-"+id,
+                "CONSUMED".equals(state)?"paid-lease":null,"CONSUMED".equals(state)?123L:null);
+    }
+    void cancelConsents() { consents.cancelForTask(new cn.jia.agent.service.AgentTaskProviderCostConsentService.Scope("0","client","owner"),"task"); }
+    @Test void taskConsentCancellationUsesRealPurposeCasAndPreservesConsumedHistory() {
+        for(String purpose:List.of("INITIAL_ASSIGN_AND_START","FOLLOWUP_EXECUTE","ORDINARY_ACTION"))
+            for(String state:List.of("ISSUED","BOUND","RESERVED")) consent(purpose+state,purpose,state);
+        consent("paid","INITIAL_ASSIGN_AND_START","CONSUMED");
+        var paid=jdbc.queryForMap("SELECT * FROM agent_task_provider_cost_consent WHERE consent_id='paid'");
+        tx.executeWithoutResult(s->cancelConsents());
+        assertEquals(9,jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_provider_cost_consent WHERE state='REVOKED' AND version=5 AND reserved_execution_id='execution' AND bound_grant_id='grant'",Integer.class));
+        assertEquals(paid,jdbc.queryForMap("SELECT * FROM agent_task_provider_cost_consent WHERE consent_id='paid'"));
+        var rows=jdbc.queryForList("SELECT * FROM agent_task_provider_cost_consent ORDER BY consent_id");
+        tx.executeWithoutResult(s->cancelConsents());
+        assertEquals(rows,jdbc.queryForList("SELECT * FROM agent_task_provider_cost_consent ORDER BY consent_id"));
+    }
+    @Test void taskConsentAndExecutionCancellationRollBackTogether() {
+        consent("unused","FOLLOWUP_EXECUTE","RESERVED");row("active","owner","task","CONVERSATION","QUEUED",5);skill("active","RUNNING");
+        assertThrows(IllegalStateException.class,()->tx.executeWithoutResult(s->{
+            service.cancelTaskExecutions("0","client","owner","task");cancelConsents();
+            throw new IllegalStateException("later wallet release failed");
+        }));
+        assertEquals("QUEUED",state("active"));assertEquals("RUNNING",skills.find("0","client","owner","active").getPhase());
+        assertEquals("RESERVED",jdbc.queryForObject("SELECT state FROM agent_task_provider_cost_consent WHERE consent_id='unused'",String.class));
+        verifyNoInteractions(events);
+    }
+    @Test void consentCancellationRequiresOuterTransactionAndExactOwnerTask() {
+        consent("unused","INITIAL_ASSIGN_AND_START","ISSUED");
+        assertThrows(org.springframework.transaction.IllegalTransactionStateException.class,this::cancelConsents);
+        tx.executeWithoutResult(s->{
+            consents.cancelForTask(new cn.jia.agent.service.AgentTaskProviderCostConsentService.Scope("0","client","Owner"),"task");
+            consents.cancelForTask(new cn.jia.agent.service.AgentTaskProviderCostConsentService.Scope("0","client","owner"),"other-task");
+        });
+        assertEquals("ISSUED",jdbc.queryForObject("SELECT state FROM agent_task_provider_cost_consent WHERE consent_id='unused'",String.class));
+    }
 
     @Test void exactTaskCancellationPreservesTerminalsPrivateExecutionsAndHistoricalPaidFacts() {
         row("active","owner","task","CONVERSATION","QUEUED",5); skill("active","RESULT_UNKNOWN");

@@ -18,6 +18,12 @@ public final class AgentTaskProviderCostConsentDaoImpl
         this.mapper = Objects.requireNonNull(mapper, "mapper");
     }
 
+    @Override public java.util.List<AgentTaskProviderCostConsentEntity> lockUnconsumedForTask(
+            String tenant, String client, String owner, String task) {
+        scope(tenant,client,owner); id(task,"taskId",100);
+        return mapper.lockUnconsumedForTask(tenant,client,owner,task);
+    }
+
     @Override public AgentTaskProviderCostConsentEntity findByIdempotencyKey(
             String tenantId, String clientId, String ownerJiacn, String taskId,
             String idempotencyKey) {

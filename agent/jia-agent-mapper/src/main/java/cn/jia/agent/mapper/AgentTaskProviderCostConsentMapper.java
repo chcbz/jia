@@ -8,6 +8,18 @@ import org.apache.ibatis.annotations.Update;
 
 public interface AgentTaskProviderCostConsentMapper
         extends BaseMapper<AgentTaskProviderCostConsentEntity> {
+    @Select("""
+            SELECT * FROM agent_task_provider_cost_consent
+            WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
+              AND task_id=#{taskId} AND state IN ('ISSUED','BOUND','RESERVED')
+              AND BINARY tenant_id=BINARY #{tenantId} AND BINARY client_id=BINARY #{clientId}
+              AND BINARY owner_jiacn=BINARY #{ownerJiacn} AND BINARY task_id=BINARY #{taskId}
+            ORDER BY consent_id FOR UPDATE
+            """)
+    java.util.List<AgentTaskProviderCostConsentEntity> lockUnconsumedForTask(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("taskId") String taskId);
+
     /** Legacy v1 projection excludes optional v3 columns so default-off nodes remain compatible
      * with the pristine provider-consent schema. */
     String COLUMNS = """
