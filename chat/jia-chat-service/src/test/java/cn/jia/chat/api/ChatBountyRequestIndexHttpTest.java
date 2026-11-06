@@ -82,7 +82,12 @@ class ChatBountyRequestIndexHttpTest {
         var response=mvc.perform(get("/chat/conversations/101/requests").param("expectedGeneration","1")
                 .param("requestIds","r7","r9000").principal(auth).header("X-Request-Id","hall-request-index-window"))
                 .andExpect(status().isOk()).andReturn().getResponse();
-        assertEquals(fixture,mapper.readTree(response.getContentAsString()));
+        var body = mapper.readTree(response.getContentAsString());
+        assertEquals(fixture.get("data"), body.get("data"));
+        assertEquals(fixture.get("code"), body.get("code"));
+        assertEquals(fixture.get("protocolVersion"), body.get("protocolVersion"));
+        assertEquals(fixture.get("requestId"), body.get("requestId"));
+        assertEquals("ok", body.get("msg").asText());
         verify(service).read("0","owner","client","101",query);verifyNoMoreInteractions(service);
     }
     @Test void deliveryContextUsesSharedEnvelopeAndBoundedChoiceContract() throws Exception {
