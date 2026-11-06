@@ -7,3 +7,14 @@
 - 修订丢更新风险：费用汇总行→attempt锁顺序；新revision必须匹配expectedRevision，追加证据、当前attempt和汇总差额同一REQUIRES_NEW事务。失败只影响本次成本回执，可由durable来源重投，不将成本异常传播为业务失败；调用方须独立消费/捕获，不能仅凭此事务注解宣称主链已解耦。测试最终写失败回滚/并发/外层事务独立性。
 - 缺数据不伪零：未核验usage为PENDING_USAGE，缺/不匹配价格为PENDING_PRICE，金额NULL；显式零有完整依据才PRICED。保留原始JSON、归一化依据、价格快照和修订历史，禁止查当前默认价覆盖旧调用。测试纯域及真实SQL pending→priced/撤回修订。
 - DDL独立`db/economy-usage-cost.sql`，仅成本三表；人民币`DECIMAL(30,6)`，不新增CHECK/触发器，不改变文账DDL。显式schema-maintenance且`economy.usage-cost.schema-enabled=true`才创建，不随正常启动迁移旧资金。`EconomyUsageCostSchemaTest`验证精度、唯一键、外键和无业务CHECK。部署/生产迁移未执行。
+
+#### 已核验来源与OpenAI直接Chat Completions适配（2026-11-06）
+
+官方文档：`https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create`、`https://developers.openai.com/api/docs/guides/prompt-caching`。
+直接响应的prompt总数包含cached子集，普通输入为两者差；completion总数已经包括reasoning及prediction子计数，不能再次加上。官方OpenAI缓存不另收写入费，不能制造cache-write用量。这不改写用户为其他渠道登记的价格。
+
+`OpenAiTokenUsageNormalizer`仅处理该单次直接响应，不把Codex的thread累计通知当同一合同。缺原始计数/无法确定缓存子集、计数矛盾或涉及音频费率时待核对；无害新增字段允许。实际channel/model/tier由来源绑定，不用请求模型替代响应模型。对应5项集中测试，不让费用服务再重复Provider语义。
+
+本地只读核对Maven官方发布的Spring AI `spring-ai-model`/`spring-ai-openai` 2.0.0 source jar（与项目plugin指定版本一致）：`OpenAiChatModel`将Provider的CompletionUsage保留为nativeUsage，保留真实响应id/model，缓存读取映射自prompt细目。文档与制品摘要证据位于根任务`usage-provider-source-20261106.json`。只读获取源码不运行模型、不修改生产依赖。
+
+官方app-server文档`https://learn.chatgpt.com/docs/app-server`只确认tokenUsage通知；未证明last为整个turn或total可直接归属一次收费。因此Runtime原始证据继续UNVERIFIED，不因直接Chat Completions适配已完成就套用到Codex。

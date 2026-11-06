@@ -41,9 +41,8 @@ public class UsageCostServiceImpl implements UsageCostService {
     @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
     public Receipt record(Observation observation) {
         Objects.requireNonNull(observation, "observation");
-        // Raw evidence is JSON, not arbitrary logs/prompts. Its bytes remain unmodified for replay/audit.
-        if (json.readTree(observation.rawUsageJson()) == null)
-            throw new IllegalArgumentException("Raw usage JSON is required");
+        // Preserve source evidence verbatim, including a malformed payload awaiting reconciliation.
+        // Parsing/normalization belongs to the source adapter; the journal does not parse it again.
         var binding = observation.binding(); var scope = binding.scope();
         String attemptId = digest(json.writeValueAsString(List.of(binding.source(), binding.sourceAttemptId())));
         String receiptKey = digest(observation.receiptId());
