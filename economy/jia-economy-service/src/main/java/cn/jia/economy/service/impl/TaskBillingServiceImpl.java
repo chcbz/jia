@@ -13,7 +13,6 @@ import cn.jia.economy.mapper.EconomyLedgerMapper;
 import cn.jia.economy.mapper.EconomyTaskBillingMapper;
 import cn.jia.economy.pricing.ModelTokenPrice;
 import cn.jia.economy.pricing.TaskPricingService;
-import cn.jia.economy.pricing.TaskEstimateRule;
 import cn.jia.economy.pricing.TaskWorkload;
 import cn.jia.economy.pricing.TaskQuoteCalculator;
 import cn.jia.economy.service.EconomyAccountKey;
@@ -76,7 +75,7 @@ public class TaskBillingServiceImpl implements TaskBillingService {
             if (!payerUserId.equals(stored.getPayerUserId())) throw new TaskBillingException(CHARGE_CONFLICT);
             return receipt(stored);
         }
-        // Replay above precedes all price/rule lookup, including a now-removed configuration entry.
+        // Replay above precedes all current price lookup, including a now-removed configuration entry.
         var prepared = pricing.prepare(workload, model);
         var estimate = prepared.estimate();
         var modelPrice = prepared.modelPrice();
@@ -89,8 +88,8 @@ public class TaskBillingServiceImpl implements TaskBillingService {
         List<ToolEstimate> tools = estimate.toolUnits().entrySet().stream()
                 .map(entry -> new ToolEstimate(entry.getKey(), entry.getValue(), calculated.toolPrices().get(entry.getKey())))
                 .toList();
-        String snapshot = encode(new QuoteSnapshot(binding, prepared.rule(),
-                new WorkloadSnapshot(workload.kind(), workload.complexity(), workload.inputFiles(), workload.deliverables()),
+        String snapshot = encode(new QuoteSnapshot(binding,
+                new WorkloadSnapshot(workload.kind(), workload.inputTokens(), workload.outputTokens(), workload.deliverables()),
                 estimate.ruleId(), estimate.ruleVersion(),
                 estimate.tokens(), modelPrice, tools, calculated.estimatedYuan(), calculated.amountWen()));
         EconomyTaskQuoteEntity row = new EconomyTaskQuoteEntity().setQuoteId("tq_" + UUID.randomUUID())
@@ -264,8 +263,8 @@ public class TaskBillingServiceImpl implements TaskBillingService {
     }
 
     private record ToolEstimate(TaskQuoteCalculator.ToolKey key, BigDecimal units, TaskQuoteCalculator.ToolPrice price) { }
-    private record WorkloadSnapshot(String kind, TaskWorkload.Complexity complexity, long inputFiles, long deliverables) { }
-    private record QuoteSnapshot(Binding binding, TaskEstimateRule rule, WorkloadSnapshot workload, String ruleId, String ruleVersion,
+    private record WorkloadSnapshot(String kind, long inputTokens, long outputTokens, long deliverables) { }
+    private record QuoteSnapshot(Binding binding, WorkloadSnapshot workload, String ruleId, String ruleVersion,
             Map<ModelTokenPrice.Category, Long> tokens, ModelTokenPrice modelPrice, List<ToolEstimate> tools,
             BigDecimal estimatedYuan, long amountWen) { }
 }

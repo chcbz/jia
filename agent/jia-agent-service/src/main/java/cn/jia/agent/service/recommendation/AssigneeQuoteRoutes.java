@@ -40,11 +40,10 @@ public final class AssigneeQuoteRoutes {
                 throw new IllegalArgumentException("Duplicate tool estimate");
         }
         public TaskPricingService.ModelKey modelKey() { return new TaskPricingService.ModelKey(channel, model, tier); }
-        public TaskWorkload workload(Workload judgement, long inputFiles) {
+        public TaskWorkload workload(Workload judgement) {
             var units = new HashMap<TaskQuoteCalculator.ToolKey, BigDecimal>();
             for (var tool : tools) units.put(tool.key(), tool.unitsPerDeliverable().multiply(BigDecimal.valueOf(judgement.deliverables())));
-            return new TaskWorkload(judgement.kind().name(), TaskWorkload.Complexity.valueOf(judgement.complexity().name()),
-                    inputFiles, judgement.deliverables(), units);
+            return new TaskWorkload(judgement.kind().name(), judgement.inputTokens(), judgement.outputTokens(), judgement.deliverables(), units);
         }
     }
     private record Key(String agentId, Workload.Kind kind) { }

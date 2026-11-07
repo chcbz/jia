@@ -23,8 +23,8 @@ class AssigneeQuoteRoutesTest {
             var route = routes.find("a", Workload.Kind.MEDIA); assertNotNull(route);
             assertEquals("real-channel", route.modelKey().channel()); assertNull(routes.find("a", Workload.Kind.DOCUMENT));
             assertNull(routes.find("other", Workload.Kind.MEDIA));
-            var work = route.workload(new Workload(Workload.Kind.MEDIA, Workload.Complexity.COMPLEX, 2), 4);
-            assertEquals(4, work.inputFiles()); assertEquals(2, work.deliverables());
+            var work = route.workload(new Workload(Workload.Kind.MEDIA, 20000, 5000, 2));
+            assertEquals(20000, work.inputTokens()); assertEquals(5000, work.outputTokens()); assertEquals(2, work.deliverables());
             assertEquals(new BigDecimal("3.0"), work.toolUnits().get(new TaskQuoteCalculator.ToolKey("tool-channel", "render", "image")));
         });
     }

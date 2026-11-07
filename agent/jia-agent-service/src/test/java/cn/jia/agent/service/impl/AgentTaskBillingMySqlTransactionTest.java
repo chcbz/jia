@@ -196,10 +196,7 @@ class AgentTaskBillingMySqlTransactionTest {
                 new org.springframework.core.env.StandardEnvironment(), walletGate);
         var pricing = new ConfiguredTaskPricingService(new EconomyPricingProperties(
                 List.of(new ModelTokenPrice("fixture", "fixture-model", "standard", "1", "synthetic fixture",
-                        Map.of(ModelTokenPrice.Category.INPUT, new BigDecimal("0.50")), null, Map.of())), List.of(),
-                List.of(new TaskEstimateRule("fixture", "1", "synthetic fixture", "GENERAL",
-                        TaskWorkload.Complexity.STANDARD, Map.of(ModelTokenPrice.Category.INPUT, 1_000_000L),
-                        Map.of(), Map.of()))));
+                        Map.of(ModelTokenPrice.Category.INPUT, new BigDecimal("0.50")), null, Map.of())), List.of()));
         billing = proxy(new TaskBillingServiceImpl(sql.getMapper(EconomyTaskBillingMapper.class), ledger,
                 new EconomyPostingServiceImpl(ledger, manager, new EconomyPreviewGate(new EconomyPreviewProperties(
                         true, List.of(new EconomyPreviewProperties.AllowedScope(TENANT, CLIENT))))),
@@ -276,7 +273,7 @@ class AgentTaskBillingMySqlTransactionTest {
                 """, PAYER, TENANT, CLIENT);
         quoteId = locked(() -> billing.quote(BILLING_TASK, new TaskBillingService.Binding(1, "a".repeat(64),
                 assignment.snapshotTaskInputsWithinLockedTask(SCOPE, TASK).digest(), AGENT, "recommendation-1"),
-                PAYER, new TaskWorkload("GENERAL", TaskWorkload.Complexity.STANDARD, 0, 1, Map.of()),
+                PAYER, new TaskWorkload("GENERAL", 1_000_000, 0, 1, Map.of()),
                 new TaskPricingService.ModelKey("fixture", "fixture-model", "standard"))).quoteId();
     }
 

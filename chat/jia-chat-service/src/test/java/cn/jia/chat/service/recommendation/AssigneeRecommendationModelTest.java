@@ -50,7 +50,7 @@ class AssigneeRecommendationModelTest {
                 "读取是后续处理的前提", "不额外要求读取不需要的附件正文", "简单统计不要求另有统计技能",
                 "同一候选是否覆盖全部关键输入", "不能借用其他候选的技能", "不沿用历史推荐、已删除技能",
                 "必需的附件读取能力无依据时，不给HIGH/MEDIUM", "归属不能弥补关键能力缺口",
-                "同次判断整个事项的工作量workload", "不估计价格、余额或Token", "资料数量由服务端已有授权资料确定", "deliverables", "自有MEDIUM优先于外部HIGH", "归属不改变能力等级", "A1E1", "不输出Markdown或内部思考过程"))
+                "同次判断整个事项的工作量workload", "不估计价格或余额", "资料数量由服务端已有授权资料确定", "deliverables", "自有MEDIUM优先于外部HIGH", "归属不改变能力等级", "A1E1", "不输出Markdown或内部思考过程"))
             assertTrue(instructions.contains(rule), rule);
         assertFalse(instructions.contains("NEEDS_CLARIFICATION"));
     }

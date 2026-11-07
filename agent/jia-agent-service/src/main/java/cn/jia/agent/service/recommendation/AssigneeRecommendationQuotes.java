@@ -48,7 +48,7 @@ public final class AssigneeRecommendationQuotes {
                             inputs.digest(), item.agent().agentId(), recommendationId);
                     try {
                         var quote = billing.quote(task, binding, actor.actorId(),
-                                route.workload(advice.workload(), inputs.inputs().size()), route.modelKey());
+                                route.workload(advice.workload()), route.modelKey());
                         quotation = new Quotation("AVAILABLE", quote.quoteId(), recommendationId, Money.wen(quote.amountWen()), null);
                     } catch (TaskPricingService.Unavailable expected) {
                         quotation = unavailable(recommendationId, expected.reason().name());

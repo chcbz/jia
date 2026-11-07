@@ -16,9 +16,8 @@ public final class AssigneeRecommendation {
     public record Quotation(String state, String quoteId, String recommendationId,
                             cn.jia.economy.common.Money amount, String unavailableReason) { }
     /** Internal model judgement, not a price or execution authorization. */
-    public record Workload(Kind kind, Complexity complexity, long deliverables) {
+    public record Workload(Kind kind, long inputTokens, long outputTokens, long deliverables) {
         public enum Kind { DOCUMENT, DATA, CODE, MEDIA, GENERAL }
-        public enum Complexity { SIMPLE, STANDARD, COMPLEX }
     }
     public record Result(String taskId, String taskVersion, long observedAt, String state,
                          String requirementSummary, List<Recommendation> recommendations,

@@ -30,7 +30,7 @@ class AssigneeRecommendationControllerTest {
         mvc = MockMvcBuilders.standaloneSetup(new AssigneeRecommendationController(service))
                 .setMessageConverters(new JacksonJsonHttpMessageConverter()).setControllerAdvice(new ApiEnvelopeAdvice())
                 .addFilters(new RequestIdFilter()).build();
-        when(service.recommend(any(), eq("task"), any())).thenReturn(new Result("task", "7", 1000, "NO_MATCH", "资料不足", List.of(new Recommendation(new Agent("a", "Agent", "online", List.of(), true, true, null), "UNKNOWN", "尚无能力介绍", List.of(), List.of(), new Quotation("AVAILABLE", "quote-1", "recommendation-1", cn.jia.economy.common.Money.wen(13), null))), List.of(), true, new Workload(Workload.Kind.DOCUMENT, Workload.Complexity.STANDARD, 1)));
+        when(service.recommend(any(), eq("task"), any())).thenReturn(new Result("task", "7", 1000, "NO_MATCH", "资料不足", List.of(new Recommendation(new Agent("a", "Agent", "online", List.of(), true, true, null), "UNKNOWN", "尚无能力介绍", List.of(), List.of(), new Quotation("AVAILABLE", "quote-1", "recommendation-1", cn.jia.economy.common.Money.wen(13), null))), List.of(), true, new Workload(Workload.Kind.DOCUMENT, 20000, 5000, 1)));
     }
     @AfterEach void cleanup() { EsContextHolder.clearContext(); }
     @Test void sameEndpointReturnsNewObjectInOneEnvelopeWithoutLegacyScores() throws Exception {

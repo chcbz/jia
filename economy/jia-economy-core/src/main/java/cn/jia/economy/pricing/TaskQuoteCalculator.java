@@ -5,7 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 
-/** Pure whole-task pricing. Workload rules and prices are supplied by economy, never by the model. */
+/** Pure whole-task pricing. Token estimates originate from the model; prices and tool identities are server-owned. */
 public final class TaskQuoteCalculator {
     private TaskQuoteCalculator() { }
 
@@ -32,7 +32,7 @@ public final class TaskQuoteCalculator {
                 CnyAmounts.quoteWen(yuan));
     }
 
-    /** Whole-task billable quantities derived from a configured workload rule, not live usage. */
+    /** Whole-task estimated billable quantities with an estimation-method version, not measured usage. */
     public record Estimate(String ruleId, String ruleVersion,
             Map<ModelTokenPrice.Category, Long> tokens, Map<ToolKey, BigDecimal> toolUnits) {
         public Estimate {

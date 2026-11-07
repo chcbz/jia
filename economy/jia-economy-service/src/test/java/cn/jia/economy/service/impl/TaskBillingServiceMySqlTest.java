@@ -6,7 +6,6 @@ import cn.jia.economy.config.EconomyPreviewProperties;
 import cn.jia.economy.config.EconomySchemaInitializer;
 import cn.jia.economy.config.EconomyPricingProperties;
 import cn.jia.economy.pricing.TaskPricingService;
-import cn.jia.economy.pricing.TaskEstimateRule;
 import cn.jia.economy.pricing.TaskWorkload;
 import cn.jia.economy.exception.EconomyPostingException;
 import cn.jia.economy.mapper.EconomyLedgerMapper;
@@ -90,9 +89,7 @@ class TaskBillingServiceMySqlTest {
                 new EconomyPostingServiceImpl(ledger, manager, gate), new ObjectMapper(),
                 new ConfiguredTaskPricingService(new EconomyPricingProperties(
                         List.of("0", "0.004", "0.1", "0.3", "0.4", "0.5", "0.500001", "0.8", "999999999999999999999").stream().map(TaskBillingServiceMySqlTest::price).toList(),
-                        List.of(new EconomyPricingProperties.ToolEntry("test-channel", "render", "image", "tool-v2", "synthetic-test-price", new BigDecimal("0.004"))),
-                        List.of(new TaskEstimateRule("test-rule", "1", "synthetic-test-rule", "test", TaskWorkload.Complexity.STANDARD,
-                                Map.of(ModelTokenPrice.Category.INPUT, 1_000_000L), Map.of(), Map.of())))));
+                        List.of(new EconomyPricingProperties.ToolEntry("test-channel", "render", "image", "tool-v2", "synthetic-test-price", new BigDecimal("0.004"))))));
         var proxy = new ProxyFactory(target);
         proxy.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
         billing = (TaskBillingService) proxy.getProxy();
@@ -116,8 +113,8 @@ class TaskBillingServiceMySqlTest {
         assertEquals(51, first.amountWen());
         var snapshot = new ObjectMapper().readTree(first.snapshotJson());
         assertEquals("0.500001", snapshot.get("estimatedYuan").asText());
-        assertEquals("synthetic-test-rule", snapshot.get("rule").get("basis").asText());
-        assertEquals(1_000_000L, snapshot.get("rule").get("baseTokens").get("INPUT").asLong());
+        assertEquals("MODEL_TOKEN_ESTIMATE", snapshot.get("ruleId").asText());
+        assertEquals(1_000_000L, snapshot.get("tokens").get("INPUT").asLong());
         assertEquals("synthetic-test-price", snapshot.get("modelPrice").get("basis").asText());
         assertEquals(1L, snapshot.get("workload").get("deliverables").asLong());
         assertEquals(1, count("economy_task_quote"));
@@ -161,7 +158,7 @@ class TaskBillingServiceMySqlTest {
     @Test
     void snapshotPreservesToolIdentityAndRoundsOnlyWholeTaskTotal() throws Exception {
         var tool = new TaskQuoteCalculator.ToolKey("test-channel", "render", "image");
-        var workload = new TaskWorkload("test", TaskWorkload.Complexity.STANDARD, 0, 1, Map.of(tool, BigDecimal.ONE));
+        var workload = new TaskWorkload("test", 1_000_000, 0, 1, Map.of(tool, BigDecimal.ONE));
         Quote quote = inTask(TASK, () -> billing.quote(TASK, BINDING, "payer-1", workload, route("0.004")));
         assertEquals(1, quote.amountWen());
         var tree = new ObjectMapper().readTree(quote.snapshotJson());
@@ -409,7 +406,7 @@ class TaskBillingServiceMySqlTest {
         });
     }
     private static TaskWorkload workload() {
-        return new TaskWorkload("test", TaskWorkload.Complexity.STANDARD, 0, 1, Map.of());
+        return new TaskWorkload("test", 1_000_000, 0, 1, Map.of());
     }
     private static TaskPricingService.ModelKey route(String yuan) {
         return new TaskPricingService.ModelKey("test-channel", "test-model-" + yuan, "standard");

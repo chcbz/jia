@@ -56,7 +56,7 @@ class AssigneeRecommendationQuotesTest {
     private Result advice(String... ids) {
         assertTrue(locked.get());
         return new Result("task", "7", 1, "NO_MATCH", "summary", java.util.Arrays.stream(ids).map(AssigneeRecommendationQuotesTest::candidate).toList(),
-                List.of(), true, new Workload(Workload.Kind.DOCUMENT, Workload.Complexity.STANDARD, 2));
+                List.of(), true, new Workload(Workload.Kind.DOCUMENT, 20000, 5000, 2));
     }
     @Test void quotesAllCandidatesFromOneLockedSnapshotAndTrustedPayer() {
         var result = service.prepare(actor, "task", () -> advice("a", "b"));
@@ -70,7 +70,7 @@ class AssigneeRecommendationQuotesTest {
             assertEquals(3, binding.requirementRevision()); assertEquals("requirement-sha", binding.requirementSha256());
             assertEquals("same-assignment-digest", binding.inputSnapshotDigest()); assertEquals(first.recommendationId(), binding.recommendationId());
         }
-        assertEquals(List.of(1L, 1L), work.getAllValues().stream().map(TaskWorkload::inputFiles).toList());
+        assertEquals(List.of(20000L, 20000L), work.getAllValues().stream().map(TaskWorkload::inputTokens).toList());
         verify(grants, times(1)).snapshotTaskInputsWithinLockedTask(any(), eq("task"));
         verify(billing, never()).reserve(any(), any(), any(), any());
     }

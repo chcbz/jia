@@ -99,9 +99,7 @@ class EconomyWalletHttpMySqlTest {
         }
         @Bean EconomyWalletController controller(EconomyPreviewGate gate, EconomyWalletService wallet) { return new EconomyWalletController(gate, wallet); }
         @Bean TaskBillingService billing(SqlSessionTemplate sql, EconomyPostingServiceImpl posting) {
-            var pricing = new ConfiguredTaskPricingService(new EconomyPricingProperties(List.of(PRICE), List.of(),
-                    List.of(new TaskEstimateRule("rule", "1", "synthetic", "test", TaskWorkload.Complexity.STANDARD,
-                            Map.of(ModelTokenPrice.Category.INPUT, 1_000_000L), Map.of(), Map.of()))));
+            var pricing = new ConfiguredTaskPricingService(new EconomyPricingProperties(List.of(PRICE), List.of()));
             return new TaskBillingServiceImpl(sql.getMapper(EconomyTaskBillingMapper.class), sql.getMapper(EconomyLedgerMapper.class), posting, JSON, pricing);
         }
         @Bean UsageCostService costs(SqlSessionTemplate sql) { return new UsageCostServiceImpl(sql.getMapper(EconomyUsageCostMapper.class), JSON); }
@@ -188,7 +186,7 @@ class EconomyWalletHttpMySqlTest {
         var billing = app.getBean(TaskBillingService.class);
         var binding = new TaskBillingService.Binding(1, "requirement", "inputs", "agent", "recommendation");
         var task = new TaskBillingService.Task(SCOPE, "owner", "accepted");
-        var quote = inTask(task, () -> billing.quote(task, binding, "payer", new TaskWorkload("test", TaskWorkload.Complexity.STANDARD, 0, 1, Map.of()),
+        var quote = inTask(task, () -> billing.quote(task, binding, "payer", new TaskWorkload("test", 1_000_000, 0, 1, Map.of()),
                 new TaskPricingService.ModelKey("test", "model", "standard")));
         assertEquals(13, quote.amountWen()); wallet(token, 3500, 0);
         inTask(task, () -> billing.reserve(task, quote.quoteId(), binding, "payer")); wallet(token, 3487, 13);
@@ -203,7 +201,7 @@ class EconomyWalletHttpMySqlTest {
         assertTrue(costs.record(observation).replay()); wallet(token, 3487, 0);
         assertEquals(financialTransactions, count("economy_transaction"));
         var cancelled = new TaskBillingService.Task(SCOPE, "owner", "cancelled");
-        var other = inTask(cancelled, () -> billing.quote(cancelled, binding, "payer", new TaskWorkload("test", TaskWorkload.Complexity.STANDARD, 0, 1, Map.of()),
+        var other = inTask(cancelled, () -> billing.quote(cancelled, binding, "payer", new TaskWorkload("test", 1_000_000, 0, 1, Map.of()),
                 new TaskPricingService.ModelKey("test", "model", "standard")));
         inTask(cancelled, () -> billing.reserve(cancelled, other.quoteId(), binding, "payer")); wallet(token, 3474, 13);
         inTask(cancelled, () -> billing.release(cancelled, true)); wallet(token, 3487, 0);

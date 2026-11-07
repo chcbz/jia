@@ -215,7 +215,8 @@ public final class AssigneeRecommendationService {
         root.put("requirementSummary", string); root.put("recommendations", objectSchema(rows));
         var workload = new LinkedHashMap<String, Object>();
         workload.put("kind", Map.of("type", "string", "enum", Arrays.stream(Workload.Kind.values()).map(Enum::name).toList()));
-        workload.put("complexity", Map.of("type", "string", "enum", Arrays.stream(Workload.Complexity.values()).map(Enum::name).toList()));
+        workload.put("inputTokens", Map.of("type", "integer", "minimum", 0));
+        workload.put("outputTokens", Map.of("type", "integer", "minimum", 0));
         workload.put("deliverables", Map.of("type", "integer", "minimum", 1));
         root.put("workload", objectSchema(workload));
         return JSON.writeValueAsString(objectSchema(root));
@@ -274,15 +275,23 @@ public final class AssigneeRecommendationService {
     }
     private static Workload workload(JsonNode node) {
         // This boundary owns model-output validation. No inferred default means a broken
-        // judgement cannot silently select a cheaper rule or become a free quote.
+        // estimate cannot silently become a free quote.
         if (node == null || !node.isObject()) throw invalid("WORKLOAD_OBJECT");
         JsonNode count = node.get("deliverables");
         if (count == null || !count.isIntegralNumber() || !count.canConvertToLong() || count.longValue() < 1)
             throw invalid("WORKLOAD_DELIVERABLES");
+        long input = estimatedTokens(node, "inputTokens");
+        long output = estimatedTokens(node, "outputTokens");
+        if (input == 0 && output == 0) throw invalid("WORKLOAD_ZERO_TOKENS");
         try {
-            return new Workload(Workload.Kind.valueOf(text(node, "kind")),
-                    Workload.Complexity.valueOf(text(node, "complexity")), count.longValue());
+            return new Workload(Workload.Kind.valueOf(text(node, "kind")), input, output, count.longValue());
         } catch (IllegalArgumentException unknown) { throw invalid("WORKLOAD_CLASSIFICATION"); }
+    }
+    private static long estimatedTokens(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        if (value == null || !value.isIntegralNumber() || !value.canConvertToLong() || value.longValue() < 0)
+            throw invalid("WORKLOAD_TOKEN_ESTIMATE");
+        return value.longValue();
     }
     private static List<String> strings(JsonNode node) {
         if (node == null || !node.isArray()) throw invalid("STRING_ARRAY");
