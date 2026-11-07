@@ -30,6 +30,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class AgentTaskExecutionGrantServiceImplTest {
+    private final cn.jia.agent.dao.AgentTaskMetaDao taskRoots=mock(cn.jia.agent.dao.AgentTaskMetaDao.class);
     private final MemoryGrantDao grants = new MemoryGrantDao();
     private final MemoryBootstrapDao bootstraps = new MemoryBootstrapDao();
     private final PersonalWorkspaceTaskLinkDao links = mock(PersonalWorkspaceTaskLinkDao.class);
@@ -75,7 +76,7 @@ class AgentTaskExecutionGrantServiceImplTest {
                     : new AgentLegacyTaskCompatibilityService.AssignOutcome(List.of("agent-1"),false);
         });
         service=new AgentTaskExecutionGrantServiceImpl(grants,bootstraps,links,workspace,legacy,identities,
-                new DirectTransaction(root),new ObjectMapper(),requirementSnapshots, billing);
+                new DirectTransaction(root),new ObjectMapper(),requirementSnapshots,billing,taskRoots);
         service.setAssigneeAuthority(authority);
     }
 
@@ -185,7 +186,7 @@ class AgentTaskExecutionGrantServiceImplTest {
     @Test void grayScopeReachesTenantBoundRootLockWithoutProductionFallback() {
         var transactions = mock(AgentTaskMutationTransaction.class);
         var scoped = new AgentTaskExecutionGrantServiceImpl(grants,bootstraps,links,workspace,
-                legacy,identities,transactions,new ObjectMapper(),requirementSnapshots, billing);
+                legacy,identities,transactions,new ObjectMapper(),requirementSnapshots,billing,taskRoots);
         var gray = new AgentTaskExecutionGrantService.Scope("1","client","owner");
         scoped.admit(gray,"task-1","grant-1",1,0,"agent-1","READ_TASK",false);
         verify(transactions).executeWithLockedTaskRootInOwnerScope(eq("1"),eq("client"),
@@ -216,6 +217,30 @@ class AgentTaskExecutionGrantServiceImplTest {
         service.assignForDeliberation(scope(),"task-1","external","agent-1",0,1, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1"));
         verify(authority,times(1)).lockForAssignment("0","client","owner","agent-1");
         verify(wakeups, times(1)).afterCommit(row.getCreatedAt());
+    }
+
+    @Test void observedContextKeepsAuthorityChecksWithoutTaskGrantOrIdentityLocks() {
+        when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
+        var grant=service.assignForDeliberation(scope(),"task-1","observe-context","agent-1",0,1, new AgentTaskExecutionGrantService.Payment("payer-1", "quote-1", "rec-1"));
+        root.setRewardStatus("reviewing");
+        when(taskRoots.findByTaskIdInOwnerScope("0","client","owner","task-1")).thenReturn(root);
+        var transactions=mock(AgentTaskMutationTransaction.class);
+        var observed=new AgentTaskExecutionGrantServiceImpl(grants,bootstraps,links,workspace,legacy,
+                identities,transactions,new ObjectMapper(),requirementSnapshots,billing,taskRoots);
+        observed.setAssigneeAuthority(authority);
+        clearInvocations(identities,authority);
+
+        var context=observed.observeFollowupContext(scope(),"task-1","agent-1");
+        assertEquals(grant.getGrantVersion(),context.baselineGrantVersion());
+        verify(authority).requireGrantTarget("0","client","owner","task-1",
+                grant.getGrantId(),grant.getGrantVersion());
+        verifyNoInteractions(transactions,identities);
+        root.setRewardStatus("completed");
+        assertThrows(AgentTaskExecutionGrantException.class,
+                ()->observed.observeFollowupContext(scope(),"task-1","agent-1"));
+        when(taskRoots.findByTaskIdInOwnerScope("0","client","owner","task-1")).thenReturn(null);
+        assertEquals(404,assertThrows(AgentTaskExecutionGrantException.class,
+                ()->observed.observeFollowupContext(scope(),"task-1","agent-1")).status());
     }
 
     @Test void pendingReviewAllowsReadOnlyDiscussionContextWithoutGrantingImageExecution() {
@@ -388,7 +413,7 @@ class AgentTaskExecutionGrantServiceImplTest {
     void pointBootstrapFailureRollsBackAssignmentGrantAndIntentInTransactionHarness() {
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
         service=new AgentTaskExecutionGrantServiceImpl(grants,bootstraps,links,workspace,legacy,identities,
-                new RollbackTransaction(root,grants,bootstraps),new ObjectMapper(),requirementSnapshots, billing);
+                new RollbackTransaction(root,grants,bootstraps),new ObjectMapper(),requirementSnapshots,billing,taskRoots);
         service.setAssigneeAuthority(authority);
         bootstraps.failInsert=true;
         assertThrows(IllegalStateException.class,
@@ -596,7 +621,7 @@ class AgentTaskExecutionGrantServiceImplTest {
     void bootstrapFailureRollsBackAssignmentAndGrantBoundary() {
         bootstraps.failInsert=true;
         service=new AgentTaskExecutionGrantServiceImpl(grants,bootstraps,links,workspace,legacy,identities,
-                new RollbackTransaction(root,grants,bootstraps),new ObjectMapper(),requirementSnapshots, billing);
+                new RollbackTransaction(root,grants,bootstraps),new ObjectMapper(),requirementSnapshots,billing,taskRoots);
         service.setAssigneeAuthority(authority);
         assertThrows(IllegalStateException.class,
                 () -> service.assignAndGrant(scope(),"task-1","key-rollback",request(), "payer-1"));
@@ -922,7 +947,8 @@ class AgentTaskExecutionGrantServiceImplTest {
 
     private static final class RollbackTransaction implements AgentTaskMutationTransaction {
         private final AgentTaskMetaEntity root;
-        private final MemoryGrantDao grants;
+        private final cn.jia.agent.dao.AgentTaskMetaDao taskRoots=mock(cn.jia.agent.dao.AgentTaskMetaDao.class);
+    private final MemoryGrantDao grants;
         private final MemoryBootstrapDao bootstraps;
         RollbackTransaction(AgentTaskMetaEntity root,MemoryGrantDao grants,MemoryBootstrapDao bootstraps){
             this.root=root;this.grants=grants;this.bootstraps=bootstraps;

@@ -25,11 +25,19 @@ public class ChatBountyBindingStore {
                 """,scope.tenantId(),scope.ownerJiacn(),scope.clientId(),taskId,assignmentRevision,now,now);
     }
 
+    public Binding find(Scope scope,String taskId) {
+        return read(scope,taskId,false);
+    }
+
     public Binding lock(Scope scope,String taskId) {
+        return read(scope,taskId,true);
+    }
+
+    private Binding read(Scope scope,String taskId,boolean lock) {
         List<Binding> rows=jdbc.query("""
                 SELECT assignment_revision,conversation_id FROM chat_bounty_binding
-                WHERE tenant_id=? AND owner_jiacn=? AND client_id=? AND task_id=? FOR UPDATE
-                """,(rs,n)->new Binding(rs.getLong("assignment_revision"),
+                WHERE tenant_id=? AND owner_jiacn=? AND client_id=? AND task_id=?
+                """ + (lock ? " FOR UPDATE" : ""),(rs,n)->new Binding(rs.getLong("assignment_revision"),
                 rs.getObject("conversation_id",Long.class)),scope.tenantId(),scope.ownerJiacn(),
                 scope.clientId(),taskId);
         if (rows.size()!=1) throw new IllegalStateException("Bounty binding is missing or duplicated");

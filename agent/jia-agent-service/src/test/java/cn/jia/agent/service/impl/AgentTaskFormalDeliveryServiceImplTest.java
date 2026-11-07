@@ -25,6 +25,7 @@ import org.mockito.ArgumentCaptor;
 
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -114,6 +115,29 @@ class AgentTaskFormalDeliveryServiceImplTest {
                 events.getAllValues().stream().map(AgentTaskEventWriteCommand::getEventType).toList());
         assertFalse(events.getAllValues().stream()
                 .anyMatch(event -> event.getEventJson().contains(TOKEN)));
+        // Validate the actual producer payload using the reader shared by snapshots and streams.
+        for (var event : events.getAllValues()) {
+            java.util.Map<String,Object> payload = new tools.jackson.databind.ObjectMapper()
+                    .readValue(event.getEventJson(), new tools.jackson.core.type.TypeReference<>() { });
+            assertDoesNotThrow(() -> AgentTaskWorkspaceEventValidator.validate(event.getEventType(),
+                    event.getActorType(), event.getActorId(), event.getAggregateType(),
+                    event.getAggregateId(), payload, TASK), event.getEventType());
+        }
+        var reviewing = events.getAllValues().get(2);
+        java.util.Map<String,Object> reviewingPayload = new tools.jackson.databind.ObjectMapper()
+                .readValue(reviewing.getEventJson(), new tools.jackson.core.type.TypeReference<>() { });
+        assertDoesNotThrow(() -> AgentTaskWorkspaceEventValidator.validate(reviewing.getEventType(),
+                reviewing.getActorType(), reviewing.getActorId(), reviewing.getAggregateType(),
+                reviewing.getAggregateId(), reviewingPayload, TASK));
+        assertDoesNotThrow(() -> AgentTaskWorkspaceEventValidator.validate(reviewing.getEventType(),
+                TaskEventType.ActorType.SYSTEM, null, reviewing.getAggregateType(),
+                reviewing.getAggregateId(), reviewingPayload, TASK));
+        assertThrows(IllegalArgumentException.class, () -> AgentTaskWorkspaceEventValidator.validate(
+                reviewing.getEventType(), TaskEventType.ActorType.AGENT, null,
+                reviewing.getAggregateType(), reviewing.getAggregateId(), reviewingPayload, TASK));
+        assertThrows(IllegalArgumentException.class, () -> AgentTaskWorkspaceEventValidator.validate(
+                TaskEventType.TASK_STARTED, reviewing.getActorType(), reviewing.getActorId(),
+                reviewing.getAggregateType(), reviewing.getAggregateId(), reviewingPayload, TASK));
 
         var order = inOrder(deliveryDao, workItemDao, taskMetaDao, eventWriter);
         order.verify(deliveryDao).insert(eq(TENANT), eq(CLIENT), any());

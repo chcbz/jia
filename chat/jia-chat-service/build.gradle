@@ -257,6 +257,8 @@ tasks.register('mmdControlledImageBridge', Test) {
 def mmdControlledImageFollowupV3SourceSet = sourceSets.create('mmdControlledImageFollowupV3') {
     java {
         srcDir 'src/mmdRegressionTest/java'
+        srcDir 'src/test/java'
+        include 'cn/jia/chat/service/ChatStreamPolicyTest.java'
         include 'cn/jia/chat/api/ChatBountyInteractionV3ControllerTest.java'
         include 'cn/jia/chat/service/ChatBountyInteractionV3PreviewServiceTest.java'
         include 'cn/jia/chat/service/ChatBountyInteractionV3AuthorityServiceTest.java'

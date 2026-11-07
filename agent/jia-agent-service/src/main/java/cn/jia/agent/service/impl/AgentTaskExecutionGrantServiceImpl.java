@@ -55,6 +55,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
     private static final int MAX_INPUTS = 32;
     private static final long MAX_SAFE_INTEGER = 9_007_199_254_740_991L;
 
+    private final cn.jia.agent.dao.AgentTaskMetaDao taskRoots;
     private final AgentTaskExecutionGrantDao grants;
     private final AgentTaskBountyBootstrapOutboxDao bootstrapOutbox;
     private final AgentTaskRequirementSnapshotService requirementSnapshots;
@@ -91,7 +92,9 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
             PersonalWorkspaceTaskLinkDao taskLinks, PersonalWorkspaceDao workspace,
             AgentLegacyTaskCompatibilityService legacyAssignments, AgentIdentityService identities,
             AgentTaskMutationTransaction transactions, ObjectMapper json,
-            AgentTaskRequirementSnapshotService requirementSnapshots, cn.jia.economy.task.TaskBillingService billing) {
+            AgentTaskRequirementSnapshotService requirementSnapshots, cn.jia.economy.task.TaskBillingService billing,
+            cn.jia.agent.dao.AgentTaskMetaDao taskRoots) {
+        this.taskRoots = Objects.requireNonNull(taskRoots,"taskRoots");
         this.billing = Objects.requireNonNull(billing,"billing");
         this.grants = Objects.requireNonNull(grants,"grants");
         this.bootstrapOutbox = Objects.requireNonNull(bootstrapOutbox,"bootstrapOutbox");
@@ -497,7 +500,22 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
     public FollowupContext currentFollowupContext(Scope scope,String taskId,String targetAgentId) {
         validateScope(scope);exact(taskId,"taskId",100);exact(targetAgentId,"targetAgentId",100);
         try{return transactions.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),
-                scope.ownerJiacn(),taskId,root->{
+                scope.ownerJiacn(),taskId,root->followupContext(scope,taskId,targetAgentId,root,true));
+        }catch(AgentTaskCollaborationException failure){throw translate(failure);}
+    }
+
+    @Override
+    public FollowupContext observeFollowupContext(Scope scope,String taskId,String targetAgentId) {
+        validateScope(scope);exact(taskId,"taskId",100);exact(targetAgentId,"targetAgentId",100);
+        try {
+            var root=taskRoots.findByTaskIdInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId);
+            if(root==null)throw notFound();
+            return followupContext(scope,taskId,targetAgentId,root,false);
+        }catch(AgentTaskCollaborationException failure){throw translate(failure);}
+    }
+
+    private FollowupContext followupContext(Scope scope,String taskId,String targetAgentId,
+            AgentTaskMetaEntity root,boolean lockIdentity) {
             if(root==null||root.getTaskVersion()==null||root.getTaskVersion()<0
                     ||!("assigned".equals(root.getRewardStatus()) || "running".equals(root.getRewardStatus()) || "reviewing".equals(root.getRewardStatus()))
                     ||!same(targetAgentId,root.getAssignedAgentId()))throw conflict("Task is not current for follow-up");
@@ -507,8 +525,9 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                     ||active.getGrantVersion()<1||active.getAssignmentRevision()==null
                     ||active.getAssignmentRevision()<0||active.getRequirementRevision()==null
                     ||active.getRequirementRevision()<1||!same(targetAgentId,active.getTargetAgentId()))throw notFound();
-            AgentTaskExecutionGrantEntity locked=grants.findByGrantForUpdate(scope.tenantId(),scope.clientId(),
-                    scope.ownerJiacn(),taskId,active.getGrantId());
+            AgentTaskExecutionGrantEntity locked=lockIdentity
+                    ? grants.findByGrantForUpdate(scope.tenantId(),scope.clientId(),
+                            scope.ownerJiacn(),taskId,active.getGrantId()) : active;
             if(locked==null||!same(active.getRequestHash(),locked.getRequestHash())
                     ||!Objects.equals(active.getGrantVersion(),locked.getGrantVersion())
                     ||!Objects.equals(active.getAssignmentRevision(),locked.getAssignmentRevision())
@@ -517,14 +536,13 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
             requireAssignmentEpoch(scope,taskId,locked.getAssignmentRevision(),root);
             var executor=assigneeAuthority.requireGrantTarget(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
                     taskId,locked.getGrantId(),locked.getGrantVersion());
-            if(!List.of(targetAgentId).equals(identities.lockActiveCanonicalAgentIdsInScope(
+            if(lockIdentity && !List.of(targetAgentId).equals(identities.lockActiveCanonicalAgentIdsInScope(
                     scope.tenantId(),scope.clientId(),executor.ownerJiacn(),List.of(targetAgentId))))throw notFound();
             var requirement=requirementSnapshots.requireCurrent(scope,taskId,locked.getRequirementRevision());
             if(requirement==null||requirement.revision()!=locked.getRequirementRevision())
                 throw conflict("Current requirement changed");
             return new FollowupContext(taskId,targetAgentId,root.getTaskVersion(),
                     locked.getAssignmentRevision(),locked.getGrantVersion(),locked.getRequirementRevision());
-        });}catch(AgentTaskCollaborationException failure){throw translate(failure);}
     }
 
     @Override
