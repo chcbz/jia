@@ -116,7 +116,10 @@ let browser, ws, server;
   progress('wallet-loaded');
   await call('Page.navigate', { url: ui + '/juyiting' });
   await wait("Boolean([...document.querySelectorAll('[data-workbench-tab=\"tasks\"]')].find(e=>e.getBoundingClientRect().width>0))", 'hall task navigation');
-  await evaluate("document.querySelector('[aria-label=\"稍后查看新手引导\"]')?.click()");
+  // Fresh profiles show onboarding asynchronously; dismissal updates inert on Vue's next render.
+  await wait("Boolean(document.querySelector('[aria-label=\"稍后查看新手引导\"]'))", 'onboarding ready');
+  await evaluate("document.querySelector('[aria-label=\"稍后查看新手引导\"]').click()");
+  await wait("Boolean([...document.querySelectorAll('[data-workbench-tab=\"tasks\"]')].find(e=>e.getBoundingClientRect().width>0 && !e.closest('[inert]')))", 'task navigation interactive');
   await evaluate("[...document.querySelectorAll('[data-workbench-tab=\"tasks\"]')].find(e=>e.getBoundingClientRect().width>0)?.click()");
   await wait("Boolean(document.querySelector('.task-card'))", 'task list');
   progress('task-list-loaded');
@@ -153,7 +156,7 @@ let browser, ws, server;
   }
   assert.deepEqual(exceptions, []);
 })().catch(error => { console.error(error.stack); process.exitCode = 1; }).finally(async () => {
-  fs.writeFileSync(path.join(output, 'checks.json'), JSON.stringify({ scope: 'Web470 production bundle; actual JWT/Q-R/Tomcat/MySQL wallet and assignment; ancillary UI/material fixtures, no provider execution', scenario: input.scenario, checks, requests, exceptions }, null, 2) + '\n');
+  fs.writeFileSync(path.join(output, 'checks.json'), JSON.stringify({ scope: 'Pinned production bundle (identity in batch inputs.json); actual JWT/Q-R/Tomcat/MySQL wallet and assignment; ancillary UI/material fixtures, no provider execution', scenario: input.scenario, checks, requests, exceptions }, null, 2) + '\n');
   ws?.close();
   if (browser && browser.exitCode === null) { browser.kill('SIGTERM'); await Promise.race([new Promise(resolve => browser.once('exit', resolve)), pause(1500)]); if (browser.exitCode === null) browser.kill('SIGKILL'); }
   if (server) server.closeAllConnections();
