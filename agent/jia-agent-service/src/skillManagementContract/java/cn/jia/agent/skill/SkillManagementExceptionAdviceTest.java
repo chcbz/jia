@@ -4,6 +4,7 @@ import cn.jia.agent.api.SkillApiExceptionAdvice;
 import cn.jia.agent.api.SkillApiWebConfiguration;
 import cn.jia.agent.api.SkillMarketplaceController;
 import cn.jia.agent.api.SkillPackageController;
+import cn.jia.agent.api.SkillManagedCredentialController;
 import cn.jia.agent.hosting.HostingRentApplicationException;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import cn.jia.core.config.ApiEnvelopeAdvice;
@@ -49,25 +50,28 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 /** Real MVC exception dispatch, advice precedence, envelope and cache policy. No production DB or Provider. */
 class SkillManagementExceptionAdviceTest {
     private static final String REQUEST_ID = "skill-error-regression";
     private SkillManagementService management;
+    private SkillManagedCredentials credentials;
     private MockMvc mvc;
     private JwtAuthenticationToken auth;
 
     @BeforeEach
     void setup() {
         management = mock(SkillManagementService.class);
+        credentials = mock(SkillManagedCredentials.class);
         var controller = new SkillMarketplaceController(mock(SkillMarketplaceService.class));
         controller.setManagement(management);
         List<HttpMessageConverter<?>> converters = new ArrayList<>();
         converters.add(new ByteArrayHttpMessageConverter());
         converters.add(new JacksonJsonHttpMessageConverter());
         new ApiEnvelopeJsonConfig().extendMessageConverters(converters);
-        mvc = MockMvcBuilders.standaloneSetup(controller, new SkillPackageController(management), new UnrelatedController())
+        mvc = MockMvcBuilders.standaloneSetup(controller, new SkillPackageController(management), new SkillManagedCredentialController(credentials), new UnrelatedController())
                 .setControllerAdvice(new ApiEnvelopeAdvice(), new ApiRequestEnvelopeAdvice(),
                         new ExceptionHandlerAdvice(), new SkillApiExceptionAdvice())
                 .setMessageConverters(converters.toArray(HttpMessageConverter[]::new))
@@ -141,6 +145,22 @@ class SkillManagementExceptionAdviceTest {
                 .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("UNAUTHENTICATED"))
                 .andExpect(jsonPath("$.requestId").value(REQUEST_ID)).andExpect(jsonPath("$.data").isEmpty())
                 .andExpect(header().string("Cache-Control", "private, no-store"));
+        verifyNoInteractions(management);
+    }
+
+    @Test
+    void credentialErrorsUseTheSameAdviceWithoutIssuingOrExposingSecrets() throws Exception {
+        String envelope = "{\"protocolVersion\":1,\"requestId\":\"" + REQUEST_ID
+                + "\",\"data\":{\"expectedAgentVersion\":\"1\"}}";
+        when(credentials.rotate(any(), eq("agt_demo"), anyString(), eq(1L)))
+                .thenThrow(new AgentBizException("AGENT_FORBIDDEN", "private owner"));
+        mvc.perform(post("/agent/agt_demo/skill-install-credentials").principal(auth)
+                        .contentType("application/json").header("X-Request-Id", REQUEST_ID)
+                        .header("Idempotency-Key", "63d25e3f-ccf0-4bb7-b84f-30c712701f77").content(envelope))
+                .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("AGENT_FORBIDDEN"))
+                .andExpect(jsonPath("$.data").isEmpty()).andExpect(jsonPath("$.requestId").value(REQUEST_ID))
+                .andExpect(header().string("Cache-Control", "private, no-store"));
+        verify(credentials, times(1)).rotate(any(), eq("agt_demo"), anyString(), eq(1L));
         verifyNoInteractions(management);
     }
 

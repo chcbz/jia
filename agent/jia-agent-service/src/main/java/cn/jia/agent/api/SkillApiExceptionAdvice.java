@@ -20,9 +20,9 @@ import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
-/** HTTP translation for skill management and package transport only. Unknown failures use
+/** HTTP translation for skill management, credential issuance and package transport only. Unknown failures use
  * the existing common advice; ownership checks remain in the application services. */
-@RestControllerAdvice(assignableTypes = {SkillMarketplaceController.class, SkillPackageController.class})
+@RestControllerAdvice(assignableTypes = {SkillMarketplaceController.class, SkillPackageController.class, SkillManagedCredentialController.class})
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public final class SkillApiExceptionAdvice {
     private static final Logger log = LoggerFactory.getLogger(SkillApiExceptionAdvice.class);

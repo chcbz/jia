@@ -390,7 +390,7 @@ SK01→200 R<Capabilities>；SK02→200 R<Product[]>（现有最多100条，不�
 
 ### 12.3 错误映射：以已查可达源码为界
 
-**技能管理/包下载适配收口（2026-11-08，源码候选，尚未部署）：** `SkillMarketplaceController` 与 `SkillPackageController` 不再捕获全部 `RuntimeException`，由仅选择这两个 Controller 的 `SkillApiExceptionAdvice` 按异常类型映射。`AgentBizException.AGENT_FORBIDDEN` 返回403/AGENT_FORBIDDEN，不改变身份及Owner校验；AGENT_NOT_FOUND为404，未分类Agent业务错误仍500。原技能、托管、资金、参数及基础设施错误的最终HTTP/code映射保持，不借此修订账务规则（包括既有AMOUNT_RANGE_EXCEEDED最终为500/INTERNAL_ERROR的实际适配结果）。未知运行时故障交由公共 `ExceptionHandlerAdvice` 记录并返回其既有500/E999，不伪装成功或403。响应仍为公共信封、data=null、安全msg、同一requestId；按选定Handler设置private/no-store，包含全局兜底响应。异常Advice优先于公共兜底，不修改公共层依赖或其他Agent接口，也不影响第三方回调。
+**技能管理/包下载适配收口（2026-11-08，源码候选，尚未部署）：** `SkillMarketplaceController`、`SkillPackageController` 与此前委托同一兜底的 `SkillManagedCredentialController` 不再捕获全部 `RuntimeException`，由仅选择这三个 Controller 的 `SkillApiExceptionAdvice` 按异常类型映射。`AgentBizException.AGENT_FORBIDDEN` 返回403/AGENT_FORBIDDEN，不改变身份及Owner校验；AGENT_NOT_FOUND为404，未分类Agent业务错误仍500。原技能、托管、资金、参数及基础设施错误的最终HTTP/code映射保持，不借此修订账务规则（包括既有AMOUNT_RANGE_EXCEEDED最终为500/INTERNAL_ERROR的实际适配结果）。未知运行时故障交由公共 `ExceptionHandlerAdvice` 记录并返回其既有500/E999，不伪装成功或403。响应仍为公共信封、data=null、安全msg、同一requestId；按选定Handler设置private/no-store，包含全局兜底响应。异常Advice优先于公共兜底，不修改公共层依赖或其他Agent接口，也不影响第三方回调。
 
 | HTTP | code与来源 |
 | --- | --- |
