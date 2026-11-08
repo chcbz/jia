@@ -2,7 +2,6 @@ package cn.jia.agent.api;
 import cn.jia.agent.skill.SkillMarketplaceException;
 import cn.jia.agent.hosting.HostingRentHttp;
 import cn.jia.agent.security.AgentRuntimeAuthenticationService;
-import cn.jia.core.entity.JsonResult;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.*;
 import org.springframework.security.core.Authentication;
@@ -20,6 +19,4 @@ public final class SkillPackageController {
                 .header("X-Content-Type-Options","nosniff").contentType(MediaType.APPLICATION_OCTET_STREAM)
                 .contentLength(bytes.length).body(bytes);
     }
-    @ExceptionHandler(RuntimeException.class)
-    public Object failure(RuntimeException error) {return SkillMarketplaceController.failureResponse(error);}
 }

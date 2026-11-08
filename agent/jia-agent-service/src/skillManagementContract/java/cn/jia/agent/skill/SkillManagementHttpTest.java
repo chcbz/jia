@@ -2,6 +2,8 @@ package cn.jia.agent.skill;
 
 import cn.jia.agent.api.SkillMarketplaceController;
 import cn.jia.agent.api.SkillPackageController;
+import cn.jia.agent.api.SkillApiExceptionAdvice;
+import cn.jia.agent.api.SkillApiWebConfiguration;
 import cn.jia.core.config.*;
 import cn.jia.core.filter.RequestIdFilter;
 import org.junit.jupiter.api.*;
@@ -31,8 +33,8 @@ class SkillManagementHttpTest {
         var controller=new SkillMarketplaceController(legacy);controller.setManagement(service);
         List<HttpMessageConverter<?>> converters=new ArrayList<>();converters.add(new ByteArrayHttpMessageConverter());converters.add(new JacksonJsonHttpMessageConverter());
         new ApiEnvelopeJsonConfig().extendMessageConverters(converters);
-        mvc=MockMvcBuilders.standaloneSetup(controller,new SkillPackageController(service)).setControllerAdvice(new ApiEnvelopeAdvice(),new ApiRequestEnvelopeAdvice(),new ExceptionHandlerAdvice())
-            .setMessageConverters(converters.toArray(HttpMessageConverter[]::new)).addFilters(new RequestIdFilter()).build();
+        mvc=MockMvcBuilders.standaloneSetup(controller,new SkillPackageController(service)).setControllerAdvice(new ApiEnvelopeAdvice(),new ApiRequestEnvelopeAdvice(),new SkillApiExceptionAdvice(),new ExceptionHandlerAdvice())
+            .setMessageConverters(converters.toArray(HttpMessageConverter[]::new)).addFilters(new RequestIdFilter()).addInterceptors(new SkillApiWebConfiguration()).build();
         auth=new JwtAuthenticationToken(Jwt.withTokenValue("synthetic").claim("tenant_id", "0").header("alg","none").subject("buyer").claim("client_id","sm-client").claim("jiacn","owner").build(),List.of());
     }
     Map<String,Object> sample(String definition) throws Exception {

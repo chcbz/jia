@@ -10,8 +10,7 @@ import java.util.Set;
 @RestController
 public final class SkillManagedCredentialController {
     private final SkillManagedCredentials credentials;
-    private final SkillMarketplaceController errors;
-    public SkillManagedCredentialController(SkillManagedCredentials credentials,SkillMarketplaceController errors) { this.credentials=credentials;this.errors=errors; }
+    public SkillManagedCredentialController(SkillManagedCredentials credentials) { this.credentials=credentials; }
     @cn.jia.core.security.AllowSensitiveOutput(reason="Explicit one-time exact-Agent credential issuance; no secret replay")
     @PostMapping(value="/agent/{agentId}/skill-install-credentials",consumes=MediaType.APPLICATION_JSON_VALUE)
     public Object rotate(@PathVariable String agentId,Authentication auth,HttpServletRequest request,@cn.jia.core.annotation.ApiJsonData @RequestBody byte[] raw) {
@@ -21,5 +20,4 @@ public final class SkillManagedCredentialController {
         return ResponseEntity.status(201).header(HttpHeaders.CACHE_CONTROL,"private, no-store")
                 .header("Pragma","no-cache").body(JsonResult.success(credentials.rotate(actor,agentId,key,version)));
     }
-    @ExceptionHandler(RuntimeException.class) public Object failure(RuntimeException error) { return errors.failure(error); }
 }

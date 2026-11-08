@@ -1,8 +1,6 @@
 package cn.jia.agent.api;
 import cn.jia.agent.skill.*;
 import cn.jia.agent.hosting.HostingRentHttp;
-import cn.jia.agent.hosting.HostingRentApplicationException;
-import cn.jia.economy.exception.EconomyPostingException;
 import cn.jia.core.entity.JsonResult;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.*;
@@ -98,36 +96,4 @@ public final class SkillMarketplaceController {
         return a!=null && a.isAuthenticated() && a.getAuthorities().stream().anyMatch(x->"ROLE_ADMIN".equals(x.getAuthority()));
     }
     static Object ok(Object data) { return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL,"private, no-store").body(JsonResult.success(data)); }
-    @ExceptionHandler(RuntimeException.class)
-    public Object failure(RuntimeException error) {return failureResponse(error);}
-    static Object failureResponse(RuntimeException error) {
-        int status=500; String code="INTERNAL_ERROR";
-        if(error instanceof SkillMarketplaceException e) {
-            status=e.status();code=e.code();
-            if("AGENT_VERSION_CONFLICT".equals(code)){status=409;code="SKILL_STATE_CONFLICT";}
-            if("SKILL_MARKETPLACE_DISABLED".equals(code)||"SKILL_PACKAGE_UNAVAILABLE".equals(code)||"SKILL_PACKAGE_PREPARE_IN_TRANSACTION".equals(code)){status=503;code="SKILL_STATE_UNAVAILABLE";}
-        }
-        else if(error instanceof HostingRentApplicationException e) {
-            status=e.status(); code=status==401?"UNAUTHENTICATED":status==400?"BAD_REQUEST":"AGENT_FORBIDDEN";
-        } else if(error instanceof EconomyPostingException e) {
-            code=e.reason().name();
-            status=switch(code) {
-                case "FEATURE_DISABLED" -> 403;
-                case "INVALID_COMMAND","IMBALANCED_TRANSACTION","JOURNAL_CORRUPT" -> 500;
-                case "AMOUNT_RANGE_EXCEEDED","INSUFFICIENT_FUNDS" -> 422;
-                case "ACCOUNT_NOT_FOUND","ACCOUNT_NOT_ACTIVE","IDEMPOTENCY_CONFLICT","JOURNAL_ID_CONFLICT","CONCURRENCY_CONFLICT","ESCROW_CONFLICT" -> 409;
-                default -> 500;
-            };
-            if (!"INSUFFICIENT_FUNDS".equals(code)&&!"IDEMPOTENCY_CONFLICT".equals(code)) {
-                if(status==409)code="SKILL_STATE_CONFLICT";else if(status==403)code="AGENT_FORBIDDEN";else {status=500;code="INTERNAL_ERROR";}
-            }
-        } else if(error instanceof org.springframework.dao.DataAccessResourceFailureException || error instanceof org.springframework.transaction.CannotCreateTransactionException) {
-            status=503;code="SKILL_STATE_UNAVAILABLE";
-        } else if(error instanceof IllegalArgumentException && "AGENT_RUNTIME_UNAUTHENTICATED".equals(error.getMessage())) {
-            status=401;code="UNAUTHENTICATED";
-        } else if(error instanceof IllegalArgumentException || error instanceof org.springframework.http.converter.HttpMessageNotReadableException) {
-            status=400;code="BAD_REQUEST";
-        }
-        return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,"private, no-store").body(JsonResult.failure(code,"Skill operation unavailable"));
-    }
 }
