@@ -35,5 +35,7 @@ public interface UsageCostService {
 
     /** Independent short transaction, intended for durable source receipts/recovery consumers. */
     Receipt record(Observation observation);
+    /** Retained source observation for stable redelivery and pre-call price reuse. */
+    java.util.Optional<Observation> observation(Binding binding, String receiptId);
     Summary summary(EconomyScope scope, String ownerJiacn, String taskId);
 }

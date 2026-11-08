@@ -99,6 +99,24 @@ public class UsageCostServiceImpl implements UsageCostService {
                 : new Summary(row.getAttempts(), row.getPendingUsage(), row.getPendingPrice(), row.getCostYuan());
     }
 
+    @Override
+    @Transactional(readOnly = true, propagation = Propagation.SUPPORTS)
+    public java.util.Optional<Observation> observation(Binding binding, String receiptId) {
+        var scope = binding.scope();
+        String attemptId = digest(json.writeValueAsString(List.of(binding.source(), binding.sourceAttemptId())));
+        var attempt = mapper.findAttempt(new EconomyUsageAttemptEntity().setTenantId(scope.tenantId())
+                .setClientId(scope.clientId()).setAttemptId(attemptId));
+        if (attempt == null) return java.util.Optional.empty();
+        if (!binding.ownerJiacn().equals(attempt.getOwnerJiacn()) || !Objects.equals(binding.taskId(), attempt.getTaskId()))
+            throw new UsageCostConflict(ATTEMPT_BINDING);
+        var row = mapper.findReceipt(new EconomyUsageRevisionEntity().setTenantId(scope.tenantId())
+                .setClientId(scope.clientId()).setAttemptId(attemptId).setReceiptKey(digest(receiptId)));
+        if (row == null) return java.util.Optional.empty();
+        return java.util.Optional.of(new Observation(binding, row.getReceiptId(), row.getRevision() - 1,
+                row.getRawUsageJson(), row.getNormalizedUsageJson() == null ? null : json.readValue(row.getNormalizedUsageJson(), TokenUsageCost.Usage.class),
+                row.getPriceSnapshotJson() == null ? null : json.readValue(row.getPriceSnapshotJson(), cn.jia.economy.pricing.ModelTokenPrice.class), row.getObservedAt()));
+    }
+
     private String encodeNullable(Object value) { return value == null ? null : json.writeValueAsString(value); }
     private static long pending(String state, TokenUsageCost.Status pending) { return pending.name().equals(state) ? 1 : 0; }
     private static BigDecimal amount(BigDecimal value) { return value == null ? ZERO : value; }

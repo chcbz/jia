@@ -8,7 +8,7 @@ import java.util.Objects;
 public record ModelTokenPrice(String channel, String model, String tier, String version, String basis,
         Map<Category, BigDecimal> yuanPerMillionTokens, Long shortContextMaxInputTokens,
         Map<Category, BigDecimal> longContextYuanPerMillionTokens) {
-    public enum Category { INPUT, OUTPUT, CACHED_INPUT, CACHE_WRITE_30M, CACHE_WRITE_12H }
+    public enum Category { INPUT, OUTPUT, CACHED_INPUT, CACHE_WRITE_30M, CACHE_WRITE_12H, IMAGE_INPUT, CACHED_IMAGE_INPUT, IMAGE_OUTPUT }
 
     public ModelTokenPrice {
         for (String key : new String[]{channel, model, tier, version, basis}) {
@@ -48,7 +48,7 @@ public record ModelTokenPrice(String channel, String model, String tier, String 
             Category category = Objects.requireNonNull(entry.getKey(), "category");
             long count = Objects.requireNonNull(entry.getValue(), "token count");
             if (count < 0) throw new IllegalArgumentException("Token count cannot be negative");
-            if (actualRequest && shortContextMaxInputTokens != null && category != Category.OUTPUT && !longContext) {
+            if (actualRequest && shortContextMaxInputTokens != null && category != Category.OUTPUT && category != Category.IMAGE_OUTPUT && !longContext) {
                 if (count > remaining) longContext = true;
                 else remaining -= count;
             }

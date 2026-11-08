@@ -86,6 +86,23 @@ class UsageCostServiceMySqlTest {
         assertEquals(reason, assertThrows(UsageCostConflict.class, action::run).reason());
     }
 
+    @Test void retainedObservationPreservesNullAndImagePricesAndCannotReadAnotherOwner() {
+        assertTrue(service.observation(BINDING, "started").isEmpty());
+        var initial = observation(BINDING, "started", 0, null, null);
+        service.record(initial);
+        assertEquals(initial, service.observation(BINDING, "started").orElseThrow());
+        var imagePrice = new ModelTokenPrice("channel", "actual-model", "standard", "image-v1", "fixture",
+                Map.of(IMAGE_INPUT, new BigDecimal("8"), IMAGE_OUTPUT, new BigDecimal("30")), null, Map.of());
+        var imageUsage = new TokenUsageCost.Usage("channel", "actual-model", "standard", "fixture-images",
+                Map.of(IMAGE_INPUT, 1000L, IMAGE_OUTPUT, 100L));
+        var observed = observation(BINDING, "terminal", 1, imageUsage, imagePrice);
+        service.record(observed);
+        assertEquals(observed, service.observation(BINDING, "terminal").orElseThrow());
+        assertTrue(service.record(service.observation(BINDING, "terminal").orElseThrow()).replay());
+        assertEquals(new BigDecimal("0.011000"), summary().costYuan());
+        conflict(ATTEMPT_BINDING, () -> service.observation(new Binding(SCOPE,"another-owner","task",BINDING.source(),BINDING.sourceAttemptId()),"terminal"));
+    }
+
     @Test void pendingEvidenceCanBePricedLaterWithoutPretendingMissingUsageIsFree() {
         var first = service.record(observation(BINDING, "started", 0, null, price("v1", "1")));
         assertEquals(PENDING_USAGE, first.status()); assertNull(first.costYuan());
