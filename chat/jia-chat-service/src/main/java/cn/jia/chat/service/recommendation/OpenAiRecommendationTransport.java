@@ -7,7 +7,9 @@ import com.openai.models.chat.completions.ChatCompletionCreateParams;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.observation.ObservationRegistry;
 import jakarta.annotation.PreDestroy;
-import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.model.openai.autoconfigure.OpenAiCommonProperties;
+import org.springframework.ai.model.openai.autoconfigure.OpenAiChatProperties;
+import org.springframework.ai.model.openai.autoconfigure.OpenAiAutoConfigurationUtil;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.http.okhttp.OpenAiHttpClientBuilderCustomizer;
 import org.springframework.ai.openai.setup.OpenAiSetup;
@@ -27,11 +29,12 @@ public class OpenAiRecommendationTransport {
     private final OpenAIClient client;
 
     @Autowired
-    public OpenAiRecommendationTransport(@Lazy ChatModel sharedModel,
+    public OpenAiRecommendationTransport(OpenAiCommonProperties common, OpenAiChatProperties chat,
             ObjectProvider<ObservationRegistry> observations, ObjectProvider<MeterRegistry> meters,
             ObjectProvider<OpenAiHttpClientBuilderCustomizer> customizers) {
-        if (!(sharedModel.getOptions() instanceof OpenAiChatOptions options))
-            throw new IllegalStateException("Recommendation requires configured OpenAI transport options");
+        // ChatModel options contain inference settings, not the merged connection credentials.
+        // Use the same common/chat precedence as Spring AI auto-configuration.
+        var options = OpenAiAutoConfigurationUtil.resolveCommonProperties(common, chat);
         this.client = OpenAiSetup.setupSyncClient(options.getBaseUrl(), options.getApiKey(), options.getCredential(),
                 options.getMicrosoftDeploymentName(), options.getMicrosoftFoundryServiceVersion(),
                 options.getOrganizationId(), options.isMicrosoftFoundry(), options.isGitHubModels(),

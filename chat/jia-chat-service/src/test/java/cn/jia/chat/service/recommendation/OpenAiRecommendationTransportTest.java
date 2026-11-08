@@ -15,15 +15,19 @@ class OpenAiRecommendationTransportTest {
     private static final String SCHEMA = "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}";
 
     @Test void nativeResponsePreservesActualTierInsteadOfRequestedTierAndRealUsage() throws Exception {
-        exchange(200, "priority");
+        exchange(200, "priority", false);
     }
-    @Test void retryableFailureMakesOnlyOneRealRequest() throws Exception { exchange(500, "default"); }
+    @Test void retryableFailureMakesOnlyOneRealRequest() throws Exception { exchange(500, "default", false); }
 
-    private static void exchange(int status, String actualTier) throws Exception {
+    @Test void chatConnectionOverridesCommonConnection() throws Exception { exchange(200, "priority", true); }
+
+    private static void exchange(int status, String actualTier, boolean override) throws Exception {
         var json = new ObjectMapper(); var count = new AtomicInteger();
         var captured = new AtomicReference<com.fasterxml.jackson.databind.JsonNode>();
+        var authorization = new AtomicReference<String>();
         var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/v1/chat/completions", exchange -> {
+            authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
             count.incrementAndGet(); captured.set(json.readTree(exchange.getRequestBody()));
             String value = status == 200
                     ? "{\"id\":\"native-receipt\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"actual-model\",\"service_tier\":\"" + actualTier
@@ -39,13 +43,21 @@ class OpenAiRecommendationTransportTest {
         var options = OpenAiChatOptions.builder().baseUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/v1")
                 .apiKey("synthetic").model("requested-model").maxRetries(0).serviceTier("default")
                 .temperature(0.25).maxCompletionTokens(300).reasoningEffort("low").outputSchema(SCHEMA).build();
-        var shared = org.mockito.Mockito.mock(org.springframework.ai.chat.model.ChatModel.class);
-        org.mockito.Mockito.when(shared.getOptions()).thenReturn(options);
+        var common = new org.springframework.ai.model.openai.autoconfigure.OpenAiCommonProperties();
+        common.setBaseUrl(options.getBaseUrl()); common.setApiKey("synthetic");
+        var chat = new org.springframework.ai.model.openai.autoconfigure.OpenAiChatProperties();
+        // Mirrors production: connection lives in common properties, not inference options.
+        assertNull(chat.toOptions().getApiKey());
+        if (override) {
+            chat.setBaseUrl(common.getBaseUrl()); chat.setApiKey("chat-synthetic");
+            common.setBaseUrl("http://127.0.0.1:1/v1"); common.setApiKey("unused");
+        }
         var context = new org.springframework.context.annotation.AnnotationConfigApplicationContext();
-        context.registerBean(org.springframework.ai.chat.model.ChatModel.class, () -> shared);
+        context.registerBean(org.springframework.ai.model.openai.autoconfigure.OpenAiCommonProperties.class, () -> common);
+        context.registerBean(org.springframework.ai.model.openai.autoconfigure.OpenAiChatProperties.class, () -> chat);
         context.register(OpenAiRecommendationTransport.class);
         context.refresh();
-        org.mockito.Mockito.verifyNoInteractions(shared); // @Lazy creates no client on context startup.
+        assertEquals(0, count.get()); // No provider request during context startup.
         var transport = context.getBean(OpenAiRecommendationTransport.class);
         assertSame(transport, context.getBean(OpenAiRecommendationTransport.class));
         try {
@@ -62,6 +74,7 @@ class OpenAiRecommendationTransportTest {
             var request = captured.get();
             assertEquals("requested-model", request.path("model").asText());
             assertEquals("default", request.path("service_tier").asText());
+            assertEquals("Bearer " + (override ? "chat-synthetic" : "synthetic"), authorization.get());
             assertEquals("low", request.path("reasoning_effort").asText());
             assertEquals(0.25, request.path("temperature").asDouble());
             assertEquals(300, request.path("max_completion_tokens").asInt());
