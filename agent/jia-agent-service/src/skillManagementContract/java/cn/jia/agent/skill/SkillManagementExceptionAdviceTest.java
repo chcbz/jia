@@ -76,7 +76,7 @@ class SkillManagementExceptionAdviceTest {
                         new ExceptionHandlerAdvice(), new SkillApiExceptionAdvice())
                 .setMessageConverters(converters.toArray(HttpMessageConverter[]::new))
                 .addFilters(new RequestIdFilter()).addInterceptors(new SkillApiWebConfiguration()).build();
-        auth = new JwtAuthenticationToken(Jwt.withTokenValue("synthetic").header("alg", "none")
+        auth = new JwtAuthenticationToken(Jwt.withTokenValue("synthetic").claim("tenant_id", "0").header("alg", "none")
                 .subject("buyer").claim("client_id", "sm-client").claim("jiacn", "owner").build(), List.of());
     }
 
@@ -185,7 +185,7 @@ class SkillManagementExceptionAdviceTest {
                     .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("AGENT_FORBIDDEN"))
                     .andExpect(jsonPath("$.requestId").value(REQUEST_ID))
                     .andExpect(header().string("Cache-Control", "private, no-store"));
-            when(service.skills(any(), anyString(), anyBoolean())).thenThrow(new IllegalStateException("private failure"));
+            doThrow(new IllegalStateException("private failure")).when(service).skills(any(), anyString(), anyBoolean());
             actualMvc.perform(get("/agent/agt_demo/skills").principal(auth).header("X-Request-Id", REQUEST_ID))
                     .andExpect(status().isInternalServerError()).andExpect(jsonPath("$.code").value("E999"))
                     .andExpect(header().string("Cache-Control", "private, no-store"));
