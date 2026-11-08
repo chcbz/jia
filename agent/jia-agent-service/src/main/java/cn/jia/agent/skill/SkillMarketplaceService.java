@@ -52,7 +52,7 @@ public final class SkillMarketplaceService {
     void requireManualSkill(HostingRentHttp.Actor a,String skillKey) {
         // Keep the existing owner-grant lock order (owner root -> catalog product). It is
         // coordination with native grant/revoke, NOT the source of skill classification.
-        positions.currentState(new cn.jia.agent.service.PositionAuthority.Scope(a.tenantId(),a.clientId(),a.ownerJiacn()));
+        positions.lockOwnerScope(new cn.jia.agent.service.PositionAuthority.Scope(a.tenantId(),a.clientId(),a.ownerJiacn()));
         require(market.selectSkillProductsForUpdate(a.tenantId(),a.clientId(),skillKey).stream()
                 .noneMatch(product -> "POSITION".equals(product.getSkillType())),403,"POSITION_MANAGED_SKILL");
     }

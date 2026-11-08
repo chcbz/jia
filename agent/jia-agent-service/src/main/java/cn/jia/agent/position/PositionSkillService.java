@@ -29,20 +29,25 @@ public class PositionSkillService implements PositionAuthority {
     }
     public View read(Scope scope) {
         scope(scope); var row=store.read(scope);
-        return new View(null,null,row==null?0:row.revision(),row==null?PositionSkillState.empty():decode(row.json()));
+        return new View(null,null,row==null?0:row.revision(),row==null?PositionSkillState.empty():catalogState(scope,row.json()));
     }
     /** Current (locking) read for callers already holding the native/position transaction. */
     public PositionSkillState currentState(Scope scope) {
+        return catalogState(scope,lockedRoot(scope).json());
+    }
+    /** Lock ownership/grant transitions without consulting an owner-local classification copy. */
+    public void lockOwnerScope(Scope scope) { lockedRoot(scope); }
+    private PositionSkillStore.Stored lockedRoot(Scope scope) {
         scope(scope);
         require(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive(),503,"POSITION_TRANSACTION_REQUIRED");
-        return decode(store.lock(scope,encode(PositionSkillState.empty())).json());
+        return store.lock(scope,encode(PositionSkillState.empty()));
     }
     public View recovery(Scope scope, String key) {
         scope(scope); PositionSkillPolicy.key(key);
         return tx.execute(status->{
             var row=store.lock(scope,encode(PositionSkillState.empty()));
             var operation=store.operation(scope,key); require(operation!=null,404,"POSITION_OPERATION_NOT_FOUND");
-            return new View(operation.id(),operation.resultId(),row.revision(),decode(row.json()));
+            return new View(operation.id(),operation.resultId(),row.revision(),catalogState(scope,row.json()));
         });
     }
     public View defineSkill(Scope scope,String key,Skill skill) {
@@ -114,7 +119,7 @@ public class PositionSkillService implements PositionAuthority {
             require(grant.agentId().equals(identity.getCanonicalAgentId()) && Objects.equals(identity.getBindingId(),grant.bindingId()),
                     403,"POSITION_BINDING_CHANGED");
             var row=store.lock(scope,encode(PositionSkillState.empty()));
-            new PositionSkillPolicy(decode(row.json()),PositionSkillService::id).authorizeSkillManagement(
+            new PositionSkillPolicy(catalogState(scope,row.json()),PositionSkillService::id).authorizeSkillManagement(
                     grant.appointmentId(),grant.appointmentRevision(),grant.positionRevision(),grant.agentId(),grant.bindingId(),grant.publish());
             authority(scope,PositionSkillPolicy.PLATFORM_SKILLS,grant.publish());
             return commit.get();
@@ -129,7 +134,7 @@ public class PositionSkillService implements PositionAuthority {
     }
     private void validateAuthority(Scope scope,Grant grant){
             var row=store.lock(scope,encode(PositionSkillState.empty()));
-            var state=decode(row.json());
+            var state=catalogState(scope,row.json());
             new PositionSkillPolicy(state,PositionSkillService::id).authorize(grant.appointmentId(),grant.appointmentRevision(),
                     grant.positionRevision(),grant.agentId(),grant.bindingId(),grant.workId(),grant.publish());
             var position=state.positions().get(state.appointments().get(grant.appointmentId()).positionId());
@@ -143,10 +148,11 @@ public class PositionSkillService implements PositionAuthority {
         scope(scope);
         return tx.execute(status->{
             var row=store.lock(scope,encode(PositionSkillState.empty()));
-            var policy=new PositionSkillPolicy(decode(row.json()),PositionSkillService::id);
+            var before=catalogState(scope,row.json());
+            var policy=new PositionSkillPolicy(before,PositionSkillService::id);
             var result=operation.apply(policy);
             String next=encode(policy.state());
-            if(!next.equals(encode(decode(row.json()))))
+            if(!next.equals(encode(before)))
                 require(store.save(scope,row.revision(),next)==1,409,"POSITION_REVISION_CONFLICT");
             return result;
         });
@@ -159,9 +165,9 @@ public class PositionSkillService implements PositionAuthority {
             var old=store.operation(scope,key);
             if(old!=null) {
                 require(old.digest().equals(digest),409,"POSITION_IDEMPOTENCY_CONFLICT");
-                return new View(old.id(),old.resultId(),row.revision(),decode(row.json()));
+                return new View(old.id(),old.resultId(),row.revision(),catalogState(scope,row.json()));
             }
-            var policy=new PositionSkillPolicy(decode(row.json()),PositionSkillService::id);
+            var policy=new PositionSkillPolicy(catalogState(scope,row.json()),PositionSkillService::id);
             var result=mutation.apply(policy);
             require(store.save(scope,row.revision(),encode(policy.state()))==1,409,"POSITION_REVISION_CONFLICT");
             var operation=new PositionSkillStore.Operation(id(),digest,result);store.operation(scope,key,operation,action);
@@ -185,6 +191,17 @@ public class PositionSkillService implements PositionAuthority {
     }
     private String encode(Object value) {
         try{return codec.writeValueAsString(value);}catch(Exception failure){throw new PositionSkillException(503,"POSITION_STATE_UNAVAILABLE");}
+    }
+    /** Legacy JSON type fields remain readable, but are not an independent classification authority.
+     * Reads do not rewrite stored JSON; normal lifecycle mutations persist their resulting state. */
+    private PositionSkillState catalogState(Scope scope,String json) {
+        var state=decode(json);
+        if(state.skills().isEmpty())return state;
+        var positionKeys=new HashSet<>(packages.selectPositionSkillKeys(scope.tenantId(),scope.clientId()));
+        var bindings=new TreeMap<String,Skill>();
+        state.skills().forEach((key,skill)->bindings.put(key,new Skill(skill.key(),
+                positionKeys.contains(key)?SkillType.POSITION:SkillType.GENERAL,skill.productVersionId())));
+        return new PositionSkillState(state.schemaVersion(),bindings,state.positions(),state.appointments(),state.installations());
     }
     private PositionSkillState decode(String json) {
         try{return codec.readValue(json,PositionSkillState.class);}catch(Exception failure){throw new PositionSkillException(503,"POSITION_STATE_UNAVAILABLE");}

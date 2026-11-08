@@ -313,6 +313,12 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         var resigned=realPositions.resign(scope,"resign-position",appointed.resultId());
         assertTrue(resigned.state().installations().values().stream().noneMatch(item->item.desired()));
         assertTrue(market.selectPositionSkillKeys(scope.tenantId(),scope.clientId()).contains("repo-test"));
+        var legacyScope=new PositionAuthority.Scope(scope.tenantId(),scope.clientId(),"legacy-owner");
+        String legacy="{\"schemaVersion\":1,\"skills\":{\"repo-test\":{\"key\":\"repo-test\",\"type\":\"GENERAL\",\"productVersionId\":\"spv_repo_test_1_0_0\"}},\"positions\":{},\"appointments\":{},\"installations\":{}}";
+        jdbc.update("INSERT INTO agent_position_state VALUES(?,?,?,0,?)",legacyScope.tenantId(),legacyScope.clientId(),legacyScope.ownerJiacn(),legacy);
+        assertEquals(cn.jia.agent.position.PositionSkillState.SkillType.POSITION,realPositions.read(legacyScope).state().skills().get("repo-test").type());
+        assertTrue(jdbc.queryForObject("SELECT state_json FROM agent_position_state WHERE owner_jiacn='legacy-owner'",String.class).contains("GENERAL"));
+
         assertFalse(market.selectPositionSkillKeys("other-tenant",ACTOR.clientId()).contains("repo-test"));
         assertFalse(market.selectPositionSkillKeys(ACTOR.tenantId(),"other-client").contains("repo-test"));
     }

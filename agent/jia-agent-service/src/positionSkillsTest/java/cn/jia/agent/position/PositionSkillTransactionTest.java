@@ -42,6 +42,7 @@ class PositionSkillTransactionTest {
         when(packages.selectApprovedProductVersion("0","test-client","v1")).thenReturn(new SkillProductVersionEntity().setReviewStatus("APPROVED").setSkillKey("maintain").setProductId("product1"));
         var product=new cn.jia.agent.entity.skill.SkillProductEntity().setProductId("product1").setVersion(1L);
         when(packages.selectSkillProductsForUpdate(anyString(),anyString(),anyString())).thenReturn(List.of(product));
+        when(packages.selectPositionSkillKeys(anyString(),anyString())).thenAnswer(i->"POSITION".equals(product.getSkillType())?List.of("maintain"):List.of());
         when(packages.classifyPositionSkill(anyString(),anyString(),anyString(),anyLong(),anyLong())).thenAnswer(i->{product.setSkillType("POSITION");return 1;});
         service=new PositionSkillService(new PositionSkillStore(jdbc),identities,packages,new DataSourceTransactionManager(ds));
         grant("MANAGE_POSITIONS","positions");grant("ARCHIVE_WRITE","archive:public");grant("SKILL_REVIEW","skills:platform");grant("SKILL_PUBLISH","skills:platform");
