@@ -281,10 +281,76 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         assertEquals(1,market.publishProductVersion("0",ACTOR.clientId(),"sp_pdf","spv_pdf_"+sequence,sequence,System.currentTimeMillis()));
     }
     private void markPositionSkill() {
-        var skill=new cn.jia.agent.position.PositionSkillState.Skill("repo-test",cn.jia.agent.position.PositionSkillState.SkillType.POSITION,"spv_repo_test_1_0_0");
-        var state=new cn.jia.agent.position.PositionSkillState(1,Map.of(skill.key(),skill),Map.of(),Map.of(),Map.of());
-        when(positionService.currentState(any())).thenReturn(state);
-        when(positionService.read(any())).thenReturn(new cn.jia.agent.position.PositionSkillService.View(null,null,1,state));
+        // Shared catalog fact; the viewing owner's position state deliberately stays empty.
+        jdbc.update("UPDATE agent_skill_product SET skill_type='POSITION' WHERE product_id='sp_repo_test'");
+    }
+    @Test void anotherOwnersDefinitionProtectsCatalogAndManualInstallWithoutCopyingAppointments() {
+        new ResourceDatabasePopulator(new ClassPathResource("db/agent-position-skills.sql")).execute(jdbc.getDataSource());
+        var scope=new PositionAuthority.Scope(ACTOR.tenantId(),ACTOR.clientId(),"catalog-maintainer");
+        for(String permission:List.of("MANAGE_POSITIONS","SKILL_REVIEW","SKILL_PUBLISH"))
+            jdbc.update("INSERT INTO agent_position_authority VALUES(?,?,?,?,?)",scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                    permission,"MANAGE_POSITIONS".equals(permission)?"positions":"skills:platform");
+        var realPositions=new cn.jia.agent.position.PositionSkillService(new cn.jia.agent.position.PositionSkillStore(jdbc),identityLocks,market,manager);
+        realPositions.defineSkill(scope,"define-position",new cn.jia.agent.position.PositionSkillState.Skill(
+                "repo-test",cn.jia.agent.position.PositionSkillState.SkillType.POSITION,"spv_repo_test_1_0_0"));
+        assertTrue(realPositions.read(new PositionAuthority.Scope(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn())).state().skills().isEmpty());
+        assertTrue(realPositions.read(new PositionAuthority.Scope(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn())).state().appointments().isEmpty());
+        // The actual browsing/installation actor is NOT the owner who defined the skill.
+        var row=((List<?>)service.skills(ACTOR,AGENT,true).get("items")).stream().map(SkillManagementCodec::object)
+                .filter(item->"repo-test".equals(item.get("skillKey"))).findFirst().orElseThrow();
+        assertEquals(List.of("VIEW"),row.get("allowedActions"));
+        var product=marketplace.catalog(ACTOR,true).stream().filter(item->"repo-test".equals(item.get("skillKey"))).findFirst().orElseThrow();
+        assertEquals(false,product.get("canPurchase"));
+        var failure=assertThrows(SkillMarketplaceException.class,()->service.quote(ACTOR,"cross-owner-quote",quoteData(),false));
+        assertEquals("POSITION_MANAGED_SKILL",failure.code());
+        assertEquals(0,count("economy_skill_purchase_quote"));assertEquals(0,count("economy_skill_order"));
+        var identity=new AgentIdentityRegistryEntity().setCanonicalAgentId("maintainer-agent").setBindingId(11L);
+        when(identityLocks.requireRegistrationIdentityInScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),"maintainer-agent")).thenReturn(identity);
+        realPositions.configure(scope,"configure-position",new cn.jia.agent.position.PositionSkillState.Position(
+                "maintainer","Maintainer",1,"skills:platform",true,List.of("repo-test"),0),0);
+        var appointed=realPositions.appoint(scope,"appoint-position","maintainer","maintainer-agent");
+        assertTrue(appointed.state().installations().values().stream().allMatch(item->item.desired()&&!item.usable()));
+        var resigned=realPositions.resign(scope,"resign-position",appointed.resultId());
+        assertTrue(resigned.state().installations().values().stream().noneMatch(item->item.desired()));
+        assertTrue(market.selectPositionSkillKeys(scope.tenantId(),scope.clientId()).contains("repo-test"));
+        assertFalse(market.selectPositionSkillKeys("other-tenant",ACTOR.clientId()).contains("repo-test"));
+        assertFalse(market.selectPositionSkillKeys(ACTOR.tenantId(),"other-client").contains("repo-test"));
+    }
+
+    @Test void ownerCannotChangeSharedClassificationWithOnlyPositionManagementPermission() {
+        new ResourceDatabasePopulator(new ClassPathResource("db/agent-position-skills.sql")).execute(jdbc.getDataSource());
+        var scope=new PositionAuthority.Scope(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn());
+        jdbc.update("INSERT INTO agent_position_authority VALUES(?,?,?,?,?)",scope.tenantId(),scope.clientId(),scope.ownerJiacn(),"MANAGE_POSITIONS","positions");
+        var positions=new cn.jia.agent.position.PositionSkillService(new cn.jia.agent.position.PositionSkillStore(jdbc),identityLocks,market,manager);
+        var denied=assertThrows(cn.jia.agent.position.PositionSkillException.class,()->positions.defineSkill(scope,"denied-type",
+                new cn.jia.agent.position.PositionSkillState.Skill("repo-test",cn.jia.agent.position.PositionSkillState.SkillType.POSITION,"spv_repo_test_1_0_0")));
+        assertEquals(403,denied.status());assertFalse(market.selectPositionSkillKeys(scope.tenantId(),scope.clientId()).contains("repo-test"));
+        assertTrue(positions.read(scope).state().skills().isEmpty());
+        assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM agent_position_operation",Integer.class));
+    }
+    @Test void generalSkillAttachedToOwnersPositionDoesNotBecomePositionOnly() {
+        var skill=new cn.jia.agent.position.PositionSkillState.Skill("repo-test",cn.jia.agent.position.PositionSkillState.SkillType.GENERAL,"spv_repo_test_1_0_0");
+        var local=new cn.jia.agent.position.PositionSkillState(1,Map.of(skill.key(),skill),Map.of(),Map.of(),Map.of());
+        when(positionService.currentState(any())).thenReturn(local);
+        when(positionService.read(any())).thenReturn(new cn.jia.agent.position.PositionSkillService.View(null,null,1,local));
+        var row=((List<?>)service.skills(ACTOR,AGENT,false).get("items")).stream().map(SkillManagementCodec::object)
+                .filter(item->"repo-test".equals(item.get("skillKey"))).findFirst().orElseThrow();
+        assertTrue(((List<?>)row.get("allowedActions")).contains("INSTALL"));
+        assertNotNull(service.quote(ACTOR,"general-attached",quoteData(),false).get("quoteId"));
+    }
+    @Test void sharedTypeAlsoBlocksLegacyQuoteAndPurchaseAfterAnEarlierQuote() {
+        String version=Long.toString(versions.requireOwned(ACTOR,AGENT,null,false));
+        var body=Map.of("productVersionId","spv_repo_test_1_0_0","targetAgentId",AGENT,"expectedAgentVersion",version);
+        var quote=marketplace.quote(ACTOR,UUID.randomUUID().toString(),body,false);
+        var purchase=Map.of("quoteId",(String)quote.get("quoteId"),"productVersionId","spv_repo_test_1_0_0",
+                "targetAgentId",AGENT,"expectedAgentVersion",version,"expectedPriceWen",
+                ((cn.jia.economy.common.Money)quote.get("price")).amountMinor(),"approvedPermissions","[]");
+        markPositionSkill();long balance=wallet();
+        var denied=assertThrows(SkillMarketplaceException.class,()->marketplace.quote(ACTOR,UUID.randomUUID().toString(),body,true));
+        assertEquals("POSITION_MANAGED_SKILL",denied.code());
+        denied=assertThrows(SkillMarketplaceException.class,()->marketplace.purchase(ACTOR,UUID.randomUUID().toString(),purchase,true));
+        assertEquals("POSITION_MANAGED_SKILL",denied.code());assertEquals(balance,wallet());
+        assertEquals(0,count("economy_skill_order"));assertEquals(0,count("agent_skill_change_command"));
     }
     @Test void positionSkillHasViewButNoOrdinaryLifecycleActionsEvenForAdmin() {
         markPositionSkill();

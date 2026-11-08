@@ -39,9 +39,12 @@ class PositionSkillTransactionTest {
         when(identities.requireRegistrationIdentityInScope("0","test-client","owner-a","agent1")).thenReturn(identity);
         when(identities.lockActiveCanonicalAgentIdsInScope(anyString(),anyString(),anyString(),anyList())).thenAnswer(i->i.getArgument(3));
         var packages=mock(SkillCatalogMapper.class);
-        when(packages.selectApprovedProductVersion("0","test-client","v1")).thenReturn(new SkillProductVersionEntity().setReviewStatus("APPROVED").setSkillKey("maintain"));
+        when(packages.selectApprovedProductVersion("0","test-client","v1")).thenReturn(new SkillProductVersionEntity().setReviewStatus("APPROVED").setSkillKey("maintain").setProductId("product1"));
+        var product=new cn.jia.agent.entity.skill.SkillProductEntity().setProductId("product1").setVersion(1L);
+        when(packages.selectSkillProductsForUpdate(anyString(),anyString(),anyString())).thenReturn(List.of(product));
+        when(packages.classifyPositionSkill(anyString(),anyString(),anyString(),anyLong(),anyLong())).thenAnswer(i->{product.setSkillType("POSITION");return 1;});
         service=new PositionSkillService(new PositionSkillStore(jdbc),identities,packages,new DataSourceTransactionManager(ds));
-        grant("MANAGE_POSITIONS","positions");grant("ARCHIVE_WRITE","archive:public");
+        grant("MANAGE_POSITIONS","positions");grant("ARCHIVE_WRITE","archive:public");grant("SKILL_REVIEW","skills:platform");grant("SKILL_PUBLISH","skills:platform");
         service.defineSkill(scope,"key1",new Skill("maintain",SkillType.POSITION,"v1"));
         service.configure(scope,"key2",new Position("editor","Editor",2,"archive:public",false,List.of("maintain"),0),0);
     }

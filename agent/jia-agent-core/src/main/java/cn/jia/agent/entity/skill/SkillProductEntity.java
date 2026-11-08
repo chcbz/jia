@@ -13,6 +13,8 @@ public class SkillProductEntity {
     private String creatorAgentId;
     private String name;
     private String description;
+    /** Catalog classification, shared by all owners in this tenant/client. */
+    private String skillType = "GENERAL";
     private String status;
     private String currentProductVersionId;
     private Long version;

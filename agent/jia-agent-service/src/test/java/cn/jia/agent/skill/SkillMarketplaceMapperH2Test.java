@@ -216,7 +216,7 @@ class SkillMarketplaceMapperH2Test {
         jdbc.execute("""
                 CREATE TABLE agent_skill_product(
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,product_id VARCHAR(100),seller_type VARCHAR(16),
-                    seller_id VARCHAR(100),creator_agent_id VARCHAR(100),name VARCHAR(200),description VARCHAR(1000),
+                    seller_id VARCHAR(100),creator_agent_id VARCHAR(100),name VARCHAR(200),description VARCHAR(1000),skill_type VARCHAR(16) DEFAULT 'GENERAL',
                     status VARCHAR(16),current_product_version_id VARCHAR(100),version BIGINT,
                     tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,update_time BIGINT,
                     UNIQUE(tenant_id,client_id,product_id))

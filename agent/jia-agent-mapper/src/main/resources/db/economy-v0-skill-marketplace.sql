@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS agent_skill_product (
     creator_agent_id           VARCHAR(100) DEFAULT NULL,
     name                       VARCHAR(200) NOT NULL,
     description                VARCHAR(1000) NOT NULL,
+    skill_type                 VARCHAR(16) NOT NULL DEFAULT 'GENERAL',
     status                     VARCHAR(16) NOT NULL DEFAULT 'DRAFT',
     current_product_version_id VARCHAR(100) DEFAULT NULL,
     version                    BIGINT NOT NULL DEFAULT 1,

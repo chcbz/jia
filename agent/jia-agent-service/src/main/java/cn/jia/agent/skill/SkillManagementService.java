@@ -706,7 +706,7 @@ public final class SkillManagementService {
                 boolean pending=s!=null&&s.getPendingChangeId()!=null;String blocked=pending?"SKILL_CHANGE_PENDING":null;
                 boolean historical=auth==null&&market.selectEntitlementsByAgent(a.tenantId(),a.clientId(),agent).stream()
                         .anyMatch(e->skill.equals(e.getSkillKey())&&db.findAuthorization(a.tenantId(),a.clientId(),e.getInstallationId())==null);
-                boolean positionOnly=positionSkills.positionOnly(skill);
+                boolean positionOnly=positionSkills.contains(skill);
                 if(positionOnly) {
                     for(String action:List.of("INSTALL","UPGRADE","UNINSTALL","ENABLE","DISABLE","RETRY"))
                         denied.add(map("action",action,"reasonCode","POSITION_MANAGED_SKILL"));

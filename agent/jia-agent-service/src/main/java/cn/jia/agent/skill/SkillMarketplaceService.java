@@ -45,16 +45,16 @@ public final class SkillMarketplaceService {
         this.versions=versions; this.runtimes=runtimes; this.writer=writer;
         this.packages=packages; this.authentication=authentication; this.tx=new TransactionTemplate(manager);this.sessions=sessions;
     }
-    private cn.jia.agent.service.PositionAuthority.Scope positionScope(HostingRentHttp.Actor a) {
-        return new cn.jia.agent.service.PositionAuthority.Scope(a.tenantId(),a.clientId(),a.ownerJiacn());
+    Set<String> positionSkills(HostingRentHttp.Actor a) {
+        return Set.copyOf(market.selectPositionSkillKeys(a.tenantId(),a.clientId()));
     }
-    cn.jia.agent.position.PositionSkillState positionSkills(HostingRentHttp.Actor a) {
-        return positions.read(positionScope(a)).state();
-    }
-    /** Same position root as definition changes; called inside the existing intent transaction,
-     * before product/money locks. An admin flag does not bypass a position lifecycle. */
+    /** Current catalog read shares product locks with classification changes; admin is not an exemption. */
     void requireManualSkill(HostingRentHttp.Actor a,String skillKey) {
-        require(!positions.currentState(positionScope(a)).positionOnly(skillKey),403,"POSITION_MANAGED_SKILL");
+        // Keep the existing owner-grant lock order (owner root -> catalog product). It is
+        // coordination with native grant/revoke, NOT the source of skill classification.
+        positions.currentState(new cn.jia.agent.service.PositionAuthority.Scope(a.tenantId(),a.clientId(),a.ownerJiacn()));
+        require(market.selectSkillProductsForUpdate(a.tenantId(),a.clientId(),skillKey).stream()
+                .noneMatch(product -> "POSITION".equals(product.getSkillType())),403,"POSITION_MANAGED_SKILL");
     }
     public boolean available(HostingRentHttp.Actor a) {
         var transport=writer.getIfAvailable();
@@ -82,14 +82,14 @@ public final class SkillMarketplaceService {
         require(p!=null,404,"SKILL_PRODUCT_NOT_FOUND"); return detail(a,p,admin,positionSkills(a));
     }
     private Map<String,Object> detail(HostingRentHttp.Actor a,SkillProductEntity p,boolean admin,
-            cn.jia.agent.position.PositionSkillState policy) {
+            Set<String> policy) {
         var v=market.selectPurchasableProductVersion(a.tenantId(),a.clientId(),p.getCurrentProductVersionId());
         require(v!=null,404,"SKILL_PRODUCT_NOT_FOUND"); packages.getObject().describe(v);
         Map<String,Object> dto=new LinkedHashMap<>();
         dto.put("productId",p.getProductId()); dto.put("name",p.getName()); dto.put("description",p.getDescription());
         dto.put("productVersionId",v.getProductVersionId()); dto.put("skillKey",v.getSkillKey()); dto.put("skillVersion",v.getSkillVersion());
         dto.put("price",cn.jia.economy.common.Money.wen(v.getPriceWen())); dto.put("permissions",SkillMarketplaceHttp.permissions(v.getApprovedPermissionsManifest()));
-        boolean positionOnly=policy.positionOnly(v.getSkillKey());
+        boolean positionOnly=policy.contains(v.getSkillKey());
         boolean allowed=!positionOnly && (admin || "NONE".equals(v.getDeploymentRestriction()));
         dto.put("canPurchase",allowed); dto.put("denialReason",allowed?null:positionOnly?"POSITION_MANAGED_SKILL":"SKILL_ADMIN_REQUIRED");
         dto.put("deploymentRestriction",v.getDeploymentRestriction()); return dto;

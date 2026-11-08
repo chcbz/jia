@@ -21,3 +21,13 @@
 - 本次text-file/pdf-extract的功能入口由已有document-workbench承接（文本、表格、文本型PDF；非扫描OCR），但旧安装不自动重装。技能包与本机执行职责不变，不修改Web/Runtime协议。
 
 回归：SkillPackagePublicationControllerTest/ServiceTest验证岗位、CAS、重试与固定版本不变；EconomySkillMarketplaceMapperH2Test真实SQL验证目录与购买准入关闭/已安装引用保留；SkillManagementTransactionTest真实MySQL验证安装后退出、推荐去重、管理可用且业务事实快照不变；EconomyPlatformSkillSeederTest验证启动不重上架。
+
+## 岗位技能分类（2026-11-08）
+
+技能类型是共享商品事实：`agent_skill_product.skill_type`取`GENERAL/POSITION`，在同一tenant/client下不随查看Owner变化，升级版本沿用商品分类。岗位管理保留Owner隔离的技能版本绑定、岗位、任命和资源权限，不以其JSON推导普通安装资格。
+
+既有`POST /agent/positions/v1/skills`绑定已审核商品；从GENERAL提升为POSITION须同时具有`skills:platform`的SKILL_REVIEW/SKILL_PUBLISH权限，商品类型与Owner绑定在同一事务提交。其他Owner可绑定已有相同分类，不能降级POSITION。响应字段及`POSITION_MANAGED_SKILL`不变。安装/报价/购买/变更/重试由共享商品事实限制，管理员不豁免；原幂等回执仍只读返回，任职专用安装路径不经普通准入。
+
+写入锁序保留Owner岗位根→商品行；共享分类变更与普通准入使用同一商品锁，读取目录一次查询共享岗位技能key集合，不扫描其他Owner状态。包安装不授任职和业务资源权限。
+
+已有库必须在获授权的停写/备份/发布锁窗口执行`db/migrations/20261108-shared-skill-type.sql`中的显式routine；参数为实际tenant/client，先拒绝历史分类冲突及无效POSITION绑定，再新增列并回填。仅回填商品，不复制/改写Owner任职、权限、历史回执。DDL不事务回滚；失败保持停写、保留实际阶段并评估固定备份恢复，不在启动时补列或迁移。源码/隔离回归完成不代表生产迁移或部署。

@@ -51,7 +51,20 @@ public class PositionSkillService implements PositionAuthority {
             var version=packages.selectApprovedProductVersion(scope.tenantId(),scope.clientId(),skill.productVersionId());
             require(version!=null && "APPROVED".equals(version.getReviewStatus())
                     && skill.key().equals(version.getSkillKey()),400,"POSITION_SKILL_NOT_APPROVED");
-            p.defineSkill(skill);return skill.key();
+            // Validate the owner-local version binding before changing shared catalog facts.
+            p.defineSkill(skill);
+            var products=packages.selectSkillProductsForUpdate(scope.tenantId(),scope.clientId(),skill.key());
+            var product=products.stream().filter(item->version.getProductId().equals(item.getProductId())).findFirst().orElse(null);
+            require(product!=null,400,"POSITION_SKILL_NOT_APPROVED");
+            if(skill.type()==SkillType.GENERAL) {
+                require(products.stream().noneMatch(item->"POSITION".equals(item.getSkillType())),409,"POSITION_SKILL_IMMUTABLE");
+            } else if(!"POSITION".equals(product.getSkillType())) {
+                // Managing one's own appointments does not authorize changing a platform skill's type.
+                authority(scope,PositionSkillPolicy.PLATFORM_SKILLS,true);
+                require(packages.classifyPositionSkill(scope.tenantId(),scope.clientId(),product.getProductId(),
+                        product.getVersion(),System.currentTimeMillis())==1,409,"POSITION_REVISION_CONFLICT");
+            }
+            return skill.key();
         });
     }
     public View configure(Scope scope,String key,Position definition,long expectedRevision) {

@@ -11,6 +11,39 @@ public interface SkillCatalogMapper {
     String S = EXACT_SCOPE;
 
 
+    /** Classification belongs to the shared catalog, never to the viewing owner's appointments. */
+    @Select("""
+            SELECT DISTINCT v.skill_key FROM agent_skill_product p
+            JOIN agent_skill_product_version v ON v.tenant_id=p.tenant_id AND v.client_id=p.client_id AND v.product_id=p.product_id
+            WHERE p.tenant_id=#{tenantId} AND p.client_id=#{clientId}
+              AND OCTET_LENGTH(p.tenant_id)=OCTET_LENGTH(#{tenantId}) AND OCTET_LENGTH(p.client_id)=OCTET_LENGTH(#{clientId})
+              AND p.skill_type='POSITION'
+            """)
+    List<String> selectPositionSkillKeys(@Param("tenantId") String tenantId,@Param("clientId") String clientId);
+
+    /** A current locking read: classification and manual admission serialize on the same product rows.
+     * Includes retired/old versions so uninstall/retry cannot bypass classification after retirement. */
+    @Select("""
+            SELECT p.* FROM agent_skill_product p
+            WHERE p.tenant_id=#{tenantId} AND p.client_id=#{clientId}
+              AND OCTET_LENGTH(p.tenant_id)=OCTET_LENGTH(#{tenantId}) AND OCTET_LENGTH(p.client_id)=OCTET_LENGTH(#{clientId})
+              AND EXISTS (SELECT 1 FROM agent_skill_product_version v
+                  WHERE v.tenant_id=p.tenant_id AND v.client_id=p.client_id AND v.product_id=p.product_id
+                    AND v.skill_key=#{skillKey} AND OCTET_LENGTH(v.skill_key)=OCTET_LENGTH(#{skillKey}))
+            ORDER BY p.product_id FOR UPDATE
+            """)
+    List<SkillProductEntity> selectSkillProductsForUpdate(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,@Param("skillKey") String skillKey);
+
+    @Update("""
+            UPDATE agent_skill_product SET skill_type='POSITION',version=version+1,update_time=#{now}
+            WHERE """ + EXACT_SCOPE + """
+              AND product_id=#{productId} AND OCTET_LENGTH(product_id)=OCTET_LENGTH(#{productId})
+              AND skill_type='GENERAL' AND version=#{expectedVersion}
+            """)
+    int classifyPositionSkill(@Param("tenantId") String tenantId,@Param("clientId") String clientId,
+            @Param("productId") String productId,@Param("expectedVersion") long expectedVersion,@Param("now") long now);
+
     /** Explicit publication policy; existing rows are immutable, never overwritten. */
     @Insert("INSERT INTO agent_skill_upgrade_policy(tenant_id,client_id,source_product_version_id,target_product_version_id,policy) VALUES(#{tenantId},#{clientId},#{source},#{target},'COVERED')")
     int insertCoveredUpgradePolicy(@Param("tenantId") String tenant,@Param("clientId") String client,@Param("source") String source,@Param("target") String target);
@@ -20,16 +53,16 @@ public interface SkillCatalogMapper {
 
     @Insert("""
             INSERT INTO agent_skill_product(
-                product_id,seller_type,seller_id,creator_agent_id,name,description,status,
+                product_id,seller_type,seller_id,creator_agent_id,name,description,skill_type,status,
                 current_product_version_id,version,tenant_id,client_id,create_time,update_time)
             VALUES(
-                #{productId},#{sellerType},#{sellerId},#{creatorAgentId},#{name},#{description},#{status},
+                #{productId},#{sellerType},#{sellerId},#{creatorAgentId},#{name},#{description},#{skillType},#{status},
                 #{currentProductVersionId},#{version},#{tenantId},#{clientId},#{createTime},#{updateTime})
             """)
     int insertProduct(SkillProductEntity product);
 
     @Select("""
-            SELECT id,product_id,seller_type,seller_id,creator_agent_id,name,description,status,
+            SELECT id,product_id,seller_type,seller_id,creator_agent_id,name,description,skill_type,status,
                    current_product_version_id,version,tenant_id,client_id,create_time,update_time
             FROM agent_skill_product
             WHERE """ + EXACT_SCOPE + """
@@ -43,7 +76,7 @@ public interface SkillCatalogMapper {
             @Param("productId") String productId);
 
     @Select("""
-            SELECT id,product_id,seller_type,seller_id,creator_agent_id,name,description,status,
+            SELECT id,product_id,seller_type,seller_id,creator_agent_id,name,description,skill_type,status,
                    current_product_version_id,version,tenant_id,client_id,create_time,update_time
             FROM agent_skill_product
             WHERE """ + EXACT_SCOPE + """
