@@ -538,7 +538,7 @@ public class SkillMarketplaceRealTransactionTest {
         var body=purchaseBody("spv_repo_test_1_0_0");long version=versions.requireOwned(ACTOR,AGENT,null,false);
         var rentMapper=mock(EconomyHostingRentMapper.class);
         var lease=new EconomyHostingLeaseEntity().setStatus("ACTIVE").setPaidThrough(1L);
-        when(rentMapper.selectLatestLease(ACTOR.tenantId(),ACTOR.clientId(),AGENT)).thenReturn(lease);
+        when(rentMapper.selectLatestLeaseForUpdate(ACTOR.tenantId(),ACTOR.clientId(),AGENT)).thenReturn(lease);
         var rentAdmission=new cn.jia.agent.hosting.HostingRentWorkAdmission(rentMapper,true);
         doAnswer(call->{rentAdmission.requireNewWork(call.getArgument(0),call.getArgument(1),call.getArgument(2));return null;})
                 .when(agents).requireHostingNewWork(ACTOR.tenantId(),ACTOR.clientId(),AGENT);

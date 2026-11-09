@@ -89,6 +89,7 @@ class R8TenantPrivateChatTest {
     private ChatContextHistoryMapper contextHistory;
     private ChatDispatchAuthorityService dispatchAuthority;
     private ChatDeliberationService deliberation;
+    private AgentService admissionAgents;
     private ChatDeliberationOutboxService outbox;
     private DataSourceTransactionManager transactionManager;
 
@@ -141,8 +142,9 @@ class R8TenantPrivateChatTest {
                         anyString(), anyString(), anyString(), anyString(), anyLong());
 
         dispatchAuthority = mock(ChatDispatchAuthorityService.class);
+        admissionAgents = mock(AgentService.class);
         ChatDeliberationService rawDeliberation = new ChatDeliberationService(
-                deliberationDao, conversations, messages, mock(AgentService.class));
+                deliberationDao, conversations, messages, admissionAgents);
         rawDeliberation.setDispatchAuthority(dispatchAuthority);
         contextHistory = spy(sql.getMapper(ChatContextHistoryMapper.class));
         rawDeliberation.setContextHistory(contextHistory);
@@ -159,6 +161,24 @@ class R8TenantPrivateChatTest {
     @AfterEach
     void tearDown() {
         EsContextHolder.clearContext();
+    }
+
+    @Test void privateNewRequestIsBlockedBeforeAcceptanceButOriginalReplaySurvivesRentLock() {
+        seedConversation(TENANT, OWNER, CLIENT, CONVERSATION, AGENT);
+        doThrow(new IllegalStateException("HOSTING_RENT_NOT_ACTIVE"))
+                .when(admissionAgents).requireHostingNewWork(TENANT, CLIENT, AGENT);
+        assertThrows(IllegalStateException.class, () -> admit(TENANT, OWNER, CLIENT, CONVERSATION,
+                REQUEST, AGENT, InteractionRoute.CHAT));
+        assertNoAdmissionRows();
+        org.mockito.Mockito.reset(admissionAgents);
+        var original = admit(TENANT, OWNER, CLIENT, CONVERSATION, REQUEST, AGENT, InteractionRoute.CHAT);
+        verify(admissionAgents).requireHostingNewWork(TENANT, CLIENT, AGENT);
+        org.mockito.Mockito.clearInvocations(admissionAgents);
+        doThrow(new IllegalStateException("HOSTING_RENT_NOT_ACTIVE"))
+                .when(admissionAgents).requireHostingNewWork(TENANT, CLIENT, AGENT);
+        var replay = admit(TENANT, OWNER, CLIENT, CONVERSATION, REQUEST, AGENT, InteractionRoute.CHAT);
+        assertTrue(replay.replay()); assertEquals(original.requestId(), replay.requestId());
+        verify(admissionAgents, never()).requireHostingNewWork(any(), any(), any());
     }
 
     @Test
@@ -604,7 +624,7 @@ class R8TenantPrivateChatTest {
                 input, CONVERSATION, human(OWNER, CLIENT), InteractionRoute.CHAT);
         assertTrue(result.attempted());
         assertEquals(1, result.stream().collectList().block().size());
-        verify(agents).requireHostingNewWork(TENANT, CLIENT, AGENT);
+        verify(agents, never()).requireHostingNewWork(any(), any(), any()); // Only transactional admission gates new requests.
         verify(agents, never()).requireHostingNewWork(OWNER, CLIENT, AGENT);
         verify(admissions).admit(eq(TENANT), any(ServerResolvedSender.class), eq(CONVERSATION), eq(1L),
                 any(JuyitingConversationScope.class), eq(InteractionRoute.CHAT), eq(input), any());

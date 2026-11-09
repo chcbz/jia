@@ -40,6 +40,7 @@ class AgentTaskExecutionGrantServiceImplTest {
     private final AgentTaskRequirementSnapshotService requirementSnapshots = mock(AgentTaskRequirementSnapshotService.class);
     private final AgentTaskMetaEntity root = new AgentTaskMetaEntity();
     private AgentTaskExecutionGrantServiceImpl service;
+    private final cn.jia.agent.service.AgentHostingWorkAdmission rentAdmission = mock(cn.jia.agent.service.AgentHostingWorkAdmission.class);
     private final cn.jia.economy.task.TaskBillingService billing = mock(cn.jia.economy.task.TaskBillingService.class);
     private final cn.jia.agent.service.TaskAssigneeAuthorityService authority=mock(cn.jia.agent.service.TaskAssigneeAuthorityService.class);
 
@@ -76,8 +77,25 @@ class AgentTaskExecutionGrantServiceImplTest {
                     : new AgentLegacyTaskCompatibilityService.AssignOutcome(List.of("agent-1"),false);
         });
         service=new AgentTaskExecutionGrantServiceImpl(grants,bootstraps,links,workspace,legacy,identities,
-                new DirectTransaction(root),new ObjectMapper(),requirementSnapshots,billing,taskRoots);
+                new DirectTransaction(root),new ObjectMapper(),requirementSnapshots,billing,taskRoots,rentAdmission);
         service.setAssigneeAuthority(authority);
+    }
+
+    @Test void lockedRentRejectsNewAssignmentBeforeMoneyButReplaysOriginalAssignment() {
+        doThrow(new cn.jia.agent.hosting.HostingRentApplicationException(409, "HOSTING_RENT_NOT_ACTIVE"))
+                .when(rentAdmission).requireNewWork("0", "client", "agent-1");
+        assertThrows(cn.jia.agent.hosting.HostingRentApplicationException.class,
+                () -> service.assignAndGrant(scope(), "task-1", "rent-denied", request(), "payer-1"));
+        assertNull(root.getAssignedAgentId()); assertTrue(grants.byAction.isEmpty());
+        verifyNoInteractions(billing);
+        reset(rentAdmission);
+        var accepted = service.assignAndGrant(scope(), "task-1", "rent-accepted", request(), "payer-1");
+        clearInvocations(rentAdmission);
+        doThrow(new cn.jia.agent.hosting.HostingRentApplicationException(409, "HOSTING_RENT_NOT_ACTIVE"))
+                .when(rentAdmission).requireNewWork("0", "client", "agent-1");
+        var replay = service.assignAndGrant(scope(), "task-1", "rent-accepted", request(), "payer-1");
+        assertEquals(accepted.getGrantId(), replay.getGrantId());
+        verifyNoInteractions(rentAdmission);
     }
 
     @Test void incompleteOrLegacyAssignmentCannotMutateOrReserve() {
@@ -186,7 +204,7 @@ class AgentTaskExecutionGrantServiceImplTest {
     @Test void grayScopeReachesTenantBoundRootLockWithoutProductionFallback() {
         var transactions = mock(AgentTaskMutationTransaction.class);
         var scoped = new AgentTaskExecutionGrantServiceImpl(grants,bootstraps,links,workspace,
-                legacy,identities,transactions,new ObjectMapper(),requirementSnapshots,billing,taskRoots);
+                legacy,identities,transactions,new ObjectMapper(),requirementSnapshots,billing,taskRoots,rentAdmission);
         var gray = new AgentTaskExecutionGrantService.Scope("1","client","owner");
         scoped.admit(gray,"task-1","grant-1",1,0,"agent-1","READ_TASK",false);
         verify(transactions).executeWithLockedTaskRootInOwnerScope(eq("1"),eq("client"),
@@ -226,7 +244,7 @@ class AgentTaskExecutionGrantServiceImplTest {
         when(taskRoots.findByTaskIdInOwnerScope("0","client","owner","task-1")).thenReturn(root);
         var transactions=mock(AgentTaskMutationTransaction.class);
         var observed=new AgentTaskExecutionGrantServiceImpl(grants,bootstraps,links,workspace,legacy,
-                identities,transactions,new ObjectMapper(),requirementSnapshots,billing,taskRoots);
+                identities,transactions,new ObjectMapper(),requirementSnapshots,billing,taskRoots,rentAdmission);
         observed.setAssigneeAuthority(authority);
         clearInvocations(identities,authority);
 
@@ -413,7 +431,7 @@ class AgentTaskExecutionGrantServiceImplTest {
     void pointBootstrapFailureRollsBackAssignmentGrantAndIntentInTransactionHarness() {
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
         service=new AgentTaskExecutionGrantServiceImpl(grants,bootstraps,links,workspace,legacy,identities,
-                new RollbackTransaction(root,grants,bootstraps),new ObjectMapper(),requirementSnapshots,billing,taskRoots);
+                new RollbackTransaction(root,grants,bootstraps),new ObjectMapper(),requirementSnapshots,billing,taskRoots,rentAdmission);
         service.setAssigneeAuthority(authority);
         bootstraps.failInsert=true;
         assertThrows(IllegalStateException.class,
@@ -621,7 +639,7 @@ class AgentTaskExecutionGrantServiceImplTest {
     void bootstrapFailureRollsBackAssignmentAndGrantBoundary() {
         bootstraps.failInsert=true;
         service=new AgentTaskExecutionGrantServiceImpl(grants,bootstraps,links,workspace,legacy,identities,
-                new RollbackTransaction(root,grants,bootstraps),new ObjectMapper(),requirementSnapshots,billing,taskRoots);
+                new RollbackTransaction(root,grants,bootstraps),new ObjectMapper(),requirementSnapshots,billing,taskRoots,rentAdmission);
         service.setAssigneeAuthority(authority);
         assertThrows(IllegalStateException.class,
                 () -> service.assignAndGrant(scope(),"task-1","key-rollback",request(), "payer-1"));

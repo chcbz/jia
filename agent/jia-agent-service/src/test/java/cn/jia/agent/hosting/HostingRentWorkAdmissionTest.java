@@ -13,7 +13,7 @@ class HostingRentWorkAdmissionTest {
         var admission = new HostingRentWorkAdmission(mapper, true);
         assertDoesNotThrow(() -> admission.requireNewWork("Tenant-A", "Client-A", "agt-test"));
         var lease = new EconomyHostingLeaseEntity().setStatus("ACTIVE").setPaidThrough(1L);
-        when(mapper.selectLatestLease("Tenant-A", "Client-A", "agt-test")).thenReturn(lease);
+        when(mapper.selectLatestLeaseForUpdate("Tenant-A", "Client-A", "agt-test")).thenReturn(lease);
         assertEquals("HOSTING_RENT_RENEWAL_REQUIRED", assertThrows(HostingRentApplicationException.class,
                 () -> admission.requireNewWork("Tenant-A", "Client-A", "agt-test")).code());
         lease.setPaidThrough(Long.MAX_VALUE);
@@ -25,6 +25,16 @@ class HostingRentWorkAdmissionTest {
         assertDoesNotThrow(() -> admission.requireNewWork("Tenant-A", "Client-A", "agt-test"));
         verifyNoMoreInteractionsBeyondReads(mapper);
     }
+    @Test void lockedAndFinishingAreNotNewAssignmentEligibility() {
+        var mapper = mock(EconomyHostingRentMapper.class);
+        var admission = new HostingRentWorkAdmission(mapper, true);
+        for (String status : java.util.List.of("LOCKED", "FINISHING")) {
+            when(mapper.selectLatestLeaseForUpdate("tenant", "client", "agent"))
+                    .thenReturn(new EconomyHostingLeaseEntity().setStatus(status).setPaidThrough(Long.MAX_VALUE));
+            assertThrows(HostingRentApplicationException.class, () -> admission.requireNewWork("tenant", "client", "agent"));
+        }
+    }
+
     @Test
     void installationsWithoutHostingSchemaDoNotQueryOrMutateHistoricalAgents() {
         var mapper = mock(EconomyHostingRentMapper.class);
@@ -32,7 +42,7 @@ class HostingRentWorkAdmissionTest {
         verifyNoInteractions(mapper);
     }
     private void verifyNoMoreInteractionsBeyondReads(EconomyHostingRentMapper mapper) {
-        verify(mapper, times(5)).selectLatestLease("Tenant-A", "Client-A", "agt-test");
+        verify(mapper, times(5)).selectLatestLeaseForUpdate("Tenant-A", "Client-A", "agt-test");
         verifyNoMoreInteractions(mapper);
     }
 }

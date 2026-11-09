@@ -18,7 +18,7 @@ public final class HostingRentWorkAdmission implements AgentHostingWorkAdmission
     public void requireNewWork(String tenantId, String clientId, String agentId) {
         if (!schemaEnabled) return; // No hosting schema/managed leases in unchanged installations.
         HostingRentHttp.exact(tenantId, 50); HostingRentHttp.exact(clientId, 50); HostingRentHttp.exact(agentId, 100);
-        var lease = mapper.selectLatestLease(tenantId, clientId, agentId);
+        var lease = mapper.selectLatestLeaseForUpdate(tenantId, clientId, agentId);
         if (lease == null || "REFUNDED".equals(lease.getStatus())) return; // Historical/local Agent is not charged.
         if (!"ACTIVE".equals(lease.getStatus()) || lease.getPaidThrough() == null) {
             throw new HostingRentApplicationException(409, "HOSTING_RENT_NOT_ACTIVE");

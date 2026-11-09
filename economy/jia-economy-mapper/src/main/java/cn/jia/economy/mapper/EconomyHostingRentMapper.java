@@ -304,6 +304,12 @@ public interface EconomyHostingRentMapper {
     EconomyHostingLeaseEntity selectLatestLease(@Param("tenantId") String tenantId,
             @Param("clientId") String clientId, @Param("agentId") String agentId);
 
+    @Select("SELECT * FROM economy_hosting_lease WHERE " + EXACT_SCOPE
+            + " AND agent_id=#{agentId} AND OCTET_LENGTH(agent_id)=OCTET_LENGTH(#{agentId})"
+            + " ORDER BY id DESC LIMIT 1 FOR UPDATE")
+    EconomyHostingLeaseEntity selectLatestLeaseForUpdate(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("agentId") String agentId);
+
     @Select("SELECT " + INTENT_COLUMNS + " FROM economy_hosting_provisioning_intent WHERE " + EXACT_SCOPE
             + " AND intent_id=#{intentId} AND OCTET_LENGTH(intent_id)=OCTET_LENGTH(#{intentId}) LIMIT 1")
     EconomyHostingProvisioningIntentEntity selectIntent(@Param("tenantId") String tenantId,

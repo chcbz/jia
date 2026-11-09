@@ -289,7 +289,6 @@ public class HallActionDispatcher {
                 issuedAt, expiresAt, intent.getIntentId(), payload);
         // Canonical validation, payload allowlist and identity checks all run before persistence.
         AgentCommandCanonicalCodec.businessBytes(draft);
-        requireHostingAdmission(trustedCaller.tenantId(), trustedCaller.clientId(), intent.getActorAgentId(), commandType);
         return new DurableRequest(
                 trustedCaller.tenantId(), trustedCaller.clientId(), trustedCaller.ownerJiacn(),
                 intent.getActorAgentId(), draft);
@@ -385,8 +384,6 @@ public class HallActionDispatcher {
                 agentService.requireApiKeyOwnedAgent(
                         scope.clientId(), scope.ownerJiacn(), memberAgentId);
             }
-            requireHostingAdmission(scope.tenantId(), scope.clientId(), agentId,
-                    AgentProtocolConstants.commandTypeForLegacyAction(intent.getActionType()));
         } catch (RuntimeException expired) {
             return rejected(intent);
         }
@@ -404,13 +401,6 @@ public class HallActionDispatcher {
         }
         intent.setStatus(STATUS_DISPATCHED);
         return new HallActionDispatchResult(intent.getIntentId(), agentId, STATUS_DISPATCHED, "dispatched");
-    }
-
-    private void requireHostingAdmission(String tenant, String client, String agent, String commandType) {
-        if (agentService != null && (AgentProtocolConstants.COMMAND_TASK_INVITE.equals(commandType)
-                || AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE.equals(commandType))) {
-            agentService.requireHostingNewWork(tenant, client, agent);
-        }
     }
 
     private Map<String, Object> buildLegacyPayload(HallActionIntent intent, TaskCommandScope scope) {

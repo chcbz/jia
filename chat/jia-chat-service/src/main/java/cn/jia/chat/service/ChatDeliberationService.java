@@ -393,6 +393,14 @@ public class ChatDeliberationService implements TaskDiscussionCancellation {
             throw conflict("requestId was already admitted under a different revision");
         }
 
+        // New private requests only, after replay resolution and before durable acceptance.
+        // Bounty followups use their original task grant even when rent expires or is finishing.
+        if ("private".equals(scope.scopeType())) {
+            for (String agentId : scope.targetAgentIds()) {
+                if (!builtin.isBuiltinAgent(agentId)) agentService.requireHostingNewWork(tenantId, clientId, agentId);
+            }
+        }
+
         // Immutable task/material/action facts remain admission-owned. Only history is deferred.
         AgentTaskDTO task = taskFacts(scope, tenantId, ownerJiacn, clientId);
         boolean needsAdmissionHistory = route != InteractionRoute.CHAT

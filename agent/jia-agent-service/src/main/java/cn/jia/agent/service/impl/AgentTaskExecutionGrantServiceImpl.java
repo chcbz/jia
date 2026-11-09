@@ -66,6 +66,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
     private final AgentTaskMutationTransaction transactions;
     private final ObjectMapper json;
     private final cn.jia.economy.task.TaskBillingService billing;
+    private final cn.jia.agent.service.AgentHostingWorkAdmission hostingWorkAdmission;
     private ControlledImageGrantAuthority controlledAuthority;
     private cn.jia.agent.service.TaskAssigneeAuthorityService assigneeAuthority;
     private AgentTaskBountyBootstrapWakeupPublisher wakeups;
@@ -93,7 +94,8 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
             AgentLegacyTaskCompatibilityService legacyAssignments, AgentIdentityService identities,
             AgentTaskMutationTransaction transactions, ObjectMapper json,
             AgentTaskRequirementSnapshotService requirementSnapshots, cn.jia.economy.task.TaskBillingService billing,
-            cn.jia.agent.dao.AgentTaskMetaDao taskRoots) {
+            cn.jia.agent.dao.AgentTaskMetaDao taskRoots, cn.jia.agent.service.AgentHostingWorkAdmission hostingWorkAdmission) {
+        this.hostingWorkAdmission = Objects.requireNonNull(hostingWorkAdmission);
         this.taskRoots = Objects.requireNonNull(taskRoots,"taskRoots");
         this.billing = Objects.requireNonNull(billing,"billing");
         this.grants = Objects.requireNonNull(grants,"grants");
@@ -278,6 +280,9 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                             }
                             public String identityOwner(String taskOwner) { return target.get().ownerJiacn(); }
                             public void validate(AgentTaskMetaEntity task,List<String> agentIds) {
+                                // New assignment only: replay above keeps its original authorization.
+                                // Identity/root -> lease -> wallet; no rent checks on later execution.
+                                hostingWorkAdmission.requireNewWork(scope.tenantId(), scope.clientId(), canonicalAgent);
                                 snapshot.set(validateAndSnapshotInputs(scope,valid.taskId(),valid.inputs()));
                                 // Point-and-deliberate already read the complete catalogue under this root.
                                 // Reuse the same snapshots instead of locking/reading every file twice.

@@ -223,7 +223,6 @@ public class JuyitingAgentRelayService {
             }
             try {
                 agentService.get(agentId);
-                agentService.requireHostingNewWork(tenantId, ownerClientId, agentId);
             } catch (RuntimeException error) {
                 return Optional.of(agentId);
             }

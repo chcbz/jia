@@ -229,22 +229,22 @@ class HallActionDispatcherTest extends BaseMockTest {
     }
 
     @Test
-    void expiredHostingRejectsNewInviteBeforeDurableWriterOrLegacyQueue() {
-        org.mockito.Mockito.doThrow(new IllegalStateException("HOSTING_RENT_RENEWAL_REQUIRED"))
-                .when(agentService).requireHostingNewWork("0", "client-a", "agent-target");
+    void acceptedTaskInviteDispatchDoesNotRecheckRentInDurableOrLegacyPath() {
         var intent = durableIntent("intent-expired-rent", "agent-target", "task-1");
         intent.setActionType("task_briefing");
+        when(writerProvider.getIfAvailable()).thenReturn(writer);
+        when(writer.writeAuthorizedHall(any(), any())).thenAnswer(invocation -> {
+            AgentCommandDraft draft = invocation.getArgument(0);
+            return new AgentCommandTransportWriteResult(41L, draft.commandId(), "message-1", "event-1", false);
+        });
         var durable = dispatcher(AgentRabbitActivationState.DISPATCH_CANARY, true);
-        assertEquals(HallActionDispatcher.STATUS_FAILED, durable.dispatch(intent,
+        assertEquals(HallActionDispatcher.STATUS_ACCEPTED, durable.dispatch(intent,
                 new HallTrustedCaller("0", "client-a", "owner-a", "caller-agent")).getStatus());
-        verify(writerProvider, never()).getIfAvailable();
         setScope("owner-a", "client-a");
         var legacy = dispatcher(AgentRabbitActivationState.OFF, true);
         stubLegacyWritable("task-1", "agent-target");
-        assertEquals(HallActionDispatcher.STATUS_FAILED,
-                legacy.dispatch(intent, trustedCaller()).getStatus());
-        assertTrue(legacyMailbox(legacy, "agent-target", "task-1").isEmpty());
-        verify(agentWebSocketHandler, never()).sendDirectMessageToAgent(any(), any(Map.class));
+        assertEquals(HallActionDispatcher.STATUS_QUEUED, legacy.dispatch(intent, trustedCaller()).getStatus());
+        verify(agentService, never()).requireHostingNewWork(any(), any(), any());
     }
 
     @Test
