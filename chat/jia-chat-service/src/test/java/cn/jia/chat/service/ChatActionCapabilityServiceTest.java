@@ -212,6 +212,13 @@ class ChatActionCapabilityServiceTest {
         when(installed.read(key)).thenReturn(new InstalledSkillDescriptorLookup.Snapshot(List.of(d)));
         var fact=new SkillCapabilityLookup.RuntimeSkill("ordinary","1.0","a".repeat(64),null,null,SkillCapabilityLookup.Readiness.NOT_EXECUTABLE,null,null,null,"install-1",null,"INSTRUCTION",null,true,null);
         when(runtime.lookup(key,fence)).thenReturn(new SkillCapabilityLookup.View(SkillCapabilityLookup.State.AVAILABLE,"session",fence,new SkillCapabilityLookup.Catalog("1",List.of(fact))));
+        // Each lookup overlaps a newer heartbeat, without changing executable facts.
+        // Record.equals used to retract all native actions at the final recheck.
+        var observation = new java.util.concurrent.atomic.AtomicLong(100);
+        when(runtime.lookup(key,fence)).thenAnswer(ignored -> new SkillCapabilityLookup.View(SkillCapabilityLookup.State.AVAILABLE,"session",fence,
+                new SkillCapabilityLookup.Catalog("1",List.of(new SkillCapabilityLookup.RuntimeSkill(fact.skillKey(),fact.skillVersion(),fact.packageSha256(),
+                        fact.manifestSha256(),fact.runner(),fact.readiness(),fact.reasonCode(),fact.toolchainDigest(),fact.bindingRevision(),
+                        fact.skillInstallationId(),fact.productVersionId(),fact.kind(),fact.policyRevision(),fact.enabled(),observation.incrementAndGet())))));
         var old=java.util.Map.<String,Object>of("nativeExecution",java.util.Map.of("outputMimeTypes",List.of("text/plain")));
         assertEquals(1,service.availableNative(scope,"task",List.of(),old,"session").size());
         var decl=java.util.Map.<String,Object>of("nativeExecution",java.util.Map.of("outputMimeTypes",List.of("text/plain"),"supportedToolPolicyRefs",List.of("NATIVE_SKILL_SCRIPT_V1")));

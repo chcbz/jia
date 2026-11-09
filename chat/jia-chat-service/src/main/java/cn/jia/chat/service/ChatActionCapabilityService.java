@@ -123,7 +123,7 @@ public final class ChatActionCapabilityService {
         }
         // Fence/live directory is rechecked after the join. No old READY survives a reconnect.
         if(runtime!=null&&runtime.state()==cn.jia.agent.service.SkillCapabilityLookup.State.AVAILABLE
-                && !runtime.equals(skillRuntimes.lookup(key,expectedFence))) {
+                && !runtime.sameExecutionFacts(skillRuntimes.lookup(key,expectedFence))) {
             results.replaceAll(item->new SkillCandidate(item.skillKey(),item.skillVersion(),item.title(),
                     "UNAVAILABLE","SKILL_RUNTIME_CHANGED",item.metadataJson(),item.installationVerified()));
             return new InstalledCatalog(null,results);
@@ -242,7 +242,7 @@ public final class ChatActionCapabilityService {
         action.put("actionId","act_"+cn.jia.chat.api.ChatBountyInteractionV3Wire.shaText(CanonicalContextJson.write(Map.of("operation","EXECUTE_NATIVE","inputMimeTypes",input,"outputMimeTypes",allowed))));
         action.put("kind","EXECUTE");action.put("operation","EXECUTE_NATIVE");action.put("skill",null);action.put("parametersSchema",schema);
         action.put("inputMimeTypes",input);action.put("minSources",0);action.put("maxSources",catalog.size());action.put("outputMimeTypes",allowed);
-        if(!policy.equals(policies.read(key,taskId))||!live.equals(skillRuntimes.lookup(policy.runtimeScope(),policy.fence())))return List.copyOf(actions);
+        if(!policy.equals(policies.read(key,taskId))||!live.sameExecutionFacts(skillRuntimes.lookup(policy.runtimeScope(),policy.fence())))return List.copyOf(actions);
         actions.add(java.util.Collections.unmodifiableMap(action));
         if(!(nativeDeclaration.get("supportedToolPolicyRefs") instanceof List<?> refs)||!refs.contains(cn.jia.agent.service.SkillExecutionService.NATIVE_SKILL_SCRIPT_POLICY))return List.copyOf(actions);
         var current=installedSkills.readCurrent(policy.runtimeScope());
@@ -260,7 +260,7 @@ public final class ChatActionCapabilityService {
             actions.add(java.util.Collections.unmodifiableMap(selected));
         }
         if(!current.equals(installedSkills.readCurrent(policy.runtimeScope()))||!policy.equals(policies.read(key,taskId))
-                ||!live.equals(skillRuntimes.lookup(policy.runtimeScope(),policy.fence())))return List.copyOf(actions.subList(0,legacyCount));
+                ||!live.sameExecutionFacts(skillRuntimes.lookup(policy.runtimeScope(),policy.fence())))return List.copyOf(actions.subList(0,legacyCount));
         return List.copyOf(actions);
     }
     static String nativeSkillActionId(cn.jia.agent.service.InstalledSkillDescriptorLookup.Descriptor d,List<String> input,List<String> output) {

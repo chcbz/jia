@@ -212,7 +212,7 @@ public class ChatActionExecutionService implements ChatActionDispatchService.Exe
         if(currentPolicy.assignmentRevision()!=parent.assignmentRevision())throw new ChatActionDispatchService.Rejected();
         // A connection may rotate while preparing. Roll back and re-read trusted facts on retry;
         // never admit using the old fence or reinterpret a transport race as revoked authority.
-        if(!policy.equals(currentPolicy)||!runtime.equals(runtimes.lookup(runtimeKey,policy.fence())))
+        if(!policy.equals(currentPolicy)||!runtime.sameExecutionFacts(runtimes.lookup(runtimeKey,policy.fence())))
             throw new ChatActionDispatchService.Unavailable("SKILL_RUNTIME_CHANGED");
         var inputs=new ArrayList<Map<String,Object>>();
         for(var source:catalog) {

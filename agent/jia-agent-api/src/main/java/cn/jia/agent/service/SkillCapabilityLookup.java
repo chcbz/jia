@@ -24,6 +24,14 @@ public interface SkillCapabilityLookup {
         public RuntimeSkill(String key,String version,String pkg,String manifest,String runner,Readiness readiness,String reason,String tool,String binding) {
             this(key,version,pkg,manifest,runner,readiness,reason,tool,binding,null,null,"EXECUTABLE",null,true,null);
         }
+        /** Observation time is telemetry, not a change to execution authority. */
+        public boolean sameExecutionFacts(RuntimeSkill other) {
+            return other != null && withoutObservation().equals(other.withoutObservation());
+        }
+        private RuntimeSkill withoutObservation() {
+            return new RuntimeSkill(skillKey, skillVersion, packageSha256, manifestSha256, runner, readiness, reasonCode,
+                    toolchainDigest, bindingRevision, skillInstallationId, productVersionId, kind, policyRevision, enabled, null);
+        }
         public RuntimeSkill {
             exact(skillKey, 64); exact(skillVersion, 64); hash(packageSha256); if (manifestSha256!=null) hash(manifestSha256);
             Objects.requireNonNull(readiness);
@@ -35,6 +43,11 @@ public interface SkillCapabilityLookup {
     }
 
     record Catalog(String catalogRevision, List<RuntimeSkill> skills) {
+        public boolean sameExecutionFacts(Catalog other) {
+            return other != null && catalogRevision.equals(other.catalogRevision)
+                    && skills.stream().map(RuntimeSkill::withoutObservation).collect(java.util.stream.Collectors.toSet())
+                    .equals(other.skills.stream().map(RuntimeSkill::withoutObservation).collect(java.util.stream.Collectors.toSet()));
+        }
         public Catalog {
             exact(catalogRevision, 100);
             skills = List.copyOf(Objects.requireNonNull(skills));
@@ -58,6 +71,13 @@ public interface SkillCapabilityLookup {
             } else if (sessionId != null || fence != null || catalog != null) {
                 throw new IllegalArgumentException("Unavailable catalog must not expose stale data");
             }
+        }
+        /** Recheck session/fence/catalog facts without retracting actions on a heartbeat alone.
+         * Lookup/registration still own liveness and monotonic observation validation. */
+        public boolean sameExecutionFacts(View other) {
+            return other != null && state == other.state && Objects.equals(sessionId, other.sessionId)
+                    && Objects.equals(fence, other.fence)
+                    && (catalog == null ? other.catalog == null : catalog.sameExecutionFacts(other.catalog));
         }
         public static View unavailable(State state) { return new View(state, null, null, null); }
     }

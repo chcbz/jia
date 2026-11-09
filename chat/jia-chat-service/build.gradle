@@ -630,3 +630,22 @@ tasks.register('r9TenantPrivateChat', Test) {
     jvmArgs '-XX:+UseSerialGC', '-XX:ActiveProcessorCount=2', '-XX:MaxMetaspaceSize=192m', '-Xss256k'
     testLogging { events 'passed', 'failed'; exceptionFormat 'full' }
 }
+
+// Runtime fact stability: heartbeat races must not retract unchanged native actions.
+def runtimeCapabilityRegressionSourceSet = sourceSets.create('runtimeCapabilityRegression') {
+    java.srcDir 'src/test/java'
+    java.include 'cn/jia/chat/service/SkillCapabilityExecutionFactsTest.java'
+    java.include 'cn/jia/chat/service/ChatActionCapabilityServiceTest.java'
+    java.include 'cn/jia/chat/service/NativeSkillScriptSessionLookupImplTest.java'
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(runtimeCapabilityRegressionSourceSet.implementationConfigurationName) { extendsFrom configurations.testImplementation }
+configurations.named(runtimeCapabilityRegressionSourceSet.runtimeOnlyConfigurationName) { extendsFrom configurations.testRuntimeOnly }
+tasks.register('runtimeCapabilityRegression', Test) {
+    dependsOn tasks.named(runtimeCapabilityRegressionSourceSet.classesTaskName)
+    testClassesDirs = runtimeCapabilityRegressionSourceSet.output.classesDirs
+    classpath = runtimeCapabilityRegressionSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}

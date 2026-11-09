@@ -24,6 +24,12 @@ class NativeSkillScriptSessionLookupImplTest {
         assertFalse(adapter.supports(scope,"task"));
         nativeExecution.put("supportedToolPolicyRefs",List.of("NATIVE_SKILL_SCRIPT_V1"));sessions.register("session","0","owner","client","agent",declaration);
         assertTrue(adapter.supports(scope,"task"));
+        var tick=new java.util.concurrent.atomic.AtomicLong(100);
+        when(runtimes.lookup(key,fence)).thenAnswer(ignored->new SkillCapabilityLookup.View(SkillCapabilityLookup.State.AVAILABLE,"session",fence,
+                new SkillCapabilityLookup.Catalog("1",List.of(new SkillCapabilityLookup.RuntimeSkill("skill","1.0","a".repeat(64),null,null,
+                        SkillCapabilityLookup.Readiness.NOT_EXECUTABLE,null,null,null,"skill-install",null,"INSTRUCTION",null,true,tick.incrementAndGet())))));
+        assertTrue(adapter.supports(scope,"task"));
+
         assertFalse(adapter.supports(new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","agent","other"),"task"));
         sessions.remove("session");assertFalse(adapter.supports(scope,"task"));
     }

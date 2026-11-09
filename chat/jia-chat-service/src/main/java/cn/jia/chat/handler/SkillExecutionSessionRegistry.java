@@ -47,13 +47,9 @@ public final class SkillExecutionSessionRegistry implements SkillCapabilityLooku
             // repeated measurement. Accept newer observation time only; every exact
             // installation, digest, policy, binding and readiness fact stays fenced.
             if(before.observedAt()!=null&&(after.observedAt()==null||after.observedAt()<before.observedAt()))return false;
-            if(!withoutObservation(before).equals(withoutObservation(after)))return false;
+            if(!before.sameExecutionFacts(after))return false;
         }
         return true;
-    }
-    private static RuntimeSkill withoutObservation(RuntimeSkill row) {
-        return new RuntimeSkill(row.skillKey(),row.skillVersion(),row.packageSha256(),row.manifestSha256(),row.runner(),row.readiness(),row.reasonCode(),
-                row.toolchainDigest(),row.bindingRevision(),row.skillInstallationId(),row.productVersionId(),row.kind(),row.policyRevision(),row.enabled(),null);
     }
 
     public synchronized void suspend(String sessionId) {
