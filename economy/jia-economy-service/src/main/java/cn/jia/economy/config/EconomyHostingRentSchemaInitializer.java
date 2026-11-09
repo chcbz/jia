@@ -310,6 +310,7 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
                 column("status", "varchar(24)", false, null, ""),
                 column("paid_from", "bigint", true, null, ""),
                 column("paid_through", "bigint", true, null, ""),
+                column("locked_at", "bigint", true, null, ""),
                 column("latest_intent_id", "varchar(100)", false, null, ""),
                 column("version", "bigint", false, null, ""),
                 column("tenant_id", "varchar(50)", false, null, ""),
@@ -320,7 +321,8 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
                 index("uk_hosting_lease_id", true, "tenant_id,client_id,lease_id"),
                 index("uk_hosting_lease_agent", true, "tenant_id,client_id,agent_id,live_slot"),
                 index("uk_hosting_lease_intent", true, "tenant_id,client_id,latest_intent_id"),
-                index("idx_hosting_lease_actor", false, "tenant_id,client_id,principal_type,principal_id,status,lease_id"))));
+                index("idx_hosting_lease_actor", false, "tenant_id,client_id,principal_type,principal_id,status,lease_id"),
+                index("idx_hosting_lease_renewal", false, "tenant_id,client_id,principal_type,principal_id,status,paid_through,lease_id"))));
         tables.put("economy_hosting_provisioning_intent", table(List.of(
                 column("id", "bigint", false, null, "auto_increment"),
                 column("intent_id", "varchar(100)", false, null, ""),

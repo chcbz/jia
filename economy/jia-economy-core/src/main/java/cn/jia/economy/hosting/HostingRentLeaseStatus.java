@@ -1,5 +1,5 @@
 package cn.jia.economy.hosting;
 
 public enum HostingRentLeaseStatus {
-    PROVISIONING, ACTIVE, REFUNDED
+    PROVISIONING, ACTIVE, LOCKED, FINISHING, REFUNDED
 }

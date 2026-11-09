@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS economy_hosting_lease (
     status             VARCHAR(24) NOT NULL,
     paid_from          BIGINT DEFAULT NULL,
     paid_through       BIGINT DEFAULT NULL,
+    locked_at                BIGINT DEFAULT NULL,
     latest_intent_id   VARCHAR(100) NOT NULL,
     version            BIGINT NOT NULL,
     tenant_id          VARCHAR(50) NOT NULL,
@@ -70,7 +71,8 @@ CREATE TABLE IF NOT EXISTS economy_hosting_lease (
     UNIQUE KEY uk_hosting_lease_id (tenant_id,client_id,lease_id),
     UNIQUE KEY uk_hosting_lease_agent (tenant_id,client_id,agent_id,live_slot),
     UNIQUE KEY uk_hosting_lease_intent (tenant_id,client_id,latest_intent_id),
-    KEY idx_hosting_lease_actor (tenant_id,client_id,principal_type,principal_id,status,lease_id)
+    KEY idx_hosting_lease_actor (tenant_id,client_id,principal_type,principal_id,status,lease_id),
+    KEY idx_hosting_lease_renewal (tenant_id,client_id,principal_type,principal_id,status,paid_through,lease_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Canonical Agent hosting lease projection; existing Agents are not backfilled';
 
 CREATE TABLE IF NOT EXISTS economy_hosting_provisioning_intent (

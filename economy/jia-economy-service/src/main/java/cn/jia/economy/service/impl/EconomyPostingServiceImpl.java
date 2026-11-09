@@ -64,6 +64,7 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
             EconomyJournalType.RESERVE_SKILL,
             EconomyJournalType.RESERVE_HOSTING_RENT,
             EconomyJournalType.CAPTURE_HOSTING_RENT,
+            EconomyJournalType.RENEW_HOSTING_RENT,
             EconomyJournalType.REFUND_HOSTING_RENT,
             EconomyJournalType.REFUND_BOUNTY,
             EconomyJournalType.CAPTURE_TASK, EconomyJournalType.CAPTURE_COMPUTE, EconomyJournalType.CAPTURE_FEE, EconomyJournalType.PAY_AGENT,
@@ -550,6 +551,20 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                     || !matches(lines, EconomyAccountOwnerType.USER,
                             EconomyAccountPurpose.AVAILABLE, false)) {
                 throw new EconomyPostingException(INVALID_COMMAND, "ISSUE_WEN journal template mismatch");
+            }
+            return;
+        }
+        if (command.journalType() == EconomyJournalType.RENEW_HOSTING_RENT) {
+            EconomyAccountKey payer = new EconomyAccountKey(EconomyConstants.CURRENCY_WEN,
+                    EconomyAccountOwnerType.USER, command.principal().id(), EconomyAccountPurpose.AVAILABLE);
+            EconomyAccountKey revenue = new EconomyAccountKey(EconomyConstants.CURRENCY_WEN,
+                    EconomyAccountOwnerType.SYSTEM, EconomyConstants.HOSTING_RENT_SYSTEM_OWNER_ID,
+                    EconomyAccountPurpose.HOSTING_RENT);
+            if (command.principal().type() != EconomyPrincipalType.USER || lines.size() != 2
+                    || command.escrowFunding() != null || command.escrowSettlement() != null
+                    || lines.stream().noneMatch(line -> payer.equals(line.account()) && line.signedAmountWen() < 0)
+                    || lines.stream().noneMatch(line -> revenue.equals(line.account()) && line.signedAmountWen() > 0)) {
+                throw new EconomyPostingException(INVALID_COMMAND, "renewal requires own AVAILABLE -> hosting revenue");
             }
             return;
         }

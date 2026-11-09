@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
 @Component
 @ConditionalOnProperty(name = "agent.hosting-rent.auto-renew-enabled", havingValue = "true")
 public final class HostingRentBalanceWakeup implements EconomyAvailableBalanceListener {
-    public static final String HANDLER = "hosting-rent.balance-increased";
+    public static final String HANDLER = "hosting-rent.reconcile-user";
     private final ScheduleService schedules;
     private final FixedTenantAdmissionPolicy scope;
 

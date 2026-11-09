@@ -12,6 +12,7 @@ import cn.jia.economy.entity.EconomyHostingProvisioningIntentEntity;
 import cn.jia.economy.entity.EconomyHostingRentPlanEntity;
 import cn.jia.economy.entity.EconomyHostingRentQuoteEntity;
 import cn.jia.economy.hosting.HostingRentException;
+import cn.jia.economy.hosting.HostingLeaseChangeListener;
 import cn.jia.economy.hosting.HostingRentIntentStatus;
 import cn.jia.economy.hosting.HostingRentLeaseStatus;
 import cn.jia.economy.hosting.HostingRentLedgerService;
@@ -76,6 +77,17 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
     private final Supplier<String> leaseIds;
     private final Supplier<String> intentIds;
     private final LongSupplier clock;
+    private List<HostingLeaseChangeListener> leaseListeners = List.of();
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setLeaseChangeListeners(List<HostingLeaseChangeListener> listeners) {
+        this.leaseListeners = List.copyOf(listeners);
+    }
+    private void leaseActivated(EconomyScope scope, EconomyHostingLeaseEntity lease, long paidThrough) {
+        for (var listener : leaseListeners) listener.changed(new HostingLeaseChangeListener.Change(scope,
+                lease.getLeaseId(), lease.getPrincipalId(), "ACTIVE", paidThrough, null));
+    }
+
 
     @org.springframework.beans.factory.annotation.Autowired
     public HostingRentLedgerServiceImpl(
@@ -349,6 +361,7 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
                     "renewal capture CAS");
             requireOne(hostingMapper.renewLease(validated.scope().tenantId(), validated.scope().clientId(),
                     lease, quote, intentId, paidFrom, paidThrough, captured.postedAt()), "renewal lease CAS");
+            leaseActivated(validated.scope(), lease, paidThrough);
             return new HostingRentMutationReceipt(intentId, lease.getLeaseId(), quote.getQuoteId(),
                     captured.transactionId(), "ACTIVE", quote.getAmountWen(), quote.getPeriodSeconds(), captured.postedAt());
         });
@@ -499,6 +512,7 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
             requireOne(hostingMapper.markLeaseActive(lease, validated.scope().tenantId(),
                     validated.scope().clientId(), paidFrom, paidThrough, nextLeaseVersion, posting.postedAt()),
                     "lease activation CAS");
+            leaseActivated(validated.scope(), lease, paidThrough);
         } else {
             requireOne(hostingMapper.markIntentRefunded(intent, validated.scope().tenantId(),
                     validated.scope().clientId(), validated.idempotencyKey(), command.requestHash(),
