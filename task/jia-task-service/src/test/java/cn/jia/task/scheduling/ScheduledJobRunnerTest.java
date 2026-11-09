@@ -26,4 +26,15 @@ class ScheduledJobRunnerTest {
             runner.close(); assertEquals(Long.MAX_VALUE, runner.tick()); verifyNoMoreInteractions(store);
         }
     }
+    @Test void skippedLockedDueRowsBackOffRatherThanSpin() {
+        var store = mock(ScheduledWorkStore.class);
+        when(store.nextDelay("")).thenReturn(0L);
+        when(store.claimDue("", 1, 60000)).thenReturn(java.util.List.of());
+        try (var runner = new ScheduledJobRunner(store, new JobRegistry(), new FixedTenantAdmissionPolicy("tenant", null),
+                "", 1, 1, 60000, 1000, () -> { })) {
+            assertEquals(1000, runner.tick());
+            verify(store).nextDelay(""); verify(store).claimDue("", 1, 60000); verifyNoMoreInteractions(store);
+        }
+    }
+
 }

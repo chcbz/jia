@@ -51,6 +51,8 @@ public final class ScheduledJobRunner implements AutoCloseable {
         try { claims = store.claimDue(node, slots, leaseMillis); }
         catch (RuntimeException failure) { capacity.release(slots); throw failure; }
         capacity.release(slots - claims.size());
+        // Due rows may be locked by another transaction. Do not spin on an unchanged overdue index.
+        if (claims.isEmpty()) return retryMillis;
         for (var claim : claims) {
             active.incrementAndGet();
             var pulse = heartbeats.scheduleWithFixedDelay(() -> renew(claim),

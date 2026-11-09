@@ -111,7 +111,7 @@ public class JobController {
         Map<String, Object> result = new HashMap<>();
         result.put("name", name);
         result.put("running", running);
-        return result == null ? JsonResult.success(null) : JsonResult.failure("409", result);
+        return JsonResult.success(result);
     }
 
     /**
