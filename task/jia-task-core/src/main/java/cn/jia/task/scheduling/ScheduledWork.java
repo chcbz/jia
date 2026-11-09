@@ -35,7 +35,8 @@ public record ScheduledWork(long version, long requestedRevision, Long dueAt, Cl
 
     /** Indexed persisted wake time: an in-flight claim owns the key until settled/expired. */
     public Long nextWakeAt() {
-        return claim == null ? dueAt : claim.expiresAt();
+        if (claim == null) return dueAt;
+        return claim.expiresAt();
     }
 
     /**
@@ -69,7 +70,8 @@ public record ScheduledWork(long version, long requestedRevision, Long dueAt, Cl
     public Optional<ScheduledWork> retry(Claim expected, long now, long retryAt) {
         if (!owns(expected, now)) return Optional.empty();
         if (retryAt < now) throw new IllegalArgumentException("Retry cannot precede settlement");
-        Long next = requestedRevision == claim.revision() ? retryAt : dueAt;
+        Long next = dueAt;
+        if (requestedRevision == claim.revision()) next = retryAt;
         return Optional.of(changed(requestedRevision, next, null));
     }
 
