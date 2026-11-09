@@ -17,6 +17,7 @@ public interface ScheduledWorkMapper {
     List<ScheduledWorkRow> due(@Param("tenant") String tenant, @Param("client") String client,
             @Param("node") String node, @Param("now") long now, @Param("limit") int limit);
     Long nextWake(@Param("tenant") String tenant, @Param("client") String client, @Param("node") String node);
+    Long nextDelay(@Param("tenant") String tenant, @Param("client") String client, @Param("node") String node);
     @Select("SELECT CAST(UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3)) * 1000 AS UNSIGNED)")
     long nowMillis();
 }

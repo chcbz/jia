@@ -241,4 +241,80 @@ class ScheduledWorkStoreMySqlTest {
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=? AND table_name='task_scheduled_work' AND index_name='idx_task_scheduled_due' AND column_name='next_wake_at'", Integer.class, database));
         assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.table_constraints WHERE table_schema=? AND constraint_type='CHECK'", Integer.class, database));
     }
+    @Test void noticesAreAfterCommitCoalescedAndAbsentOnRollback() {
+        var notices = new java.util.ArrayList<ScheduleKey>();
+        var notifying = new ScheduledWorkStore(mapper, new FixedTenantAdmissionPolicy("tenant", null), manager, notices::add);
+        var tx = new TransactionTemplate(manager);
+        tx.executeWithoutResult(status -> {
+            notifying.signal(KEY, 0); notifying.signal(KEY, 0);
+            assertTrue(notices.isEmpty());
+        });
+        assertEquals(List.of(KEY), notices);
+        notices.clear();
+        tx.executeWithoutResult(status -> { notifying.signal(KEY, 0); status.setRollbackOnly(); });
+        assertTrue(notices.isEmpty()); assertEquals(2, row().getRequestedRevision());
+    }
+    @Test void transportFailureAfterCommitDoesNotTurnCommittedFactIntoFailure() {
+        var notifying = new ScheduledWorkStore(mapper, new FixedTenantAdmissionPolicy("tenant", null), manager,
+                key -> { throw new IllegalStateException("notification transport down"); });
+        assertDoesNotThrow(() -> notifying.signal(KEY, 0));
+        assertEquals(1, store.claimDue("", 1, 60000).size());
+    }
+    @Test void nestedTransactionsKeepIndependentCommitNotices() {
+        var notices = new java.util.ArrayList<ScheduleKey>();
+        var notifying = new ScheduledWorkStore(mapper, new FixedTenantAdmissionPolicy("tenant", null), manager, notices::add);
+        var innerKey = new ScheduleKey("client", "rent", "other-user", "");
+        var inner = new TransactionTemplate(manager);
+        inner.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        new TransactionTemplate(manager).executeWithoutResult(status -> {
+            notifying.signal(KEY, 0);
+            inner.executeWithoutResult(nested -> notifying.signal(innerKey, 0));
+            assertEquals(List.of(innerKey), notices);
+            status.setRollbackOnly();
+        });
+        assertNull(row()); assertEquals(List.of(innerKey), notices);
+    }
+    @Test void nearestDeadlineUsesDatabaseClockAndIdleDoesNotBecomeZero() {
+        assertNull(store.nextDelay("")); store.signal(KEY, 0); assertEquals(0L, store.nextDelay(""));
+        long future = mapper.nowMillis() + 60000;
+        store.reschedule(KEY, future);
+        assertTrue(store.nextDelay("") > 0 && store.nextDelay("") <= 60000);
+    }
+    @Test void runnerDoesNotHoldClaimTransactionOrInterruptAcceptedWorkOnClose() throws Exception {
+        var registry = new cn.jia.task.job.JobRegistry();
+        var entered = new CountDownLatch(1); var release = new CountDownLatch(1); var finished = new CountDownLatch(1);
+        registry.register(new ScheduledJobHandler() {
+            public String getName() { return "rent"; }
+            public void executeScheduled(ScheduledInvocation invocation) throws Exception {
+                assertEquals("tenant", invocation.tenantId()); assertEquals(KEY, invocation.key());
+                entered.countDown(); assertTrue(release.await(5, TimeUnit.SECONDS));
+            }
+        });
+        var runner = new ScheduledJobRunner(store, registry, new FixedTenantAdmissionPolicy("tenant", null),
+                "", 1, 1, 60000, 1000, finished::countDown);
+        store.signal(KEY, 0);
+        try {
+            runner.tick(); assertTrue(entered.await(5, TimeUnit.SECONDS));
+            assertEquals(Long.MAX_VALUE, runner.tick());
+            store.signal(KEY, 0); runner.close(); release.countDown();
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
+            assertNull(row().getClaimToken()); assertEquals(2, row().getRequestedRevision());
+            assertEquals(1, store.claimDue("", 1, 60000).size());
+        } finally { release.countDown(); runner.close(); }
+    }
+    @Test void unavailableHandlerIsRetriedNotDeletedOrInvokedThroughLegacyPath() throws Exception {
+        var registry = new cn.jia.task.job.JobRegistry(); var calls = new java.util.concurrent.atomic.AtomicInteger();
+        registry.register(new cn.jia.task.job.JobHandler() {
+            public String getName() { return "rent"; }
+            public String execute(cn.jia.task.job.JobContext context) { calls.incrementAndGet(); return null; }
+        });
+        var finished = new CountDownLatch(1);
+        try (var runner = new ScheduledJobRunner(store, registry, new FixedTenantAdmissionPolicy("tenant", null),
+                "", 1, 1, 60000, 60000, finished::countDown)) {
+            store.signal(KEY, 0); runner.tick(); assertTrue(finished.await(5, TimeUnit.SECONDS));
+            assertEquals(0, calls.get()); assertNull(row().getClaimToken());
+            assertTrue(store.nextDelay("") > 0);
+        }
+    }
+
 }

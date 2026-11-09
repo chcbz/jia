@@ -1,6 +1,7 @@
 package cn.jia.task.executor;
 
 import cn.jia.task.job.JobContext;
+import cn.jia.task.scheduling.ScheduledJobHandler;
 import cn.jia.task.job.JobHandler;
 import cn.jia.task.job.JobRegistry;
 import cn.jia.core.util.DateUtil;
@@ -61,6 +62,10 @@ public class JobExecutor {
             String errorMsg = "Job handler not found: " + jobName;
             log.error(errorMsg);
             return errorMsg;
+        }
+
+        if (handler instanceof ScheduledJobHandler) {
+            return "Durable job cannot be invoked through manual execution: " + jobName;
         }
 
         JobContext context = JobContext.builder()

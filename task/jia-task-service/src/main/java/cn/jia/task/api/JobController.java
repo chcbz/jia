@@ -74,11 +74,11 @@ public class JobController {
     @PostMapping("/execute")
     public Object execute(@RequestBody JsonRequest<JobExecuteRequest> protocolRequest) {
         JobExecuteRequest request = protocolRequest == null ? null : protocolRequest.data();
-        if (request.getName() == null || request.getName().trim().isEmpty()) {
+        if (request == null || request.getName() == null || request.getName().trim().isEmpty()) {
             return JsonResult.failure("400", "Job name is required");
         }
         String result = jobExecutor.executeJob(request.getName(), request.getParams());
-        return JsonResult.success(result);
+        return result == null ? JsonResult.success(null) : JsonResult.failure("409", result);
     }
 
     /**
@@ -91,11 +91,11 @@ public class JobController {
     @PostMapping("/execute/async")
     public Object executeAsync(@RequestBody JsonRequest<JobExecuteRequest> protocolRequest) {
         JobExecuteRequest request = protocolRequest == null ? null : protocolRequest.data();
-        if (request.getName() == null || request.getName().trim().isEmpty()) {
+        if (request == null || request.getName() == null || request.getName().trim().isEmpty()) {
             return JsonResult.failure("400", "Job name is required");
         }
-        jobExecutor.executeJobAsync(request.getName(), request.getParams());
-        return JsonResult.success("Job submitted for async execution");
+        String result = jobExecutor.executeJob(request.getName(), request.getParams(), true);
+        return result == null ? JsonResult.success("Job submitted for async execution") : JsonResult.failure("409", result);
     }
 
     /**
@@ -111,7 +111,7 @@ public class JobController {
         Map<String, Object> result = new HashMap<>();
         result.put("name", name);
         result.put("running", running);
-        return JsonResult.success(result);
+        return result == null ? JsonResult.success(null) : JsonResult.failure("409", result);
     }
 
     /**
