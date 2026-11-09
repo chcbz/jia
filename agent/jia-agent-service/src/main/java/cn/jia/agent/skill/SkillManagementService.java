@@ -1,5 +1,6 @@
 package cn.jia.agent.skill;
 
+import cn.jia.economy.common.SkillOperationFees;
 import cn.jia.agent.dao.*;
 import cn.jia.agent.entity.*;
 import cn.jia.agent.hosting.HostingRentHttp;
@@ -288,14 +289,6 @@ public final class SkillManagementService {
                 .anyMatch(c->"UNINSTALL".equals(c.get("action"))&&"SUCCEEDED".equals(c.get("status"))&&Boolean.TRUE.equals(c.get("runtimeSynced"))
                         &&Long.parseLong(text(c,"skillRevision"))>installationRevision);
     }
-    private SkillEntitlementEntity reinstallEntitlement(HostingRentHttp.Actor a,String agent,String skill,String productVersion) {
-        for(var e:app.lockSkillKey(a.tenantId(),a.clientId(),agent,skill)) {
-            if(!"ACTIVE".equals(e.getStatus())||!productVersion.equals(e.getProductVersionId()))continue;
-            var auth=db.findAuthorization(a.tenantId(),a.clientId(),e.getInstallationId());
-            if(uninstalledAfter(a,agent,skill,auth))return e;
-        }
-        return null;
-    }
     private record Prepared(SkillProductVersionEntity version,Map<String,Object> target,Map<String,Object> details) {}
     private Prepared prepare(HostingRentHttp.Actor a,String productVersion,boolean admin) {
         var v=market.selectPurchasableProductVersion(a.tenantId(),a.clientId(),productVersion);
@@ -353,17 +346,12 @@ public final class SkillManagementService {
             var state=state(a,agent,text(data,"skillKey"));intent(a,state,data);published(a,prepared);
             require(state.getSkillKey().equals(prepared.version().getSkillKey()),409,"SKILL_QUOTE_MISMATCH");
             require(json(data.get("approvedPermissions")).equals(json(prepared.details().get("requiredPermissions"))),409,"SKILL_PERMISSIONS_MISMATCH");
-            var src=source(a,state,data.get("sourceSkillInstallationId"));String coverage="PURCHASE",entitlement=null;long price=prepared.version().getPriceWen();
+            var src=source(a,state,data.get("sourceSkillInstallationId"));String coverage="PURCHASE",entitlement=null;long price=SkillOperationFees.forAction(text(data,"action"));
             if(src!=null) {
                 require(!ref(src).get("productVersionId").equals(data.get("targetProductVersionId")),409,"SKILL_STATE_CONFLICT");
                 String policy=db.upgradePolicy(a.tenantId(),a.clientId(),text(ref(src),"productVersionId"),text(data,"targetProductVersionId"));
                 require(policy!=null,409,"SKILL_UPGRADE_POLICY_UNSET");require(!"NOT_ALLOWED".equals(policy),409,"SKILL_UPGRADE_NOT_ALLOWED");
-                if("COVERED".equals(policy)){coverage="ENTITLEMENT";entitlement=src.getEntitlementId();price=0;}
-                else require("PAID".equals(policy),409,"SKILL_UPGRADE_POLICY_UNSET");
-            }
-            if(src==null) {
-                var retained=reinstallEntitlement(a,agent,state.getSkillKey(),text(data,"targetProductVersionId"));
-                if(retained!=null){coverage="ENTITLEMENT";entitlement=retained.getEntitlementId();price=0;}
+                require(Set.of("COVERED","PAID").contains(policy),409,"SKILL_UPGRADE_POLICY_UNSET");
             }
             long now=System.currentTimeMillis();String quote=id("sq_");
             var result=map("quoteId",quote,"action",data.get("action"),"agentId",agent,"skillKey",state.getSkillKey(),
@@ -414,17 +402,18 @@ public final class SkillManagementService {
                 if(src!=null) {
                     String policy=db.upgradePolicy(a.tenantId(),a.clientId(),text(ref(src),"productVersionId"),text(data,"targetProductVersionId"));
                     require(policy!=null,409,"SKILL_UPGRADE_POLICY_UNSET");require(!"NOT_ALLOWED".equals(policy),409,"SKILL_UPGRADE_NOT_ALLOWED");
-                    require("COVERED".equals(policy)?"ENTITLEMENT".equals(quote.get("coverage")):"PAID".equals(policy)&&"PURCHASE".equals(quote.get("coverage")),409,"SKILL_QUOTE_MISMATCH");
+                    require(Set.of("COVERED","PAID").contains(policy),409,"SKILL_UPGRADE_POLICY_UNSET");
                 }
-                if(src==null&&"ENTITLEMENT".equals(quote.get("coverage"))) {
-                    var retained=reinstallEntitlement(a,agent,state.getSkillKey(),text(data,"targetProductVersionId"));
-                    require(retained!=null&&retained.getEntitlementId().equals(quote.get("entitlementId")),409,"SKILL_QUOTE_MISMATCH");
-                }
+                // Unaccepted old/free quotes cannot open a new operation after the fee switch.
+                // Already accepted operations replay above with their original frozen funding facts.
+                require("PURCHASE".equals(quote.get("coverage"))
+                        && Long.toString(SkillOperationFees.forAction(text(data,"action")))
+                        .equals(text(object(quote.get("price")),"amountMinor")),409,"SKILL_QUOTE_MISMATCH");
                 target=decode(q.getTargetJson(),"PackageRef");details=decode(q.getDetailsJson(),"VersionDetails");permissions=json(data.get("approvedPermissions"));
             } else {target=ref(src);details=decode(src.getDetailsJson(),"VersionDetails");permissions=src.getPermissionsJson();}
             terminateSupersededFailures(a,state);
             long now=System.currentTimeMillis(),revision=Math.addExact(state.getSkillRevision(),1);
-            if(install&&("PURCHASE".equals(quote.get("coverage"))||"INSTALL".equals(data.get("action")))) {
+            if(install) {
                 orderId=id("so_");long amount=Long.parseLong(text(object(quote.get("price")),"amountMinor"));
                 var reserve=marketplace.reserve(a,orderId,amount,now);escrowVersion=reserve==null?null:reserve.escrow().escrowVersion();
                 var v=prepared.version();

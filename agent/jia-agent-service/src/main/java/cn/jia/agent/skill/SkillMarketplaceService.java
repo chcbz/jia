@@ -88,7 +88,7 @@ public final class SkillMarketplaceService {
         Map<String,Object> dto=new LinkedHashMap<>();
         dto.put("productId",p.getProductId()); dto.put("name",p.getName()); dto.put("description",p.getDescription());
         dto.put("productVersionId",v.getProductVersionId()); dto.put("skillKey",v.getSkillKey()); dto.put("skillVersion",v.getSkillVersion());
-        dto.put("price",cn.jia.economy.common.Money.wen(v.getPriceWen())); dto.put("permissions",SkillMarketplaceHttp.permissions(v.getApprovedPermissionsManifest()));
+        dto.put("price",cn.jia.economy.common.Money.wen(cn.jia.economy.common.SkillOperationFees.INSTALL_WEN)); dto.put("permissions",SkillMarketplaceHttp.permissions(v.getApprovedPermissionsManifest()));
         boolean positionOnly=policy.contains(v.getSkillKey());
         boolean allowed=!positionOnly && (admin || "NONE".equals(v.getDeploymentRestriction()));
         dto.put("canPurchase",allowed); dto.put("denialReason",allowed?null:positionOnly?"POSITION_MANAGED_SKILL":"SKILL_ADMIN_REQUIRED");
