@@ -60,12 +60,11 @@ public final class HostingRentRenewalServiceImpl implements HostingRentRenewalSe
                 // Register only after all money operations; a FINISHING row before a paid row must
                 // not acquire the schedule lock before the wallet (credits lock wallet -> schedule).
                 publish(changes);
-                return rows;
+                return new ReconciledPage(rows, registerNextDeadline(scope, userId));
             });
-            if (page.size() < 100) break;
-            var last = page.getLast(); after = last.getPaidThrough(); afterId = last.getLeaseId();
+            if (page.leases().size() < 100) return page.nextDeadline();
+            var last = page.leases().getLast(); after = last.getPaidThrough(); afterId = last.getLeaseId();
         }
-        return renewal.nextDeadline(scope.tenantId(), scope.clientId(), userId);
     }
 
     @Override public Result reconcile(EconomyScope scope, String leaseId, long expectedPaidThrough) {
@@ -76,6 +75,7 @@ public final class HostingRentRenewalServiceImpl implements HostingRentRenewalSe
             var changes = new ArrayList<HostingLeaseChangeListener.Change>();
             var result = reconcileLocked(scope, lease, expectedPaidThrough, changes);
             publish(changes);
+            registerNextDeadline(scope, lease.getPrincipalId());
             return result;
         });
     }
@@ -126,6 +126,12 @@ public final class HostingRentRenewalServiceImpl implements HostingRentRenewalSe
             long started = renewal.nowMillis();
             return change(scope, lease, "ACTIVE", started, Math.addExact(started, PERIOD_MILLIS), null,
                     started, paid.transactionId(), changes);
+    }
+    private record ReconciledPage(List<EconomyHostingLeaseEntity> leases, Long nextDeadline) { }
+    private Long registerNextDeadline(EconomyScope scope, String userId) {
+        Long next = renewal.nextDeadline(scope.tenantId(), scope.clientId(), userId);
+        for (var listener : listeners) listener.reconciled(scope, userId, next);
+        return next;
     }
     private void publish(List<HostingLeaseChangeListener.Change> changes) {
         for (var change : changes) for (var listener : listeners) listener.changed(change);

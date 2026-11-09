@@ -2,6 +2,7 @@ package cn.jia.agent.hosting;
 
 import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import cn.jia.economy.hosting.HostingLeaseChangeListener;
+import cn.jia.economy.service.EconomyScope;
 import cn.jia.task.scheduling.ScheduleKey;
 import cn.jia.task.scheduling.ScheduleService;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -17,6 +18,11 @@ public final class HostingRentLeaseWakeup implements HostingLeaseChangeListener 
     private final FixedTenantAdmissionPolicy scope;
     public HostingRentLeaseWakeup(ScheduleService schedules, FixedTenantAdmissionPolicy scope) {
         this.schedules = schedules; this.scope = scope;
+    }
+    @Override public void reconciled(EconomyScope partition, String userId, Long nextDeadline) {
+        scope.requireAdmitted(partition.tenantId(), partition.clientId());
+        if (nextDeadline != null) schedules.signal(new ScheduleKey(partition.clientId(),
+                HostingRentBalanceWakeup.HANDLER, userId, ""), nextDeadline);
     }
     @Override public void changed(Change change) {
         scope.requireAdmitted(change.scope().tenantId(), change.scope().clientId());

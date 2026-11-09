@@ -122,7 +122,7 @@ class HostingRentRenewalMySqlTest {
         service = new HostingRentRenewalServiceImpl(leases, renewals, accounts, posting, gate, manager);
         leaseWakeup = new HostingRentLeaseWakeup(schedules, policy);
         service.setLeaseChangeListeners(List.of(leaseWakeup));
-        handler = new HostingRentRenewalHandler(service, schedules, policy);
+        handler = new HostingRentRenewalHandler(service, policy);
         wallet("tenant", "client", "user", 1000);
     }
     @AfterEach void dropSchema() { if (database != null) admin.execute("DROP DATABASE `" + database + "`"); }
@@ -174,6 +174,33 @@ class HostingRentRenewalMySqlTest {
         assertEquals(0L, jdbc.queryForObject("SELECT SUM(signed_amount_wen) FROM economy_entry", Long.class));
         assertEquals(paid.getPaidThrough(), schedules.nextWake(""));
     }
+    @Test void nearestOtherLeaseIsDurableEvenIfWorkerDiesImmediatelyAfterBusinessCommit() {
+        long future = now() + 60000;
+        seed("due", "ACTIVE", 50, now() - 1000, null);
+        seed("tomorrow", "ACTIVE", 50, future, null);
+        schedules.signal(key, 0);
+        var work = schedules.claimDue("", 1, 60000).getFirst();
+        // Only call the business transaction; no handler post-processing or success acknowledgment.
+        service.reconcileUser(scope, "user");
+        assertEquals(future, jdbc.queryForObject("SELECT due_at FROM task_scheduled_work WHERE handler=? AND business_key='user'",
+                Long.class, HostingRentBalanceWakeup.HANDLER));
+        assertEquals(1, charges());
+        assertTrue(schedules.succeed(work)); assertEquals(future, schedules.nextWake(""));
+    }
+    @Test void deadlineRegistrationFailureAfterLeaseChangeStillRollsBackPayment() {
+        long due = now() - 1000; seed("a", "ACTIVE", 500, due, null);
+        service.setLeaseChangeListeners(List.of(new HostingLeaseChangeListener() {
+            @Override public void changed(Change change) { leaseWakeup.changed(change); }
+            @Override public void reconciled(EconomyScope partition, String userId, Long next) {
+                leaseWakeup.reconciled(partition, userId, next);
+                throw new IllegalStateException("nearest-deadline persistence failed");
+            }
+        }));
+        assertThrows(IllegalStateException.class, () -> service.reconcileUser(scope, "user"));
+        assertEquals(1000, balance()); assertEquals(0, charges());
+        assertEquals(due, lease("a").getPaidThrough()); assertNull(schedules.nextWake(""));
+    }
+
     @Test void preExpiryWorkCannotChargeAndRetainsNearestOtherLeaseDeadline() throws Exception {
         long future = now() + 60000; seed("future", "ACTIVE", 500, future, null);
         seed("due", "ACTIVE", 50, now() - 1000, null);
