@@ -15,3 +15,7 @@ Idempotency-Key=`task-artifact-`+SHA256(UTF8(taskId+LF+artifactId+LF+artifactVer
 责任层/风险：认证入口提取主体；内容服务保证任务Owner授权/读取完整性；个人资料服务负责显式登记、固定摘要匹配及幂等，既有writes事务持久化。Web只展示和提交固定引用，不作安全隔离。跨Owner不写入、错误摘要不写入、重复登记不重复文件、旧版本下载不替换新版本为必要回归。入口PersonalWorkspaceServiceImplTest、PersonalWorkspaceHttpPersistenceIntegrationTest、Web juyiting-completed-records.test.js与task-artifact-registration.test.js。
 
 默认事项成果只关联事项，用户需要复用时点击“保存”。现有旧Runtime原生文件提交有自动归档分支，本次不改Runtime执行协议，不把新增显式登记宣称为所有旧链路已收口。
+
+### 2026-11-09：取消后的已提交会话成果
+
+取消关闭执行准入，不撤销同一拥有者对已提交会话成果的读取。目录和下载统一在 `PersonalWorkspaceExecutionServiceImpl.prepareOwnerOutputs` 校验 owner/task/assignment 绑定、当前会话 ACL、已提交输出及存储摘要；不复用执行准入的 cancelled 拒绝条件。运行时读取/执行继续通过 `requireConversationRoot` 拒绝取消事项。未提交输出、跨拥有者/不可见会话或摘要不符仍拒绝。回归入口：`PersonalWorkspaceConversationExecutionTest.cancelledTaskRetainsCommittedNativeOutputReadsWithoutExecutionGrant`，以及既有 native result/cancellation fence 测试。线上需另行验收取消前后下载，单元测试不等于业务验收。

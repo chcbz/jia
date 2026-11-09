@@ -145,6 +145,38 @@ class PersonalWorkspaceConversationExecutionTest {
 
 
 
+    @Test void cancelledTaskRetainsCommittedNativeOutputReadsWithoutExecutionGrant() throws Exception {
+        byte[] bytes="{\"budget\":150,\"people\":10}\n".getBytes(StandardCharsets.UTF_8);
+        var hash=sha(bytes);
+        root.setRewardStatus("cancelled").setTaskVersion(8L);
+        execution.setExecutionProtocolVersion(5).setExecutionState("RESULT_COMMITTED");
+        output=new PersonalWorkspaceExecutionOutputEntity().setOutputId("output_1")
+                .setExecutionId("exec-1").setOwnerJiacn("owner").setOutputPurpose("CONVERSATION")
+                .setOutputState("COMMITTED").setContentMimeType("application/json").setOriginalFilename("plan.json")
+                .setContentHash(hash).setByteLength((long)bytes.length).setStorageUri("private/object");
+        when(rows.lockOutputs("0","client","owner","exec-1")).thenReturn(List.of(output));
+        when(rows.lockOutput("0","client","owner","exec-1","output_1")).thenReturn(output);
+        when(storage.openStream(any(),eq("private/object"),eq(hash),eq((long)bytes.length),eq("application/json")))
+                .thenAnswer(i -> new java.io.ByteArrayInputStream(bytes));
+        assertEquals(hash,service.listConversationOutputs(OWNER,"task-1","run-1").getFirst().sha256());
+        try(var content=service.openConversationOutput(OWNER,"task-1","run-1","output_1").content()) {
+            assertArrayEquals(bytes,content.readAllBytes());
+        }
+        verifyNoInteractions(grants);
+        execution.setExecutionState("RUNNING");
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                ()->service.openConversationOutput(OWNER,"task-1","run-1","output_1"));
+        execution.setExecutionState("RESULT_COMMITTED");
+        root.setOwnerJiacn("foreign");
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                ()->service.openConversationOutput(OWNER,"task-1","run-1","output_1"));
+        root.setOwnerJiacn("owner");
+        // Cancellation does not override loss of the current owner's conversation access.
+        when(conversation.requireAccessible(any(),eq("42"))).thenThrow(new IllegalStateException("ACL revoked"));
+        assertThrows(RuntimeException.class,()->service.openConversationOutput(OWNER,"task-1","run-1","output_1"));
+        verify(storage,times(2)).openStream(any(),anyString(),anyString(),anyLong(),anyString());
+    }
+
     @Test void catalogOnlyListsVerifiedBytesUnderOwnerGrantAndAssignmentFence() throws Exception {
         var bytes=png();var hash=sha(bytes);execution.setExecutionState("OUTPUT_COMMITTED");
         output=new PersonalWorkspaceExecutionOutputEntity().setOutputId("output_1")

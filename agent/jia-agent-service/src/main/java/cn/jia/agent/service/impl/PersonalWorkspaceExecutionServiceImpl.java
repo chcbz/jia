@@ -412,7 +412,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                     var row=executions.findByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,runId);
                     if(row==null||!"CONVERSATION".equals(row.getExecutionMode())
                             ||!Set.of("OUTPUT_COMMITTED","RESULT_COMMITTED").contains(row.getExecutionState()))throw failure(Reason.NOT_FOUND);
-                    requireConversationRoot(root,scope,taskId,row.getTargetAgentId(),row.getAssignmentRevision());
+                    requireConversationRootBinding(root,scope,taskId,row.getTargetAgentId(),row.getAssignmentRevision());
                     requireOwnerCommittedConversationAuthority(scope,row);
                     requireCurrentControlledConversationAccess(scope,row);
                     var locked=executions.lockByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,runId);
@@ -488,7 +488,15 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
 
     private static void requireConversationRoot(AgentTaskMetaEntity root,OwnerScope scope,
             String taskId,String agentId,Long assignmentRevision) {
-        if (root==null || "cancelled".equals(root.getRewardStatus()) || !same(taskId,root.getTaskId())
+        requireConversationRootBinding(root,scope,taskId,agentId,assignmentRevision);
+        if ("cancelled".equals(root.getRewardStatus())) throw failure(Reason.GRANT_REVOKED);
+    }
+
+    /** Historical committed output reads retain the owner/task binding and current Chat ACL,
+     * but cancellation revokes execution authority, not access to already committed bytes. */
+    private static void requireConversationRootBinding(AgentTaskMetaEntity root,OwnerScope scope,
+            String taskId,String agentId,Long assignmentRevision) {
+        if (root==null || !same(taskId,root.getTaskId())
                 || !same(scope.tenantId(),root.getTenantId()) || !same(scope.clientId(),root.getClientId())
                 || !same(scope.ownerJiacn(),root.getOwnerJiacn())
                 || !same(agentId,root.getAssignedAgentId())
