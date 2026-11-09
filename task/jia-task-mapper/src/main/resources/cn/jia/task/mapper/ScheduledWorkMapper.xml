@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.task.mapper.ScheduledWorkMapper">
+    <resultMap id="work" type="cn.jia.task.entity.ScheduledWorkRow">
+        <result column="tenant_id" property="tenantId"/>
+        <result column="client_id" property="clientId"/>
+        <result column="handler" property="handler"/>
+        <result column="business_key" property="businessKey"/>
+        <result column="target_node" property="targetNode"/>
+        <result column="version" property="version"/>
+        <result column="requested_revision" property="requestedRevision"/>
+        <result column="due_at" property="dueAt"/>
+        <result column="claim_token" property="claimToken"/>
+        <result column="claim_revision" property="claimRevision"/>
+        <result column="claim_until" property="claimUntil"/>
+        <result column="next_wake_at" property="nextWakeAt"/>
+    </resultMap>
+    <sql id="keyWhere">
+        tenant_id = #{tenant} AND client_id = #{key.clientId} AND handler = #{key.handler}
+        AND business_key = #{key.businessKey} AND target_node = #{key.targetNode}
+    </sql>
+    <sql id="partition">
+        tenant_id = #{tenant} AND target_node = #{node}
+        <if test="client != null">AND client_id = #{client}</if>
+    </sql>
+    <insert id="ensure">
+        INSERT INTO task_scheduled_work (tenant_id, client_id, handler, business_key, target_node)
+        VALUES (#{tenant}, #{key.clientId}, #{key.handler}, #{key.businessKey}, #{key.targetNode})
+        ON DUPLICATE KEY UPDATE version = version
+    </insert>
+    <select id="lock" resultMap="work">
+        SELECT * FROM task_scheduled_work WHERE <include refid="keyWhere"/> FOR UPDATE
+    </select>
+    <update id="replace">
+        UPDATE task_scheduled_work SET version = #{row.version}, requested_revision = #{row.requestedRevision},
+            due_at = #{row.dueAt}, claim_token = #{row.claimToken}, claim_revision = #{row.claimRevision},
+            claim_until = #{row.claimUntil}, next_wake_at = #{row.nextWakeAt}
+        WHERE tenant_id = #{row.tenantId} AND client_id = #{row.clientId} AND handler = #{row.handler}
+          AND business_key = #{row.businessKey} AND target_node = #{row.targetNode}
+          AND version = #{expectedVersion}
+    </update>
+    <select id="due" resultMap="work">
+        SELECT * FROM task_scheduled_work WHERE <include refid="partition"/>
+          AND next_wake_at &lt;= #{now}
+        ORDER BY next_wake_at, client_id, handler, business_key
+        LIMIT #{limit} FOR UPDATE SKIP LOCKED
+    </select>
+    <select id="nextWake" resultType="java.lang.Long">
+        SELECT MIN(next_wake_at) FROM task_scheduled_work WHERE <include refid="partition"/>
+          AND next_wake_at IS NOT NULL
+    </select>
+</mapper>
