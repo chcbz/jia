@@ -575,14 +575,15 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         assertEquals("SUCCEEDED",current(change).get("status"));assertEquals("CAPTURED",current(change).get("fundingStatus"));
         assertEquals(99_999_950L,wallet());assertEquals(1,count("economy_skill_order"));
     }
-    @Test void rentalFinishingBlocksNewUninstallButLockedLeaseStillAllowsPolicyChanges() {
+    @Test void arrearsAndFinalFinishingBothBlockNewPolicyChanges() {
         var first=install();finishInstall(first);var installed=current(first);
         rentalStatus("FINISHING");long balance=wallet();int changes=count("agent_skill_change");
         assertThrows(HostingRentApplicationException.class,()->policyChange("UNINSTALL",installed));
         assertEquals(changes,count("agent_skill_change"));assertEquals(balance,wallet());
         rentalStatus("LOCKED");
-        var disabled=policyChange("DISABLE",installed);
-        assertEquals("SUCCEEDED",disabled.get("status"));assertEquals(balance,wallet());
+        for (String action : List.of("ENABLE", "DISABLE", "UNINSTALL"))
+            assertThrows(HostingRentApplicationException.class,()->policyChange(action,installed));
+        assertEquals(changes,count("agent_skill_change"));assertEquals(balance,wallet());
     }
     @Test void installQuoteChargesFiftyWenIndependentOfPublishedProductPriceAndDoesNotReserve() {
         var input=quoteData(); long before=wallet();

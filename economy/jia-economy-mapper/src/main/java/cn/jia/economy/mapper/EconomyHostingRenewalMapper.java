@@ -30,7 +30,7 @@ public interface EconomyHostingRenewalMapper {
     List<EconomyHostingLeaseEntity> duePageForUpdate(@Param("tenantId") String tenantId,
             @Param("clientId") String clientId, @Param("userId") String userId,
             @Param("afterThrough") long afterThrough, @Param("afterId") String afterId, @Param("now") long now);
-    @Select("SELECT MIN(CASE WHEN status='ACTIVE' THEN paid_through ELSE locked_at+1296000001 END)"
+    @Select("SELECT MIN(CASE WHEN status='ACTIVE' THEN paid_through ELSE locked_at+1296000000 END)"
             + " FROM economy_hosting_lease WHERE " + EconomyHostingRentMapper.EXACT_SCOPE
             + " AND principal_type='USER' AND principal_id=#{userId}"
             + " AND OCTET_LENGTH(principal_id)=OCTET_LENGTH(#{userId})"

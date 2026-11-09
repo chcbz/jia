@@ -111,13 +111,15 @@ public final class HostingRentRenewalServiceImpl implements HostingRentRenewalSe
             if (!"USER".equals(lease.getPrincipalType()) || lease.getAmountWen() == null
                     || lease.getAmountWen() <= 0 || !Objects.equals(lease.getPeriodSeconds(), PERIOD_MILLIS / 1000))
                 throw new HostingRentException(DATA_CORRUPT, "invalid recurring lease terms");
-            // Removal takes precedence over balance recovery. Keep live slot and original identity for finishing.
-            if ("LOCKED".equals(lease.getStatus())) {
-                if (lease.getLockedAt() == null) throw new HostingRentException(DATA_CORRUPT, "locked lease has no lock time");
-                if (now > Math.addExact(lease.getLockedAt(), LOCK_RETENTION_MILLIS))
-                    return change(scope, lease, "FINISHING", lease.getPaidFrom(), lease.getPaidThrough(),
-                            lease.getLockedAt(), now, null, changes);
-            }
+            // LOCKED is recoverable arrears finishing; FINISHING is irrevocable final removal.
+            // Anchor unpaid time to expiry, not scheduler observation: downtime cannot extend grace.
+            if ("LOCKED".equals(lease.getStatus()) && lease.getLockedAt() == null)
+                throw new HostingRentException(DATA_CORRUPT, "locked lease has no lock time");
+            long unpaidSince = "LOCKED".equals(lease.getStatus()) ? lease.getLockedAt() : expectedPaidThrough;
+            // At the exact deadline removal wins over credit, including a delayed first expiry wakeup.
+            if (now >= Math.addExact(unpaidSince, LOCK_RETENTION_MILLIS))
+                return change(scope, lease, "FINISHING", lease.getPaidFrom(), lease.getPaidThrough(),
+                        unpaidSince, now, null, changes);
             // Global account order is SYSTEM then USER. Provision the system account with an exclusive lock,
             // not INSERT IGNORE's shared-lock upgrade. Posting reuses these locks in the same transaction.
             accounts.insertAccountIfAbsentAndLock(new EconomyAccountEntity()
@@ -132,7 +134,7 @@ public final class HostingRentRenewalServiceImpl implements HostingRentRenewalSe
                 throw new HostingRentException(DATA_CORRUPT, "lease payer wallet is missing or inactive");
             if (wallet.getBalanceWen() < lease.getAmountWen()) {
                 if ("LOCKED".equals(lease.getStatus())) return result(lease, null); // no lock-time reset
-                return change(scope, lease, "LOCKED", lease.getPaidFrom(), lease.getPaidThrough(), now, now, null, changes);
+                return change(scope, lease, "LOCKED", lease.getPaidFrom(), lease.getPaidThrough(), unpaidSince, now, null, changes);
             }
             // Stable business period identity, independent of scheduler claims/revisions or retry time.
             byte[] hash = digest(scope.tenantId() + "\0" + scope.clientId() + "\0" + lease.getLeaseId() + "\0" + expectedPaidThrough);

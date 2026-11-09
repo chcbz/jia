@@ -213,7 +213,7 @@ class HostingRentRenewalMySqlTest {
         long locked = lease("a").getLockedAt();
         assertEquals("LOCKED", lease("a").getStatus()); assertEquals(49, balance()); assertEquals(0, charges());
         trigger(); assertEquals(locked, lease("a").getLockedAt());
-        assertEquals(locked + RETENTION + 1, schedules.nextWake(""));
+        assertEquals(locked + RETENTION, schedules.nextWake(""));
     }
     @Test void realCreditRegistersWakeAndUnlockStartsFreshPeriodWithoutDuplicateIssuance() throws Exception {
         jdbc.update("UPDATE economy_account SET balance_wen=0 WHERE owner_type='USER'");
@@ -250,10 +250,37 @@ class HostingRentRenewalMySqlTest {
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM task_scheduled_work WHERE handler=? AND business_key='old'",
                 Integer.class, HostingRentLeaseWakeup.FINISH));
     }
-    @Test void exactlyFifteenDaysCanStillRecover() throws Exception {
+    @Test void exactlyFifteenDaysFinalRemovalWinsAndRepeatedWakeCannotCharge() throws Exception {
         long fixed = now(); doReturn(fixed).when(renewals).nowMillis();
         seed("a", "LOCKED", 500, fixed - PERIOD, fixed - RETENTION);
+        trigger(); trigger();
+        assertEquals("FINISHING", lease("a").getStatus()); assertEquals(0, charges());
+        assertEquals(1000, balance());
+        assertEquals(1, jdbc.queryForObject("SELECT live_slot FROM economy_hosting_lease", Integer.class));
+    }
+    @Test void oneMillisecondBeforeFinalDeadlineCanRecover() throws Exception {
+        long fixed = now(); doReturn(fixed).when(renewals).nowMillis();
+        seed("a", "LOCKED", 500, fixed - PERIOD, fixed - RETENTION + 1);
         trigger(); assertEquals("ACTIVE", lease("a").getStatus()); assertEquals(1, charges());
+        assertEquals(PERIOD, lease("a").getPaidThrough() - lease("a").getPaidFrom());
+    }
+    @Test void delayedExpiryWakeAnchorsArrearsToExpiryNotObservation() throws Exception {
+        long fixed = now(); doReturn(fixed).when(renewals).nowMillis();
+        jdbc.update("UPDATE economy_account SET balance_wen=0 WHERE owner_type='USER'");
+        long expiry = fixed - 86400000;
+        seed("a", "ACTIVE", 500, expiry, null);
+        trigger(); assertEquals("LOCKED", lease("a").getStatus());
+        assertEquals(expiry, lease("a").getLockedAt());
+        assertEquals(expiry + RETENTION, schedules.nextWake(""));
+    }
+    @Test void missedExpiryBeyondGraceCannotRenewEvenIfBalanceRecovered() throws Exception {
+        long fixed = now(); doReturn(fixed).when(renewals).nowMillis();
+        seed("a", "ACTIVE", 500, fixed - RETENTION, null);
+        trigger(); assertEquals("FINISHING", lease("a").getStatus());
+        assertEquals(fixed - RETENTION, lease("a").getLockedAt());
+        assertEquals(0, charges()); assertEquals(1000, balance());
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM task_scheduled_work WHERE handler=? AND business_key='a'",
+                Integer.class, HostingRentLeaseWakeup.FINISH));
     }
     @Test void registrationFailureRollsBackMoneyLeaseAndPendingWorkTogether() {
         long due = now() - 1000; seed("a", "ACTIVE", 500, due, null);

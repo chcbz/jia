@@ -22,13 +22,9 @@ public final class HostingRentWorkAdmission implements AgentHostingWorkAdmission
 
     /** New skill intents only. Accepted operations/recovery do not recheck rental eligibility. */
     public void requireSkillChange(String tenantId, String clientId, String agentId, String action) {
-        var lease = lease(tenantId, clientId, agentId);
-        if ("INSTALL".equals(action) || "UPGRADE".equals(action)) {
-            requirePaidPeriod(lease);
-        } else if (lease != null && "FINISHING".equals(lease.getStatus())) {
-            // Keep the old execution environment stable while the relationship drains.
-            throw new HostingRentApplicationException(409, "HOSTING_RENT_NOT_ACTIVE");
-        }
+        // All new mutations stop as soon as rent expires, including enable/disable/uninstall.
+        // Existing accepted commands continue through their original result/recovery paths.
+        requirePaidPeriod(lease(tenantId, clientId, agentId));
     }
 
     private EconomyHostingLeaseEntity lease(String tenantId, String clientId, String agentId) {

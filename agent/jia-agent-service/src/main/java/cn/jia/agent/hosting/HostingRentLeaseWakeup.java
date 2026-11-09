@@ -29,7 +29,7 @@ public final class HostingRentLeaseWakeup implements HostingLeaseChangeListener 
         var due = new ScheduleKey(change.scope().clientId(), HostingRentBalanceWakeup.HANDLER, change.userId(), "");
         switch (change.status()) {
             case "ACTIVE" -> schedules.signal(due, change.paidThrough());
-            case "LOCKED" -> schedules.signal(due, Math.addExact(change.lockedAt(), RETENTION + 1));
+            case "LOCKED" -> schedules.signal(due, Math.addExact(change.lockedAt(), RETENTION));
             case "FINISHING" -> {
                 schedules.signal(new ScheduleKey(change.scope().clientId(), FINISH, change.leaseId(), ""), 0);
             }

@@ -46,14 +46,20 @@ class HostingRentWorkAdmissionTest {
         var admission = new HostingRentWorkAdmission(mapper, true);
         var lease = new EconomyHostingLeaseEntity().setStatus("LOCKED").setPaidThrough(Long.MAX_VALUE);
         when(mapper.selectLatestLeaseForUpdate("tenant", "client", "agent")).thenReturn(lease);
-        for (String action : java.util.List.of("INSTALL", "UPGRADE"))
-            assertThrows(HostingRentApplicationException.class, () -> admission.requireSkillChange("tenant", "client", "agent", action));
-        for (String action : java.util.List.of("ENABLE", "DISABLE", "UNINSTALL"))
-            assertDoesNotThrow(() -> admission.requireSkillChange("tenant", "client", "agent", action));
-        lease.setStatus("FINISHING");
+        for (String status : java.util.List.of("LOCKED", "FINISHING", "PROVISIONING")) {
+            lease.setStatus(status);
+            for (String action : java.util.List.of("INSTALL", "UPGRADE", "ENABLE", "DISABLE", "UNINSTALL"))
+                assertThrows(HostingRentApplicationException.class,
+                        () -> admission.requireSkillChange("tenant", "client", "agent", action));
+        }
+        lease.setStatus("ACTIVE").setPaidThrough(1L);
         for (String action : java.util.List.of("INSTALL", "UPGRADE", "ENABLE", "DISABLE", "UNINSTALL"))
-            assertThrows(HostingRentApplicationException.class, () -> admission.requireSkillChange("tenant", "client", "agent", action));
-        verify(mapper, times(10)).selectLatestLeaseForUpdate("tenant", "client", "agent");
+            assertThrows(HostingRentApplicationException.class,
+                    () -> admission.requireSkillChange("tenant", "client", "agent", action));
+        lease.setPaidThrough(Long.MAX_VALUE);
+        for (String action : java.util.List.of("INSTALL", "UPGRADE", "ENABLE", "DISABLE", "UNINSTALL"))
+            assertDoesNotThrow(() -> admission.requireSkillChange("tenant", "client", "agent", action));
+        verify(mapper, times(25)).selectLatestLeaseForUpdate("tenant", "client", "agent");
         verifyNoMoreInteractions(mapper);
     }
     @Test void absentSchemaSkipsSkillRentalQueries() {
