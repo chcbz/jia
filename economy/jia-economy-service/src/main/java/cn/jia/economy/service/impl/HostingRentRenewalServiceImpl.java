@@ -79,6 +79,29 @@ public final class HostingRentRenewalServiceImpl implements HostingRentRenewalSe
             return result;
         });
     }
+    @Override public Result stopRenewal(EconomyScope scope, EconomyPrincipal owner, String leaseId) {
+        gate.requireMutationAllowed(scope.tenantId(), scope.clientId());
+        return transactions.execute(tx -> {
+            var lease = leases.selectLeaseForUpdate(scope.tenantId(), scope.clientId(), leaseId);
+            if (owner == null || owner.type() != EconomyPrincipalType.USER || lease == null
+                    || !"USER".equals(lease.getPrincipalType())
+                    || !Objects.equals(owner.id(), lease.getPrincipalId())) {
+                throw new HostingRentException(NOT_FOUND_OR_FORBIDDEN, "lease not found");
+            }
+            // The root lock serializes removal with both expiry and credit-driven renewal.
+            // Repeating a removal cannot resurrect a period or manufacture another finishing event.
+            if ("FINISHING".equals(lease.getStatus())) return result(lease, null);
+            if (!"ACTIVE".equals(lease.getStatus()) && !"LOCKED".equals(lease.getStatus())) {
+                throw new HostingRentException(LEASE_CONFLICT, "lease is not active or locked");
+            }
+            var changes = new ArrayList<HostingLeaseChangeListener.Change>();
+            var stopped = change(scope, lease, "FINISHING", lease.getPaidFrom(), lease.getPaidThrough(),
+                    lease.getLockedAt(), renewal.nowMillis(), null, changes);
+            publish(changes);
+            registerNextDeadline(scope, lease.getPrincipalId());
+            return stopped;
+        });
+    }
     private Result reconcileLocked(EconomyScope scope, EconomyHostingLeaseEntity lease, long expectedPaidThrough,
                                    List<HostingLeaseChangeListener.Change> changes) {
             if ((!"ACTIVE".equals(lease.getStatus()) && !"LOCKED".equals(lease.getStatus()))

@@ -308,6 +308,77 @@ class HostingRentRenewalMySqlTest {
         }
         assertEquals("FINISHING", lease("a").getStatus()); assertEquals(1, charges()); assertEquals(550, balance());
     }
+    private HostingRentRenewalService.Result stop(String leaseId) {
+        return service.stopRenewal(scope, new EconomyPrincipal(EconomyPrincipalType.USER, "user"), leaseId);
+    }
+    @Test void voluntaryStopRetainsPaidPeriodIdentityAndLiveSlotWithoutRefund() throws Exception {
+        long future = now() + PERIOD;
+        seed("a", "ACTIVE", 500, future, null);
+        var before = lease("a");
+        var result = stop("a");
+        var stopped = lease("a");
+        assertEquals("FINISHING", result.status());
+        assertNull(result.transactionId());
+        assertEquals(before.getPaidFrom(), stopped.getPaidFrom());
+        assertEquals(before.getPaidThrough(), stopped.getPaidThrough());
+        assertEquals(before.getAgentId(), stopped.getAgentId());
+        assertEquals(before.getBindingId(), stopped.getBindingId());
+        assertEquals(1, jdbc.queryForObject("SELECT live_slot FROM economy_hosting_lease WHERE lease_id='a'", Integer.class));
+        assertEquals(1000, balance()); assertEquals(0, charges());
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM task_scheduled_work WHERE handler=? AND business_key='a'",
+                Integer.class, HostingRentLeaseWakeup.FINISH));
+        long version = stopped.getVersion();
+        long revision = jdbc.queryForObject("SELECT requested_revision FROM task_scheduled_work WHERE handler=? AND business_key='a'",
+                Long.class, HostingRentLeaseWakeup.FINISH);
+        stop("a"); trigger();
+        assertEquals(version, lease("a").getVersion());
+        assertEquals(revision, jdbc.queryForObject("SELECT requested_revision FROM task_scheduled_work WHERE handler=? AND business_key='a'",
+                Long.class, HostingRentLeaseWakeup.FINISH));
+        assertEquals(1000, balance()); assertEquals(0, charges());
+    }
+    @Test void voluntaryStopOfLockedLeaseCannotBeReactivatedByLaterCredit() throws Exception {
+        long locked = now() - 1000;
+        seed("a", "LOCKED", 500, now() - PERIOD, locked);
+        stop("a"); credit(50, UUID.randomUUID().toString()); trigger();
+        assertEquals("FINISHING", lease("a").getStatus());
+        assertEquals(locked, lease("a").getLockedAt());
+        assertEquals(1050, balance()); assertEquals(0, charges());
+    }
+    @Test void voluntaryStopRejectsWrongPayerDisabledPartitionAndUnpaidProvisioning() {
+        seed("a", "ACTIVE", 500, now() + PERIOD, null);
+        var other = new EconomyPrincipal(EconomyPrincipalType.USER, "other");
+        assertEquals(HostingRentException.Reason.NOT_FOUND_OR_FORBIDDEN,
+                assertThrows(HostingRentException.class, () -> service.stopRenewal(scope, other, "a")).reason());
+        var owner = new EconomyPrincipal(EconomyPrincipalType.USER, "user");
+        assertThrows(cn.jia.economy.exception.EconomyPostingException.class, () -> service.stopRenewal(new EconomyScope("other", "client"), owner, "a"));
+        assertThrows(cn.jia.economy.exception.EconomyPostingException.class, () -> service.stopRenewal(new EconomyScope("tenant", "other"), owner, "a"));
+        assertThrows(HostingRentException.class, () -> service.stopRenewal(scope,
+                new EconomyPrincipal(EconomyPrincipalType.SYSTEM, "user"), "a"));
+        jdbc.update("UPDATE economy_hosting_lease SET status='PROVISIONING' WHERE lease_id='a'");
+        assertEquals(HostingRentException.Reason.LEASE_CONFLICT, assertThrows(HostingRentException.class, () -> stop("a")).reason());
+        assertEquals(1L, lease("a").getVersion()); assertEquals(1000, balance()); assertNull(schedules.nextWake(""));
+    }
+    @Test void voluntaryStopAndReliableFinishingRegistrationRollBackWithOuterTransaction() {
+        seed("a", "ACTIVE", 500, now() + PERIOD, null);
+        var tx = new org.springframework.transaction.support.TransactionTemplate(manager);
+        assertThrows(IllegalStateException.class, () -> tx.execute(status -> {
+            stop("a"); throw new IllegalStateException("Agent removal failed");
+        }));
+        assertEquals("ACTIVE", lease("a").getStatus()); assertEquals(1L, lease("a").getVersion());
+        assertNull(schedules.nextWake("")); assertEquals(1000, balance());
+    }
+    @Test void concurrentVoluntaryStopAndRenewalCannotChargeAfterFinishing() throws Exception {
+        seed("a", "ACTIVE", 50, now() - 1000, null);
+        var start = new CountDownLatch(1);
+        try (var pool = Executors.newFixedThreadPool(2)) {
+            var removal = pool.submit(() -> { start.await(); stop("a"); return 0; });
+            var renewal = pool.submit(() -> { start.await(); trigger(); return 0; });
+            start.countDown(); removal.get(10, TimeUnit.SECONDS); renewal.get(10, TimeUnit.SECONDS);
+        }
+        assertEquals("FINISHING", lease("a").getStatus());
+        int paid = charges(); assertTrue(paid == 0 || paid == 1);
+        trigger(); stop("a"); assertEquals(paid, charges()); assertEquals(1000 - 50L * paid, balance());
+    }
     @Test void catalogMatchesNewDdlAndDoesNotAddChecks() {
         new EconomyHostingRentSchemaInitializer(jdbc).afterPropertiesSet();
         assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema=DATABASE() AND constraint_type='CHECK'", Integer.class));
