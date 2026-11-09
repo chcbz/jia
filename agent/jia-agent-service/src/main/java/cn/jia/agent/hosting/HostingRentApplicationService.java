@@ -202,8 +202,9 @@ public final class HostingRentApplicationService {
                     replay.getPersonaCode(), agentId, replay.getPlanId(), replay.getPlanVersion(),
                     HostingRentQuotePurpose.RENEWAL, leaseId, version)));
             EconomyHostingRentPlanEntity plan = plan(actor);
+            var binding = requireExisting(actor, owner, agentId, null);
             EconomyHostingLeaseEntity lease = ownedLease(actor, leaseId, agentId);
-            requireExisting(actor, owner, agentId, lease.getPersonaCode());
+            if (!binding.getPersonaCode().equals(lease.getPersonaCode())) throw forbidden();
             return quoteView(ledger.quote(quoteCommand(actor, idempotencyKey, hash, lease.getPersonaCode(), agentId,
                     plan.getPlanId(), plan.getPlanVersion(), HostingRentQuotePurpose.RENEWAL, leaseId, version)));
         });
@@ -221,8 +222,8 @@ public final class HostingRentApplicationService {
             EconomyHostingProvisioningIntentEntity prior = rent.selectIntentByQuoteForUpdate(
                     actor.tenantId(), actor.clientId(), quote.getQuoteId());
             if (prior == null) {
-                ownedLease(actor, leaseId, quote.getAgentId());
                 requireExisting(actor, owner, quote.getAgentId(), quote.getPersonaCode());
+                ownedLease(actor, leaseId, quote.getAgentId());
             }
             return mutationView(quote.getAgentId(), ledger.renew(new HostingRentReserveCommand(
                     actor.scope(), actor.principal(), idempotencyKey, hash, quote.getQuoteId())));
@@ -298,7 +299,8 @@ public final class HostingRentApplicationService {
             if (!owner.equals(owners.requireOwner(actor))) throw forbidden();
             var initial = rent.selectInitialIntent(actor.tenantId(), actor.clientId(), leaseId);
             if (initial == null) throw forbidden();
-            // Same order as paid reconciliation: original intent -> lease -> canonical binding -> free request.
+            // Shared binding fence precedes financial roots, as in removal and new skill admission.
+            var binding = requireExisting(actor, owner, agentId, personaCode);
             initial = rent.selectIntentForUpdate(actor.tenantId(), actor.clientId(), initial.getIntentId());
             EconomyHostingLeaseEntity lease = ownedLease(actor, leaseId, agentId);
             var prior = rent.selectReprovisionReplayForUpdate(actor.tenantId(), actor.clientId(), actor.actorId(), keyBytes);
@@ -310,8 +312,7 @@ public final class HostingRentApplicationService {
                     || lease.getVersion() != version || !personaCode.equals(lease.getPersonaCode())) {
                 throw conflict("HOSTING_RENT_LEASE_CONFLICT");
             }
-            var identity = requireExisting(actor, owner, agentId, personaCode);
-            if (!Objects.equals(lease.getBindingId(), identity.getBindingId().toString())) throw forbidden();
+            if (!Objects.equals(lease.getBindingId(), binding.getId().toString())) throw forbidden();
             if (rent.selectLiveReprovisionForUpdate(actor.tenantId(), actor.clientId(), leaseId) != null) {
                 throw conflict("HOSTING_RENT_INTENT_CONFLICT");
             }
@@ -370,7 +371,7 @@ public final class HostingRentApplicationService {
         return binding;
     }
 
-    private AgentIdentityRegistryEntity requireExisting(Actor actor, String owner, String agentId, String personaCode) {
+    private AgentPersonaBindingEntity requireExisting(Actor actor, String owner, String agentId, String personaCode) {
         requireCanonicalShape(agentId);
         AgentIdentityRegistryEntity identity = identities.requireRegistrationIdentityInScope(
                 actor.tenantId(), actor.clientId(), owner, agentId);
@@ -381,7 +382,7 @@ public final class HostingRentApplicationService {
                 || !owner.equals(locked.getJiacn())) throw forbidden();
         AgentPersonaBindingEntity binding = identities.requireActiveBinding(identity, null);
         if (personaCode != null && !personaCode.equals(binding.getPersonaCode())) throw forbidden();
-        return identity;
+        return binding;
     }
 
     private EconomyHostingRentQuoteEntity actorQuote(Actor actor, String key) {

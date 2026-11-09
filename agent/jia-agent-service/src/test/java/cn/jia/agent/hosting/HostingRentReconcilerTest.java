@@ -81,7 +81,7 @@ class HostingRentReconcilerTest {
         var binding = new AgentPersonaBindingEntity().setId(17L).setStatus(1).setAgentId(AGENT)
                 .setJiacn(OWNER).setPersonaCode("wuyong");
         binding.setClientId(CLIENT);
-        when(bindings.findByIdForUpdate(17L)).thenReturn(binding);
+        when(bindings.findActiveByTenantClientAndPersonaForUpdate(TENANT, CLIENT, "wuyong")).thenReturn(binding);
         when(identities.requireActiveBinding(identity, null)).thenReturn(binding);
         doAnswer(call -> { transition(call.getArgument(0), "PROVISIONING_UNKNOWN"); return null; })
                 .when(ledger).markProvisioningUnknown(any());
@@ -93,6 +93,39 @@ class HostingRentReconcilerTest {
 
     @AfterEach
     void tearDown() { if (jdbc != null) jdbc.execute("DROP ALL OBJECTS"); }
+
+    @Test
+    void reconciliationDoesNotHoldLeaseWhileWaitingForRemovalBindingFence() throws Exception {
+        jdbc.execute("CREATE TABLE binding_fence(id INT PRIMARY KEY)");
+        jdbc.execute("CREATE TABLE lease_fence(id INT PRIMARY KEY)");
+        jdbc.update("INSERT INTO binding_fence VALUES(17)"); jdbc.update("INSERT INTO lease_fence VALUES(1)");
+        var binding = bindings.findActiveByTenantClientAndPersonaForUpdate(TENANT, CLIENT, "wuyong");
+        var held = new java.util.concurrent.CountDownLatch(1);
+        var attempting = new java.util.concurrent.CountDownLatch(1);
+        doAnswer(call -> {
+            attempting.countDown();
+            jdbc.queryForObject("SELECT id FROM binding_fence WHERE id=17 FOR UPDATE", Integer.class);
+            return binding;
+        }).when(bindings).findActiveByTenantClientAndPersonaForUpdate(TENANT, CLIENT, "wuyong");
+        doAnswer(call -> {
+            jdbc.queryForObject("SELECT id FROM lease_fence WHERE id=1 FOR UPDATE", Integer.class);
+            return lease;
+        }).when(mapper).selectLeaseForUpdate(TENANT, CLIENT, "hrl-test");
+        try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            var removal = executor.submit(() -> new TransactionTemplate(manager).executeWithoutResult(tx -> {
+                jdbc.queryForObject("SELECT id FROM binding_fence WHERE id=17 FOR UPDATE", Integer.class);
+                held.countDown();
+                try { assertTrue(attempting.await(10, java.util.concurrent.TimeUnit.SECONDS)); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new IllegalStateException(e); }
+                jdbc.queryForObject("SELECT id FROM lease_fence WHERE id=1 FOR UPDATE", Integer.class);
+            }));
+            assertTrue(held.await(10, java.util.concurrent.TimeUnit.SECONDS));
+            var reconciliation = executor.submit(() -> worker.reconcileOne(intent, provider));
+            removal.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            reconciliation.get(10, java.util.concurrent.TimeUnit.SECONDS);
+        }
+        verify(provider).prepareAndObserve(any());
+    }
 
     @Test
     void durablePollWithoutWakeMarksUnknownBeforeIoThenCapturesExactSuccessProof() {
@@ -117,6 +150,12 @@ class HostingRentReconcilerTest {
         verify(provider, times(1)).prepareAndObserve(any());
         verify(ledger, times(1)).capture(any());
         verify(ledger, never()).refund(any());
+        var order = inOrder(bindings, mapper);
+        for (int snapshot = 0; snapshot < 2; snapshot++) {
+            order.verify(bindings).findActiveByTenantClientAndPersonaForUpdate(TENANT, CLIENT, "wuyong");
+            order.verify(mapper).selectIntentForUpdate(TENANT, CLIENT, "hri-test");
+            order.verify(mapper).selectLeaseForUpdate(TENANT, CLIENT, "hrl-test");
+        }
     }
 
     @Test
@@ -248,7 +287,7 @@ class HostingRentReconcilerTest {
         verifyNoInteractions(ledger); verify(provider, never()).prepareAndObserve(any());
         lease.setLatestIntentId("hri-test");
         when(provider.prepareAndObserve(any())).thenAnswer(call -> {
-            when(bindings.findByIdForUpdate(17L)).thenReturn(null);
+            when(bindings.findActiveByTenantClientAndPersonaForUpdate(TENANT, CLIENT, "wuyong")).thenReturn(null);
             return new ManagedHostingProvisioner.Observation(call.getArgument(0), ManagedHostingProvisioner.Outcome.SERVICE_READY, "ready");
         });
         worker.reconcilePending();

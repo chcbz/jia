@@ -41,6 +41,10 @@ public final class ManagedHostingCredentials {
                     || !candidate.manifestSha256().equals(installed.manifestSha256())
                     || !p.tenantId().equals(installed.tenantId()) || !p.clientId().equals(installed.clientId())
                     || !p.agentId().equals(installed.canonicalAgentId())) throw unavailable();
+            // Runtime keeps its installation-first fence; binding then precedes all rent roots.
+            long bindingId = Long.parseLong(p.bindingId());
+            if (!Long.toString(bindingId).equals(p.bindingId()) || bindingId <= 0) throw unavailable();
+            var locked = bindings.findByIdForUpdate(bindingId);
             var intent = rent.selectIntentForUpdate(p.tenantId(), p.clientId(), p.intentId());
             if (intent == null || !p.intentId().equals(intent.getIntentId())
                     || !p.tenantId().equals(intent.getTenantId()) || !p.clientId().equals(intent.getClientId())
@@ -55,9 +59,6 @@ public final class ManagedHostingCredentials {
             if (lease == null || !p.leaseId().equals(lease.getLeaseId()) || !p.agentId().equals(lease.getAgentId())
                     || !p.bindingId().equals(lease.getBindingId()) || !intent.getPersonaCode().equals(lease.getPersonaCode())
                     || !intent.getPrincipalId().equals(lease.getPrincipalId()) || !"USER".equals(lease.getPrincipalType())) throw unavailable();
-            long bindingId = Long.parseLong(p.bindingId());
-            if (!Long.toString(bindingId).equals(p.bindingId()) || bindingId <= 0) throw unavailable();
-            var locked = bindings.findByIdForUpdate(bindingId);
             if (locked == null || !Long.valueOf(bindingId).equals(locked.getId()) || !Integer.valueOf(1).equals(locked.getStatus())
                     || !p.agentId().equals(locked.getAgentId()) || !p.tenantId().equals(locked.getTenantId())
                     || !p.clientId().equals(locked.getClientId()) || !p.ownerJiacn().equals(locked.getJiacn())

@@ -111,6 +111,30 @@ class HostingRentApplicationServiceTest {
                         .setAmountWen(1000000000L).setPeriodSeconds(2592000L).setStatus("ACTIVE"));
     }
 
+    @Test void manualRenewalQuoteAndConfirmationLockBindingBeforeLease() {
+        existingInvitation();
+        when(rent.selectLeaseForUpdate("0", "Client-A", "hrl-test")).thenReturn(new EconomyHostingLeaseEntity()
+                .setLeaseId("hrl-test").setAgentId(AGENT).setPersonaCode("wuyong")
+                .setPrincipalId("login-sub").setPrincipalType("USER"));
+        when(ledger.quote(any())).thenReturn(new HostingRentQuoteReceipt("hrq-renew", HostingRentQuotePurpose.RENEWAL,
+                "plan", 1L, 1000000000L, 2592000L, "wuyong", AGENT, "hrl-test", 4L, 1800000000000L));
+        application.renewalQuote(ACTOR, "hrl-test", KEY, Map.of("agentId", AGENT, "expectedLeaseVersion", "4"));
+        var quoteOrder = inOrder(bindings, rent);
+        quoteOrder.verify(bindings).findByIdForUpdate(17L);
+        quoteOrder.verify(rent).selectLeaseForUpdate("0", "Client-A", "hrl-test");
+        clearInvocations(bindings, rent);
+        when(rent.selectQuoteForUpdate("0", "Client-A", "hrq-test")).thenReturn(new EconomyHostingRentQuoteEntity()
+                .setQuoteId("hrq-test").setQuotePurpose("RENEWAL").setPrincipalId("login-sub").setPrincipalType("USER")
+                .setPersonaCode("wuyong").setAgentId(AGENT).setPlanVersion(1L).setAmountWen(1000000000L)
+                .setPeriodSeconds(2592000L).setLeaseId("hrl-test").setExpectedLeaseVersion(4L));
+        when(ledger.renew(any())).thenReturn(receipt);
+        var body = new java.util.HashMap<>(confirmation()); body.put("expectedLeaseVersion", "4");
+        application.renew(ACTOR, "hrl-test", KEY, body);
+        var confirmOrder = inOrder(bindings, rent);
+        confirmOrder.verify(bindings).findByIdForUpdate(17L);
+        confirmOrder.verify(rent).selectLeaseForUpdate("0", "Client-A", "hrl-test");
+    }
+
     @Test void newInitialQuoteRejectsAnyUnreleasedLeaseIncludingFinishing() {
         existingInvitation();
         for (String state : List.of("ACTIVE", "LOCKED", "FINISHING", "FUNDS_RESERVED")) {

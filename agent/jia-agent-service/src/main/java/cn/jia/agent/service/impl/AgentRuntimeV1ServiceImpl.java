@@ -109,7 +109,7 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
                 .setEnrollmentExpiresAt(request.enrollmentExpiresAt()).setStatus("PENDING").setVersion(0L);
         candidate.setTenantId(tenantId); candidate.setClientId(clientId);
         requireInstallationOwner(candidate, tenantId, clientId, ownerJiacn);
-        // Installation first, then hosting intent -> lease -> binding -> free request. This follows
+        // Installation first, then hosting binding -> intent -> lease -> free request. This follows
         // session/registration's installation-before-binding fence and performs no external I/O.
         // Do not FOR UPDATE a missing unique key: concurrent gap-lock holders would
         // both need to upgrade to an insert lock. The unique insert arbitrates first;

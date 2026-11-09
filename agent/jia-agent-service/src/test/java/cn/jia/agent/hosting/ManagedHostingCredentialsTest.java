@@ -90,9 +90,34 @@ class ManagedHostingCredentialsTest {
         verifyNoInteractions(keys);
         var order = inOrder(runtime, rent, bindings);
         order.verify(runtime).ensureInstallation(anyString(), anyString(), anyString(), any(), anyLong());
+        order.verify(bindings).findByIdForUpdate(17L);
         order.verify(rent).selectIntentForUpdate(anyString(), anyString(), anyString());
-        order.verify(rent).selectLeaseForUpdate(anyString(), anyString(), anyString()); order.verify(bindings).findByIdForUpdate(17L);
+        order.verify(rent).selectLeaseForUpdate(anyString(), anyString(), anyString());
     }
+    @Test void installationAssociationDoesNotHoldIntentWhileWaitingForBindingFence() throws Exception {
+        jdbc.execute("CREATE TABLE binding_fence(id INT PRIMARY KEY)"); jdbc.update("INSERT INTO binding_fence VALUES(17)");
+        var binding = bindings.findByIdForUpdate(17L);
+        var held = new CountDownLatch(1); var attempting = new CountDownLatch(1);
+        doAnswer(call -> {
+            attempting.countDown();
+            jdbc.queryForObject("SELECT id FROM binding_fence WHERE id=17 FOR UPDATE", Integer.class);
+            return binding;
+        }).when(bindings).findByIdForUpdate(17L);
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var removal = executor.submit(() -> new TransactionTemplate(manager).executeWithoutResult(tx -> {
+                jdbc.queryForObject("SELECT id FROM binding_fence WHERE id=17 FOR UPDATE", Integer.class);
+                held.countDown();
+                try { assertTrue(attempting.await(10, TimeUnit.SECONDS)); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new IllegalStateException(e); }
+                jdbc.queryForObject("SELECT id FROM association WHERE id=1 FOR UPDATE", Integer.class);
+            }));
+            assertTrue(held.await(10, TimeUnit.SECONDS));
+            var installation = executor.submit(() -> service.ensureInstallation(p, candidate));
+            removal.get(10, TimeUnit.SECONDS); installation.get(10, TimeUnit.SECONDS);
+        }
+        assertEquals(candidate.installationId(), jdbc.queryForObject("SELECT installation FROM association", String.class));
+    }
+
     @Test void concurrentSameCandidateHasOnlyOneExactDurableAssociation() throws Exception {
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             var gate = new CountDownLatch(1);

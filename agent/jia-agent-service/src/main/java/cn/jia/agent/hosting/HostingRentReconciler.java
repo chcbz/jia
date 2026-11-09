@@ -116,10 +116,10 @@ public final class HostingRentReconciler {
                 snapshot.preparation().intentId(), version, observation.evidenceRef(), observation.serviceReadyAt());
         if (observation.outcome() == ManagedHostingProvisioner.Outcome.SERVICE_READY) {
             ledger.confirmProvisioningSucceeded(command);
-            settle(new Snapshot(snapshot.actor(), snapshot.preparation(), "SERVICE_READY", version + 1), true);
+            settle(new Snapshot(snapshot.actor(), snapshot.preparation(), "SERVICE_READY", version + 1, snapshot.intent()), true);
         } else {
             ledger.confirmProvisioningFailedNoEffect(command);
-            settle(new Snapshot(snapshot.actor(), snapshot.preparation(), "FAILED_NO_EFFECT", version + 1), false);
+            settle(new Snapshot(snapshot.actor(), snapshot.preparation(), "FAILED_NO_EFFECT", version + 1, snapshot.intent()), false);
         }
     }
 
@@ -148,6 +148,10 @@ public final class HostingRentReconciler {
     }
 
     private FreeSnapshot freeSnapshot(EconomyHostingReprovisionEntity row, boolean markUnknown) {
+        var binding = bindings.findActiveByTenantClientAndPersonaForUpdate(
+                row.getTenantId(), row.getClientId(), row.getPersonaCode());
+        if (binding == null || !Integer.valueOf(1).equals(binding.getStatus())
+                || !row.getClientId().equals(binding.getClientId()) || !row.getAgentId().equals(binding.getAgentId())) return null;
         var initial = mapper.selectIntentForUpdate(row.getTenantId(), row.getClientId(), row.getIntentId());
         if (initial == null || !"INITIAL".equals(initial.getQuotePurpose()) || !"ACTIVE".equals(initial.getStatus())
                 || !"USER".equals(initial.getPrincipalType()) || !row.getPrincipalId().equals(initial.getPrincipalId())
@@ -156,9 +160,7 @@ public final class HostingRentReconciler {
         if (lease == null || !"ACTIVE".equals(lease.getStatus()) || !"USER".equals(lease.getPrincipalType())
                 || !initial.getPrincipalId().equals(lease.getPrincipalId()) || !row.getAgentId().equals(lease.getAgentId())
                 || lease.getBindingId() == null || !row.getPersonaCode().equals(lease.getPersonaCode())) return null;
-        var binding = bindings.findByIdForUpdate(Long.parseLong(lease.getBindingId()));
-        if (binding == null || !Integer.valueOf(1).equals(binding.getStatus())
-                || !row.getClientId().equals(binding.getClientId()) || !row.getAgentId().equals(binding.getAgentId())) return null;
+        if (!lease.getBindingId().equals(binding.getId().toString())) return null;
         String owner = binding.getJiacn();
         if (owner == null || owner.isBlank()) return null;
         var actor = new HostingRentHttp.Actor(
@@ -190,6 +192,12 @@ public final class HostingRentReconciler {
     private record FreeSnapshot(ManagedHostingProvisioner.Preparation preparation, long version) { }
 
     private Snapshot snapshot(EconomyHostingProvisioningIntentEntity row) {
+        // Discovery is only a hint; lock the scoped binding before intent/lease and recheck linkage.
+        var lockedBinding = bindings.findActiveByTenantClientAndPersonaForUpdate(
+                row.getTenantId(), row.getClientId(), row.getPersonaCode());
+        if (lockedBinding == null || !Integer.valueOf(1).equals(lockedBinding.getStatus())
+                || !row.getAgentId().equals(lockedBinding.getAgentId())
+                || !row.getClientId().equals(lockedBinding.getClientId())) return null;
         var intent = mapper.selectIntentForUpdate(row.getTenantId(), row.getClientId(), row.getIntentId());
         if (intent == null || !"USER".equals(intent.getPrincipalType()) || !"INITIAL".equals(intent.getQuotePurpose())
                 || "ACTIVE".equals(intent.getStatus()) || "REFUNDED".equals(intent.getStatus())) return null;
@@ -198,10 +206,9 @@ public final class HostingRentReconciler {
                 || !intent.getAgentId().equals(lease.getAgentId()) || !intent.getPrincipalId().equals(lease.getPrincipalId())
                 || !"USER".equals(lease.getPrincipalType())
                 || !"PROVISIONING".equals(lease.getStatus()) || lease.getBindingId() == null) return null;
-        var lockedBinding = bindings.findByIdForUpdate(Long.parseLong(lease.getBindingId()));
-        if (lockedBinding == null || !Integer.valueOf(1).equals(lockedBinding.getStatus())
+        if (!lease.getBindingId().equals(lockedBinding.getId().toString())
                 || !intent.getAgentId().equals(lockedBinding.getAgentId())
-                || !intent.getClientId().equals(lockedBinding.getClientId())) return null;
+                || !intent.getPersonaCode().equals(lockedBinding.getPersonaCode())) return null;
         String owner = lockedBinding.getJiacn();
         if (owner == null || owner.isBlank()) return null;
         var actor = new HostingRentHttp.Actor(
@@ -214,7 +221,7 @@ public final class HostingRentReconciler {
                 || !intent.getPersonaCode().equals(binding.getPersonaCode())) return null;
         var preparation = new ManagedHostingProvisioner.Preparation(actor.tenantId(), actor.clientId(), owner,
                 intent.getAgentId(), intent.getIntentId(), intent.getLeaseId(), lease.getBindingId(), intent.getReservedAt());
-        return new Snapshot(actor, preparation, intent.getStatus(), intent.getVersion());
+        return new Snapshot(actor, preparation, intent.getStatus(), intent.getVersion(), intent);
     }
 
     private HostingRentOutcomeCommand outcome(Snapshot snapshot, long version, String proof) {
@@ -230,11 +237,10 @@ public final class HostingRentReconciler {
         var command = new HostingRentSettlementCommand(snapshot.actor().scope(), snapshot.actor().principal(), key,
                 HostingRentHttp.hash(action, Map.of("intentId", intentId)), intentId, snapshot.version());
         transactions.executeWithoutResult(status -> {
-            var current = mapper.selectIntentForUpdate(snapshot.actor().tenantId(), snapshot.actor().clientId(), intentId);
-            if (current == null) return;
-            // Lock/revalidate the same canonical binding again after external observation, before posting.
-            Snapshot checked = snapshot(current);
+            // Use the discovery keys only, then lock/revalidate binding -> intent -> lease after I/O.
+            Snapshot checked = snapshot(snapshot.intent());
             if (checked == null || !checked.preparation().equals(snapshot.preparation())) return;
+            var current = checked.intent();
             if (capture) {
                 if (!"SERVICE_READY".equals(current.getStatus()) || current.getRuntimeInstallationId() == null
                         || current.getRuntimeManifestSha256() == null
@@ -249,5 +255,5 @@ public final class HostingRentReconciler {
         });
     }
     private record Snapshot(HostingRentHttp.Actor actor, ManagedHostingProvisioner.Preparation preparation,
-                            String status, long version) { }
+                            String status, long version, EconomyHostingProvisioningIntentEntity intent) { }
 }

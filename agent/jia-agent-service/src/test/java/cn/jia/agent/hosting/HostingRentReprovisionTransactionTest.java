@@ -36,6 +36,7 @@ class HostingRentReprovisionTransactionTest {
     private final HostingRentReconciler reconciler = mock(HostingRentReconciler.class);
     private final AgentIdentityService identities = mock(AgentIdentityService.class);
     private JdbcTemplate jdbc;
+    private final AgentPersonaBindingDao bindings = mock(AgentPersonaBindingDao.class);
     private HostingRentApplicationService app;
     private EconomyHostingProvisioningIntentEntity initial;
     private long paidThrough;
@@ -78,7 +79,7 @@ class HostingRentReprovisionTransactionTest {
         var identity = new AgentIdentityRegistryEntity().setCanonicalAgentId(AGENT).setBindingId(17L);
         when(identities.requireRegistrationIdentityInScope("0", "Client-A", "Tenant-A", AGENT)).thenReturn(identity);
         when(identities.requireActiveBinding(identity, null)).thenReturn(binding);
-        var bindings = mock(AgentPersonaBindingDao.class); when(bindings.findByIdForUpdate(17L)).thenReturn(binding);
+        when(bindings.findByIdForUpdate(17L)).thenReturn(binding);
         ObjectProvider<ManagedHostingProvisioner> providers = mock(ObjectProvider.class); when(providers.getIfAvailable()).thenReturn(provider);
         when(provider.available()).thenReturn(true);
         when(provider.availableFor(anyString(), anyString(), anyString())).thenAnswer(call -> provider.available());
@@ -108,6 +109,10 @@ class HostingRentReprovisionTransactionTest {
         var receipt = (HostingRentApplicationService.ReprovisionView) confirm(KEY, "4");
         assertEquals("5", receipt.leaseVersion()); assertEquals("0", receipt.amountWen()); assertEquals("ACCEPTED", receipt.status());
         assertEquals(Long.toString(paidThrough), receipt.paidThrough());
+        var order = inOrder(bindings, rent);
+        order.verify(bindings).findByIdForUpdate(17L);
+        order.verify(rent).selectIntentForUpdate("0", "Client-A", "hri-original");
+        order.verify(rent).selectLeaseForUpdate("0", "Client-A", "hrl-one");
         jdbc.update("UPDATE lease_root SET version=99,status='REFUNDED',paid_through=1");
         when(provider.available()).thenReturn(false);
         assertEquals(receipt, confirm(KEY, "4"));
