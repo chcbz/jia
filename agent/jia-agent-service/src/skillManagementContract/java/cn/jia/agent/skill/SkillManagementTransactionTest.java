@@ -54,6 +54,8 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
     protected AgentManagedSessionLookup sessions;
     protected SkillCapabilityLookup capabilities;
     protected SkillAgentVersions versions;
+    private cn.jia.economy.mapper.EconomyHostingRentMapper rentalMapper;
+    private HostingRentWorkAdmission rentalAdmission;
     protected TransactionTemplate tx;
     private SkillExecutionDao taskAttachments;
     private SkillInstallationMapper app;
@@ -118,7 +120,9 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         when(positionService.currentState(any())).thenReturn(cn.jia.agent.position.PositionSkillState.empty());
         when(positionService.read(any())).thenReturn(new cn.jia.agent.position.PositionSkillService.View(null,null,0,cn.jia.agent.position.PositionSkillState.empty()));
         marketplace=new SkillMarketplaceService(market,app,trade,versions,runtimes,provider(writer),provider(packages),provider(authentication),provider(sessions),manager,positionService);
-        service=new SkillManagementService(db,market,app,marketplace,trade,versions,runtimes,installations,authentication,identityLocks,provider(packages),provider(writer),provider(sessions),provider(capabilities),manager);
+        rentalMapper=mock(cn.jia.economy.mapper.EconomyHostingRentMapper.class);
+        rentalAdmission=new HostingRentWorkAdmission(rentalMapper,true);
+        service=new SkillManagementService(db,market,app,marketplace,trade,versions,runtimes,installations,authentication,identityLocks,provider(packages),provider(writer),provider(sessions),provider(capabilities),manager,rentalAdmission);
         dispatch=new SkillInstallDispatchService(app,market,marketplace,versions,authentication,commands,provider(sessions),manager);dispatch.setManagement(service);
         recoveryMapper=sql.getMapper(AgentSkillInstallRecoveryMapper.class);
         recoveryDao=new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class));
@@ -186,7 +190,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         when(agents.requireApiKeyOwnedAgent(ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
         when(agents.requireOwnedAgentCapabilities(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
         versions=new SkillAgentVersions(app,rows,provider(agents),owner,manager);
-        service=new SkillManagementService(db,market,app,marketplace,trade,versions,rows,installs,authentication,identities,provider(packages),provider(writer),provider(sessions),provider(capabilities),manager);
+        service=new SkillManagementService(db,market,app,marketplace,trade,versions,rows,installs,authentication,identities,provider(packages),provider(writer),provider(sessions),provider(capabilities),manager,rentalAdmission);
     }
     /** Immutable snapshot of ALL relevant SQL business rows, including versions and transport leases. */
     protected Map<String,Object> businessSnapshot() {
@@ -421,7 +425,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         assertNotNull(upgrade.get("orderId"));assertEquals("20",object(upgrade.get("price")).get("amountMinor"));
         assertEquals("INSTRUCTION",object(upgrade.get("target")).get("kind"));
         finishInstall(upgrade);assertEquals("SUCCEEDED",current(upgrade).get("status"));
-        assertEquals(orders,count("economy_skill_order"));
+        assertEquals(orders+1,count("economy_skill_order"));
     }
     @Test void instructionNativeBindingUsesRealInstallationAndDisablingClosesAdmission() throws Exception {
         publishInstruction();var first=packageChange("INSTALL",null,"0","spv_pdf_1");finishInstall(first);first=current(first);
@@ -548,6 +552,37 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         assertFalse(Boolean.TRUE.equals(tx.execute(s->service.qualifies(scope(),db.findAuthorization("0",ACTOR.clientId(),id)))));
         assertThrows(SkillMarketplaceException.class,()->service.admit(scope(),"pdf-export",id,()->"never"));
         assertEquals(0,count("agent_skill_change_command"));assertEquals(1,count("economy_skill_order"));
+    }
+    private void rentalStatus(String status) {
+        when(rentalMapper.selectLatestLeaseForUpdate("0",ACTOR.clientId(),AGENT)).thenReturn(
+                new cn.jia.economy.entity.EconomyHostingLeaseEntity().setStatus(status).setPaidThrough(Long.MAX_VALUE));
+    }
+    @Test void rentalLockBlocksNewQuotesAndPreviouslyQuotedInstallWithoutPartialWrites() {
+        var input=quoteData();var quote=service.quote(ACTOR,"before-lock",input,false);
+        rentalStatus("LOCKED");
+        assertEquals(quote,service.quote(ACTOR,"before-lock",input,false));
+        assertThrows(HostingRentApplicationException.class,()->service.quote(ACTOR,"after-lock",input,false));
+        assertThrows(HostingRentApplicationException.class,()->service.create(ACTOR,AGENT,"after-lock","request",creation(quote,input),false));
+        assertEquals(100_000_000L,wallet());assertEquals(0,count("economy_skill_order"));
+        assertEquals(0,count("agent_skill_change"));assertEquals(0,count("agent_outbox_event"));
+    }
+    @Test void acceptedInstallCanReplayAndCompleteAfterRentalStartsFinishing() {
+        var input=quoteData();var quote=service.quote(ACTOR,"accepted-quote",input,false);var body=creation(quote,input);
+        var change=service.create(ACTOR,AGENT,"accepted-create","request",body,false);
+        rentalStatus("FINISHING");
+        assertEquals(change,service.create(ACTOR,AGENT,"accepted-create","request",body,false));
+        finishInstall(change);
+        assertEquals("SUCCEEDED",current(change).get("status"));assertEquals("CAPTURED",current(change).get("fundingStatus"));
+        assertEquals(99_999_950L,wallet());assertEquals(1,count("economy_skill_order"));
+    }
+    @Test void rentalFinishingBlocksNewUninstallButLockedLeaseStillAllowsPolicyChanges() {
+        var first=install();finishInstall(first);var installed=current(first);
+        rentalStatus("FINISHING");long balance=wallet();int changes=count("agent_skill_change");
+        assertThrows(HostingRentApplicationException.class,()->policyChange("UNINSTALL",installed));
+        assertEquals(changes,count("agent_skill_change"));assertEquals(balance,wallet());
+        rentalStatus("LOCKED");
+        var disabled=policyChange("DISABLE",installed);
+        assertEquals("SUCCEEDED",disabled.get("status"));assertEquals(balance,wallet());
     }
     @Test void installQuoteChargesFiftyWenIndependentOfPublishedProductPriceAndDoesNotReserve() {
         var input=quoteData(); long before=wallet();
@@ -911,10 +946,10 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         var done=current(removal);assertEquals("SUCCEEDED",done.get("status"));
         var request=map("action","INSTALL","agentId",AGENT,"skillKey","pdf-export","sourceSkillInstallationId",null,"targetProductVersionId","spv_pdf_1",
                 "expectedAgentVersion",Long.toString(versions.readOwned(ACTOR,AGENT)),"expectedSkillRevision",done.get("skillRevision"),"approvedPermissions",List.of());
-        // A new paid operation does not borrow the old adoption receipt as free-install authority.
+        // Paid reinstall still requires valid evidence that the old installation was removed.
         jdbc.update("UPDATE agent_skill_result_receipt SET request_hash=?",new byte[32]);
-        var independent=service.quote(ACTOR,"independent-adopted-reinstall",request,false);
-        assertEquals("PURCHASE",independent.get("coverage"));assertEquals("50",object(independent.get("price")).get("amountMinor"));
+        assertEquals("SKILL_ALREADY_ORDERED",assertThrows(SkillMarketplaceException.class,
+                ()->service.quote(ACTOR,"tampered-adopted-reinstall",request,false)).code());
         assertEquals(1,count("economy_skill_order"));assertEquals(balance,wallet());
         jdbc.update("UPDATE agent_skill_result_receipt SET request_hash=?",HexFormat.of().parseHex("d".repeat(64)));
         var quote=service.quote(ACTOR,"adopted-reinstall-quote",request,false);

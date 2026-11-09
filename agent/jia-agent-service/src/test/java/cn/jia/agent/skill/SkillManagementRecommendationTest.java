@@ -46,7 +46,7 @@ class SkillManagementRecommendationTest {
             when(marketplace.available(ACTOR)).thenReturn(true);
             service=new SkillManagementService(db,market,mock(SkillInstallationMapper.class),marketplace,trade,versions,
                     mock(AgentRuntimeDao.class),mock(AgentRuntimeV1InstallationDao.class),auth,mock(AgentIdentityService.class),
-                    provider(packages),provider(writer),provider(sessions),provider(catalog),tx);
+                    provider(packages),provider(writer),provider(sessions),provider(catalog),tx,mock(cn.jia.agent.hosting.HostingRentWorkAdmission.class));
         }
         void installed(String agent) {
             var state=new SkillManagedStateEntity().setActiveInstallationId("si_"+agent).setSkillKey("vision")

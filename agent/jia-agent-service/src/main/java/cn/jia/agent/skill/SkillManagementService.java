@@ -4,6 +4,7 @@ import cn.jia.economy.common.SkillOperationFees;
 import cn.jia.agent.dao.*;
 import cn.jia.agent.entity.*;
 import cn.jia.agent.hosting.HostingRentHttp;
+import cn.jia.agent.hosting.HostingRentWorkAdmission;
 import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import cn.jia.agent.service.*;
 import cn.jia.agent.entity.skill.*;
@@ -41,15 +42,16 @@ public final class SkillManagementService {
     private final ObjectProvider<AgentManagedSessionLookup> sessions;
     private final ObjectProvider<SkillCapabilityLookup> capabilities;
     private final TransactionTemplate tx;
+    private final HostingRentWorkAdmission hosting;
     public SkillManagementService(SkillManagementMapper db,SkillCatalogMapper market,
             SkillInstallationMapper app,SkillMarketplaceService marketplace,SkillTradeService trade,SkillAgentVersions versions,
             AgentRuntimeDao runtimes,AgentRuntimeV1InstallationDao installations,AgentRuntimeAuthenticationService authentication,AgentIdentityService identities,
             ObjectProvider<SkillPackages> packages,ObjectProvider<SkillInstallCommandWriter> writer,
             ObjectProvider<AgentManagedSessionLookup> sessions,ObjectProvider<SkillCapabilityLookup> capabilities,
-            PlatformTransactionManager manager) {
+            PlatformTransactionManager manager, HostingRentWorkAdmission hosting) {
         this.db=db;this.market=market;this.app=app;this.marketplace=marketplace;this.trade=trade;this.versions=versions;this.runtimes=runtimes;
         this.installations=installations;this.authentication=authentication;this.identities=identities;this.packages=packages;this.writer=writer;
-        this.sessions=sessions;this.capabilities=capabilities;this.tx=new TransactionTemplate(manager);
+        this.sessions=sessions;this.capabilities=capabilities;this.tx=new TransactionTemplate(manager);this.hosting=hosting;
     }
     private org.springframework.beans.factory.ObjectProvider<cn.jia.agent.position.PositionSkillService> positionProvider;
     @org.springframework.beans.factory.annotation.Autowired
@@ -341,6 +343,7 @@ public final class SkillManagementService {
             var prior=replay(a,"/agent/skill-orders/quotes",key,data);if(prior!=null)return decode(db.findQuote(a.tenantId(),a.clientId(),prior.getResourceId()).getDtoJson(),"Quote");
             // Identity/ownership locks are already held. An accepted identical request wins
             // over stale intent preconditions, including a concurrent admission of this key.
+            hosting.requireSkillChange(a.tenantId(),a.clientId(),agent,text(data,"action"));
             requireVersion(a,agent,Long.valueOf(text(data,"expectedAgentVersion")));
             if("UPGRADE".equals(data.get("action")))require(online(a,agent),409,"SKILL_AGENT_OFFLINE");
             var state=state(a,agent,text(data,"skillKey"));intent(a,state,data);published(a,prepared);
@@ -382,6 +385,7 @@ public final class SkillManagementService {
             var prior=replay(a,route,key,data);if(prior!=null)return visibleChange(a,agent,prior.getResourceId(),false);
             // Recheck replay under the same actor/runtime/ownership locks BEFORE new-intent
             // CAS and readiness. The first concurrent acceptance consumes the agent version.
+            hosting.requireSkillChange(a.tenantId(),a.clientId(),agent,text(data,"action"));
             requireVersion(a,agent,Long.valueOf(text(data,"expectedAgentVersion")));
             if(Set.of("UPGRADE","ENABLE").contains(text(data,"action")))require(online(a,agent),409,"SKILL_AGENT_OFFLINE");
             var state=state(a,agent,text(data,"skillKey"));intent(a,state,data);

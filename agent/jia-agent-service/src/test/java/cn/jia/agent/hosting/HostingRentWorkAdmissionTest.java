@@ -41,6 +41,28 @@ class HostingRentWorkAdmissionTest {
         new HostingRentWorkAdmission(mapper, false).requireNewWork("Tenant-A", "Client-A", "agt-test");
         verifyNoInteractions(mapper);
     }
+    @Test void skillMutationRulesAreCentralAndReadOnly() {
+        var mapper = mock(EconomyHostingRentMapper.class);
+        var admission = new HostingRentWorkAdmission(mapper, true);
+        var lease = new EconomyHostingLeaseEntity().setStatus("LOCKED").setPaidThrough(Long.MAX_VALUE);
+        when(mapper.selectLatestLeaseForUpdate("tenant", "client", "agent")).thenReturn(lease);
+        for (String action : java.util.List.of("INSTALL", "UPGRADE"))
+            assertThrows(HostingRentApplicationException.class, () -> admission.requireSkillChange("tenant", "client", "agent", action));
+        for (String action : java.util.List.of("ENABLE", "DISABLE", "UNINSTALL"))
+            assertDoesNotThrow(() -> admission.requireSkillChange("tenant", "client", "agent", action));
+        lease.setStatus("FINISHING");
+        for (String action : java.util.List.of("INSTALL", "UPGRADE", "ENABLE", "DISABLE", "UNINSTALL"))
+            assertThrows(HostingRentApplicationException.class, () -> admission.requireSkillChange("tenant", "client", "agent", action));
+        verify(mapper, times(10)).selectLatestLeaseForUpdate("tenant", "client", "agent");
+        verifyNoMoreInteractions(mapper);
+    }
+    @Test void absentSchemaSkipsSkillRentalQueries() {
+        var mapper = mock(EconomyHostingRentMapper.class);
+        var admission = new HostingRentWorkAdmission(mapper, false);
+        admission.requireSkillChange("tenant", "client", "agent", "INSTALL");
+        admission.requireSkillChange("tenant", "client", "agent", "UNINSTALL");
+        verifyNoInteractions(mapper);
+    }
     private void verifyNoMoreInteractionsBeyondReads(EconomyHostingRentMapper mapper) {
         verify(mapper, times(5)).selectLatestLeaseForUpdate("Tenant-A", "Client-A", "agt-test");
         verifyNoMoreInteractions(mapper);

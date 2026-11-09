@@ -2,6 +2,7 @@ package cn.jia.agent.hosting;
 
 import cn.jia.agent.service.AgentHostingWorkAdmission;
 import cn.jia.economy.mapper.EconomyHostingRentMapper;
+import cn.jia.economy.entity.EconomyHostingLeaseEntity;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -16,10 +17,28 @@ public final class HostingRentWorkAdmission implements AgentHostingWorkAdmission
     }
     @Override
     public void requireNewWork(String tenantId, String clientId, String agentId) {
-        if (!schemaEnabled) return; // No hosting schema/managed leases in unchanged installations.
+        requirePaidPeriod(lease(tenantId, clientId, agentId));
+    }
+
+    /** New skill intents only. Accepted operations/recovery do not recheck rental eligibility. */
+    public void requireSkillChange(String tenantId, String clientId, String agentId, String action) {
+        var lease = lease(tenantId, clientId, agentId);
+        if ("INSTALL".equals(action) || "UPGRADE".equals(action)) {
+            requirePaidPeriod(lease);
+        } else if (lease != null && "FINISHING".equals(lease.getStatus())) {
+            // Keep the old execution environment stable while the relationship drains.
+            throw new HostingRentApplicationException(409, "HOSTING_RENT_NOT_ACTIVE");
+        }
+    }
+
+    private EconomyHostingLeaseEntity lease(String tenantId, String clientId, String agentId) {
+        if (!schemaEnabled) return null;
         HostingRentHttp.exact(tenantId, 50); HostingRentHttp.exact(clientId, 50); HostingRentHttp.exact(agentId, 100);
-        var lease = mapper.selectLatestLeaseForUpdate(tenantId, clientId, agentId);
-        if (lease == null || "REFUNDED".equals(lease.getStatus())) return; // Historical/local Agent is not charged.
+        return mapper.selectLatestLeaseForUpdate(tenantId, clientId, agentId);
+    }
+
+    private void requirePaidPeriod(EconomyHostingLeaseEntity lease) {
+        if (lease == null || "REFUNDED".equals(lease.getStatus())) return;
         if (!"ACTIVE".equals(lease.getStatus()) || lease.getPaidThrough() == null) {
             throw new HostingRentApplicationException(409, "HOSTING_RENT_NOT_ACTIVE");
         }
