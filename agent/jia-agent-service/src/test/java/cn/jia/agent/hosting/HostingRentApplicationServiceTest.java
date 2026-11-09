@@ -97,6 +97,52 @@ class HostingRentApplicationServiceTest {
         when(rent.attachBinding("0", "Client-A", "hrl-test", "17")).thenReturn(1);
     }
 
+    private void existingInvitation() {
+        var binding = new AgentPersonaBindingEntity().setId(17L).setAgentId(AGENT).setPersonaCode("wuyong")
+                .setJiacn("Tenant-A").setClientId("Client-A").setStatus(1);
+        var identity = new AgentIdentityRegistryEntity().setCanonicalAgentId(AGENT).setBindingId(17L);
+        when(roots.lockBindings("Client-A", "wuyong")).thenReturn(List.of(binding));
+        when(bindings.findByIdForUpdate(17L)).thenReturn(binding);
+        when(identities.requireRegistrationIdentityInScope("0", "Client-A", "Tenant-A", AGENT)).thenReturn(identity);
+        when(identities.requireActiveBinding(identity, null)).thenReturn(binding);
+        when(rent.selectPlanForUpdate(anyString(), anyString(), anyString(), eq(1L)))
+                .thenReturn(new EconomyHostingRentPlanEntity().setPlanId("plan").setPlanVersion(1L)
+                        .setAmountWen(1000000000L).setPeriodSeconds(2592000L).setStatus("ACTIVE"));
+    }
+
+    @Test void newInitialQuoteRejectsAnyUnreleasedLeaseIncludingFinishing() {
+        existingInvitation();
+        for (String state : List.of("ACTIVE", "LOCKED", "FINISHING", "FUNDS_RESERVED")) {
+            when(rent.selectLiveLeaseByAgentForUpdate("0", "Client-A", AGENT))
+                    .thenReturn(new EconomyHostingLeaseEntity().setStatus(state));
+            assertEquals("HOSTING_RENT_LEASE_CONFLICT", assertThrows(HostingRentApplicationException.class,
+                    () -> application.quote(ACTOR, "wuyong", KEY, Map.of("purpose", "INITIAL", "agentId", AGENT))).code());
+        }
+        verifyNoInteractions(ledger, reconciler);
+        assertEquals(0, count());
+    }
+
+    @Test void initialQuoteReplayKeepsOriginalFactWithoutNewInvitationAdmission() {
+        when(rent.selectQuoteByActorKeyForUpdate(eq("0"), eq("Client-A"), eq("USER"), eq("login-sub"), any(byte[].class)))
+                .thenReturn(new EconomyHostingRentQuoteEntity().setAgentId(AGENT).setPlanId("plan").setPlanVersion(1L));
+        when(ledger.quote(any())).thenReturn(new HostingRentQuoteReceipt("quote", HostingRentQuotePurpose.INITIAL,
+                "plan", 1L, 500L, 2592000L, "wuyong", AGENT, null, null, 1800000000000L));
+        assertEquals("quote", application.quote(ACTOR, "wuyong", KEY,
+                Map.of("purpose", "INITIAL", "agentId", AGENT)).quoteId());
+        verify(rent, never()).selectLiveLeaseByAgentForUpdate(anyString(), anyString(), anyString());
+        verifyNoInteractions(roots, bindings, identities, provider);
+    }
+
+    @Test void initialConfirmationLocksBindingBeforeLedgerChecksLiveLease() {
+        existingInvitation();
+        application.bind(ACTOR, "wuyong", KEY, confirmation());
+        var order = inOrder(bindings, ledger);
+        order.verify(bindings).findByIdForUpdate(17L);
+        order.verify(ledger).reserve(any());
+        // The ledger owns the live-slot check. No lease lock may precede the binding root.
+        verify(rent, never()).selectLiveLeaseByAgentForUpdate(anyString(), anyString(), anyString());
+    }
+
     @Test
     void lookupRetainedRightsExposesSourceAndOriginalExpiryWithoutWalletReceipts() {
         var identity = new AgentIdentityRegistryEntity().setCanonicalAgentId(AGENT);

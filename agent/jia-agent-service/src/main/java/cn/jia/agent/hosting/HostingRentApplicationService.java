@@ -96,6 +96,10 @@ public final class HostingRentApplicationService {
                 }
                 requireExisting(actor, owner, existing.getAgentId(), personaCode);
                 canonical = existing.getAgentId();
+                // A retained execution identity is not permission to start another invitation.
+                // FINISHING keeps the live slot until old work and private handover are complete.
+                if (rent.selectLiveLeaseByAgentForUpdate(actor.tenantId(), actor.clientId(), canonical) != null)
+                    throw conflict("HOSTING_RENT_LEASE_CONFLICT");
             } else {
                 if (requestedAgent != null) throw forbidden();
                 canonical = "agt_" + UUID.randomUUID().toString().replace("-", "");
@@ -138,7 +142,6 @@ public final class HostingRentApplicationService {
             if (prior != null) return mutationView(quote.getAgentId(), ledger.reserve(
                     new HostingRentReserveCommand(actor.scope(), actor.principal(), idempotencyKey, hash, quote.getQuoteId())));
             requireProvisioner(actor, owner);
-            rent.selectLiveLeaseByAgentForUpdate(actor.tenantId(), actor.clientId(), quote.getAgentId());
             AgentPersonaEntity persona = persona(personaCode);
             AgentPersonaBindingEntity binding = currentBinding(actor, owner, personaCode);
             if (binding != null) requireExisting(actor, owner, quote.getAgentId(), personaCode);
