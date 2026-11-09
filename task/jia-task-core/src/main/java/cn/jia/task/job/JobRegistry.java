@@ -34,7 +34,7 @@ public class JobRegistry {
         if (name == null || name.trim().isEmpty()) {
             throw new IllegalArgumentException("JobHandler name cannot be empty");
         }
-        handlers.put(name, handler);
+        registerUnique(name, handler);
     }
 
     /**
@@ -50,7 +50,14 @@ public class JobRegistry {
         if (name == null || name.trim().isEmpty()) {
             throw new IllegalArgumentException("JobHandler name cannot be empty");
         }
-        handlers.put(name, handler);
+        registerUnique(name, handler);
+    }
+
+    private void registerUnique(String name, JobHandler handler) {
+        JobHandler existing = handlers.putIfAbsent(name, handler);
+        if (existing != null && existing != handler) {
+            throw new IllegalStateException("Job handler already registered: " + name);
+        }
     }
 
     /**
