@@ -1,12 +1,15 @@
 package cn.jia.task.mapper;
 
 import cn.jia.task.entity.ScheduledWorkRow;
+import com.baomidou.mybatisplus.annotation.InterceptorIgnore;
 import cn.jia.task.scheduling.ScheduleKey;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import java.util.List;
 
 /** Explicit process partition on every operation, including discovery before ORDER/LIMIT. */
+// SQL owns this table's process partition; avoid a second parser rewriting locking clauses.
+@InterceptorIgnore(tenantLine = "true")
 public interface ScheduledWorkMapper {
     void ensure(@Param("tenant") String tenant, @Param("key") ScheduleKey key);
     ScheduledWorkRow lock(@Param("tenant") String tenant, @Param("key") ScheduleKey key);
