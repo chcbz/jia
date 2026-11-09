@@ -99,7 +99,8 @@ class HostingRentApplicationServiceTest {
 
     private void existingInvitation() {
         var binding = new AgentPersonaBindingEntity().setId(17L).setAgentId(AGENT).setPersonaCode("wuyong")
-                .setJiacn("Tenant-A").setClientId("Client-A").setStatus(1);
+                .setJiacn("Tenant-A").setStatus(1);
+        binding.setClientId("Client-A");
         var identity = new AgentIdentityRegistryEntity().setCanonicalAgentId(AGENT).setBindingId(17L);
         when(roots.lockBindings("Client-A", "wuyong")).thenReturn(List.of(binding));
         when(bindings.findByIdForUpdate(17L)).thenReturn(binding);
