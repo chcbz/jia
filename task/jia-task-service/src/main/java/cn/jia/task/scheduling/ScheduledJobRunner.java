@@ -40,15 +40,18 @@ public final class ScheduledJobRunner implements AutoCloseable {
     }
 
     /** Called only by the coordinator after ownership confirmation. Does not wait for business completion. */
-    public synchronized long tick() {
+    public long tick() { return tick(node); }
+
+    /** Cluster and this process's node coordinator share the same bounded worker capacity. */
+    public synchronized long tick(String targetNode) {
         if (closing || capacity.availablePermits() == 0) return Long.MAX_VALUE;
-        Long delay = store.nextDelay(node);
+        Long delay = store.nextDelay(targetNode);
         if (delay == null) return Long.MAX_VALUE;
         if (delay > 0) return delay;
         int slots = Math.min(batch, capacity.availablePermits());
         capacity.acquireUninterruptibly(slots);
         java.util.List<ScheduledWorkStore.LeasedWork> claims;
-        try { claims = store.claimDue(node, slots, leaseMillis); }
+        try { claims = store.claimDue(targetNode, slots, leaseMillis); }
         catch (RuntimeException failure) { capacity.release(slots); throw failure; }
         capacity.release(slots - claims.size());
         // Due rows may be locked by another transaction. Do not spin on an unchanged overdue index.
@@ -60,7 +63,7 @@ public final class ScheduledJobRunner implements AutoCloseable {
             workers.execute(() -> execute(claim, pulse));
         }
         if (capacity.availablePermits() == 0) return Long.MAX_VALUE;
-        delay = store.nextDelay(node);
+        delay = store.nextDelay(targetNode);
         return delay == null ? Long.MAX_VALUE : delay;
     }
     private void renew(ScheduledWorkStore.LeasedWork claim) {
