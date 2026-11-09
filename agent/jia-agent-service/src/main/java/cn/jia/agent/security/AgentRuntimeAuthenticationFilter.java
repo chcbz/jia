@@ -82,13 +82,13 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
         final AgentRuntimeAuthentication authentication;
         try {
             if (!allowed(request) || request.getHeader("Origin") != null) {
-                reject(response, 403); return; // native-only; no browser credential exposure/CORS lane
+                reject(request, response, 403); return; // native-only; no browser credential exposure/CORS lane
             }
             boolean handshake = request.getRequestURI().equals(request.getContextPath() + "/ws/agent/channel");
             boolean ack = request.getRequestURI().startsWith(request.getContextPath() + "/agent/runtime/v1/commands/");
             authentication = service.authenticate(sessionHeaders(request), !handshake && !ack);
-        } catch (org.springframework.dao.DataAccessException unavailable) { reject(response, 503); return; }
-        catch (RuntimeException ignored) { reject(response, 401); return; }
+        } catch (org.springframework.dao.DataAccessException unavailable) { reject(request, response, 503); return; }
+        catch (RuntimeException ignored) { reject(request, response, 401); return; }
         var previous = SecurityContextHolder.getContext();
         var context = SecurityContextHolder.createEmptyContext();
         context.setAuthentication(authentication);
@@ -157,8 +157,16 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
         if (values.size() != 1) throw AgentRuntimeAuthenticationService.denied();
         return values.getFirst();
     }
-    private static void reject(HttpServletResponse response, int status) throws IOException {
-        response.setStatus(status); response.setContentType("application/json");
-        response.getWriter().write("{\"code\":\"AGENT_RUNTIME_UNAUTHENTICATED\"}");
+    private static void reject(HttpServletRequest request, HttpServletResponse response, int status) throws IOException {
+        String requestId = cn.jia.core.filter.RequestIdFilter.current(request);
+        var result = cn.jia.core.entity.JsonResult.failure(
+                status == 503 ? "AGENT_RUNTIME_UNAVAILABLE" : "AGENT_RUNTIME_UNAUTHENTICATED",
+                status == 503 ? "Runtime authentication is unavailable" : "Runtime authentication required");
+        result.setRequestId(requestId);
+        response.setStatus(status);
+        response.setContentType("application/json");
+        response.setCharacterEncoding(java.nio.charset.StandardCharsets.UTF_8.name());
+        response.setHeader(cn.jia.core.filter.RequestIdFilter.HEADER_NAME, requestId);
+        response.getWriter().write(cn.jia.core.util.JsonUtil.toJson(result));
     }
 }

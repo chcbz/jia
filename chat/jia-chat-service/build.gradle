@@ -635,6 +635,11 @@ tasks.register('r9TenantPrivateChat', Test) {
 def runtimeCapabilityRegressionSourceSet = sourceSets.create('runtimeCapabilityRegression') {
     java.srcDir 'src/test/java'
     java.include 'cn/jia/chat/service/SkillCapabilityExecutionFactsTest.java'
+    java.include 'cn/jia/chat/handler/AgentWebSocketSkillExecutionRegistrationTest.java'
+    java.include 'cn/jia/chat/handler/AgentWebSocketRuntimeAuthenticationTest.java'
+    java.include 'cn/jia/chat/handler/AgentWebSocketUnifiedReadinessTest.java'
+    java.include 'cn/jia/chat/handler/SkillExecutionFixtures.java'
+    java.include 'cn/jia/chat/handler/UnifiedRuntimeTestSupport.java'
     java.include 'cn/jia/chat/service/ChatActionCapabilityServiceTest.java'
     java.include 'cn/jia/chat/service/NativeSkillScriptSessionLookupImplTest.java'
     resources.srcDir 'src/test/resources'

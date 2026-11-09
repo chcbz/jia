@@ -311,6 +311,36 @@ class AgentRuntimePersistentSessionFenceTest {
         assertThrows(RuntimeException.class,()->auth.currentRegisteredProof("0","client",AGENT));
     }
 
+    @Test void sameSocketRefreshDuringPersistentValidationDoesNotFenceHttpAuthentication() {
+        var session = auth.issue(installation, request("host", "boot"), 1000); row.setStatus("online");
+        var proof = auth.verify(headers(session));
+        AtomicBoolean connected = new AtomicBoolean(true);
+        auth.bind("socket", proof, connected::get);
+        AtomicBoolean refresh = new AtomicBoolean(true);
+        when(rows.findInScope("0", "client", AGENT)).thenAnswer(inv -> {
+            if (refresh.compareAndSet(true, false)) auth.bind("socket", proof, connected::get);
+            return row;
+        });
+        assertTrue(auth.isCurrentBinding("socket", "0", "client", "owner", AGENT, "boot"));
+        assertNotNull(auth.authenticate(headers(session), true));
+        connected.set(false);
+        assertFalse(auth.isCurrentBinding("socket", "0", "client", "owner", AGENT, "boot"));
+        assertThrows(RuntimeException.class, () -> auth.authenticate(headers(session), true));
+    }
+
+    @Test void replacingSocketDuringValidationStillFencesOldChannel() {
+        var session = auth.issue(installation, request("host", "boot"), 1000); row.setStatus("online");
+        var proof = auth.verify(headers(session)); auth.bind("old", proof, () -> true);
+        AtomicBoolean replace = new AtomicBoolean(true);
+        when(rows.findInScope("0", "client", AGENT)).thenAnswer(inv -> {
+            if (replace.compareAndSet(true, false)) auth.bind("new", proof, () -> true);
+            return row;
+        });
+        assertFalse(auth.isCurrentBinding("old", "0", "client", "owner", AGENT, "boot"));
+        assertTrue(auth.isCurrentBinding("new", "0", "client", "owner", AGENT, "boot"));
+        auth.disconnect("old"); assertNotNull(auth.authenticate(headers(session), true));
+    }
+
     @Test void registrationReceiptAndDisconnectCannotRevokeReplacementChannel() {
         var session = auth.issue(installation, request("host", "boot"), 1000); row.setStatus("online");
         var proof = auth.verify(headers(session));

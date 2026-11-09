@@ -891,24 +891,10 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 throw new IllegalArgumentException("Registration proof mismatch");
             }
             // Identity and generation are fixed by installation-derived native handshake proof.
-            stage = "runtime_disconnect";
-            if (replyPreviews != null) replyPreviews.closeSession(session.getId());
-        if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
-            // A re-registration on the same socket must first retire its old declaration. The
-            // replacement is not observable until register, auth bind and receipt delivery all
-            // succeed below.
-            successfullyRegisteredAgentIds.remove(session.getId());
-            sessionRuntimeCapabilities.remove(session.getId());
-            sessionDurableStateHealthy.remove(session.getId());
-            sessionReadyCommandTypes.remove(session.getId());
-            sessionNativeBountyExecution.remove(session.getId());
-            sessionNativeProviderCredentialBinding.remove(session.getId());
-            sessionControlledImageBountyExecution.remove(session.getId());
-            sessionControlledImageV3.remove(session.getId());
-            removeTypedDeliberationSession(session.getId());
-            if(typedInspectionSessions!=null)typedInspectionSessions.remove(session.getId());
-            if(nativeTextFileSessions!=null)nativeTextFileSessions.remove(session.getId());
-            if(skillExecutionSessions!=null)skillExecutionSessions.suspend(session.getId());
+            // Capability refresh is not a disconnect. Keep the previously acknowledged
+            // declaration live while validating and delivering its replacement on this
+            // authenticated socket. Any failed refresh still revokes it in the catch
+            // path; an actual close/offline event continues to revoke immediately.
             stage = "registration_payload";
             Set<String> readyCommandTypes = parseReadyCommandTypes(payload.get("readyCommandTypes"));
             if (payload.containsKey("durableStateHealthy") && !(payload.get("durableStateHealthy") instanceof Boolean)) {

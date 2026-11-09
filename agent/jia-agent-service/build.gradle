@@ -999,6 +999,7 @@ def positionSecuritySourceSet = sourceSets.create('positionSecurityTest') {
     java.srcDir 'src/test/java'
     java.include 'cn/jia/agent/security/AgentRuntimeSecurityIntegrationTest.java'
     java.include 'cn/jia/agent/security/AgentRuntimePersistentSessionFenceTest.java'
+    java.include 'cn/jia/agent/security/AgentRuntimeErrorEnvelopeTest.java'
     compileClasspath += sourceSets.main.output
     runtimeClasspath += output + compileClasspath
 }

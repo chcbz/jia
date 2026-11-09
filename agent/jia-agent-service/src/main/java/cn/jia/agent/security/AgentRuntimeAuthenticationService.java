@@ -211,7 +211,11 @@ public class AgentRuntimeAuthenticationService implements cn.jia.agent.service.A
         if (!exact(sessionId, 128) || proof == null || connected == null || !connected.getAsBoolean()) throw denied();
         requireAdmitted(proof.scope().tenantId(), proof.scope().clientId());
         validateCurrent(proof, true);
-        bindings.put(proof.scope(), new Binding(sessionId, proof, connected));
+        // Repeated declarations on one authenticated socket retain their channel
+        // identity. A new socket/proof still replaces and fences the previous one.
+        bindings.compute(proof.scope(), (scope, previous) -> previous != null
+                && previous.sessionId().equals(sessionId) && previous.proof().equals(proof)
+                ? previous : new Binding(sessionId, proof, connected));
         var scope = proof.scope();
         return new Receipt("native-runtime-v1", scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.agentId(),
                 scope.runtimeInstanceId(), proof.installationId(), proof.hostId(), proof.sessionGeneration(),
