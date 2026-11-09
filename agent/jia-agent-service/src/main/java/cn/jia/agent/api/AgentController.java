@@ -203,7 +203,7 @@ public class AgentController {
         var body = HostingRentHttp.body(rawBody, Set.of("agentId", "leaseId"), Set.of());
         if (hostingRent == null) throw new HostingRentApplicationException(503, "HOSTING_RENT_NOT_READY");
         return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, "private, no-store")
-                .body(JsonResult.success(hostingRent.remove(actor, personaCode, body.get("agentId"), body.get("leaseId"))));
+                .body(JsonResult.success(hostingRent.remove(actor, personaCode, HostingRentHttp.required(body, "agentId"), HostingRentHttp.required(body, "leaseId"))));
     }
 
     private AgentPersonaProvisioningService requirePersonaProvisioningService() {
