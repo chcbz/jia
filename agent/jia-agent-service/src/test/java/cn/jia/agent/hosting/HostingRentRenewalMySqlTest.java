@@ -308,6 +308,70 @@ class HostingRentRenewalMySqlTest {
         }
         assertEquals("FINISHING", lease("a").getStatus()); assertEquals(1, charges()); assertEquals(550, balance());
     }
+    private static final String REMOVAL_AGENT = "agt_0123456789abcdef0123456789abcdef";
+    private static final HostingRentHttp.Actor REMOVAL_ACTOR = new HostingRentHttp.Actor("user", "tenant", "client", "owner");
+    private cn.jia.agent.service.AgentIdentityService removalIdentities;
+    private cn.jia.agent.dao.AgentRuntimeDao removalRuntime;
+    private ManagedHostingProvisioner removalProvider;
+    private HostingRentApplicationService removalApplication() {
+        var owners = mock(HostingRentOwnerResolver.class);
+        when(owners.requireOwner(REMOVAL_ACTOR)).thenReturn("owner");
+        removalIdentities = mock(cn.jia.agent.service.AgentIdentityService.class);
+        var identity = new cn.jia.agent.entity.AgentIdentityRegistryEntity().setCanonicalAgentId(REMOVAL_AGENT).setBindingId(7L);
+        var binding = new cn.jia.agent.entity.AgentPersonaBindingEntity().setId(7L).setAgentId(REMOVAL_AGENT)
+                .setPersonaCode("persona-remove").setJiacn("owner").setStatus(1);
+        when(removalIdentities.lockRegistrationIdentityInScope("tenant", "client", "owner", REMOVAL_AGENT)).thenReturn(identity);
+        when(removalIdentities.requireActiveBinding(identity, null)).thenReturn(binding);
+        removalRuntime = mock(cn.jia.agent.dao.AgentRuntimeDao.class);
+        removalProvider = mock(ManagedHostingProvisioner.class);
+        @SuppressWarnings("unchecked") var providers = (org.springframework.beans.factory.ObjectProvider<ManagedHostingProvisioner>)
+                mock(org.springframework.beans.factory.ObjectProvider.class);
+        when(providers.getIfAvailable()).thenReturn(removalProvider);
+        // Removing an existing lease must not depend on a current plan price or provisioner availability.
+        return new HostingRentApplicationService(new cn.jia.agent.config.AgentHostingRentProperties(false, null, null, null),
+                new EconomyPreviewGate(new EconomyPreviewProperties(true, List.of(new EconomyPreviewProperties.AllowedScope("tenant", "client")))),
+                owners, leases, mock(HostingRentLedgerService.class), service,
+                mock(cn.jia.agent.mapper.AgentHostingRentBindingMapper.class), mock(cn.jia.agent.dao.AgentPersonaBindingDao.class),
+                removalRuntime, removalIdentities, providers, mock(HostingRentReconciler.class), manager, true);
+    }
+    private void removalLease() {
+        seed("remove", "ACTIVE", 500, now() + PERIOD, null);
+        jdbc.update("UPDATE economy_hosting_lease SET agent_id=?, binding_id='7' WHERE lease_id='remove'", REMOVAL_AGENT);
+    }
+    @Test void removalApplicationStopsExactLeaseWithoutDisablingIdentityOrExistingWork() {
+        removalLease();var app = removalApplication();
+        long through = leases.selectLatestLease("tenant", "client", REMOVAL_AGENT).getPaidThrough();
+        var first = app.remove(REMOVAL_ACTOR, "persona-remove", REMOVAL_AGENT, "remove");
+        long revision = jdbc.queryForObject("SELECT requested_revision FROM task_scheduled_work WHERE handler=? AND business_key='remove'",
+                Long.class, HostingRentLeaseWakeup.FINISH);
+        assertEquals(first, app.remove(REMOVAL_ACTOR, "persona-remove", REMOVAL_AGENT, "remove"));
+        assertEquals("FINISHING", first.status());assertEquals(1000, balance());assertEquals(0, charges());
+        var lease = leases.selectLatestLease("tenant", "client", REMOVAL_AGENT);
+        assertEquals(through, lease.getPaidThrough());assertEquals("7", lease.getBindingId());
+        assertEquals(revision, jdbc.queryForObject("SELECT requested_revision FROM task_scheduled_work WHERE handler=? AND business_key='remove'",
+                Long.class, HostingRentLeaseWakeup.FINISH));
+        verify(removalIdentities, never()).suspendForBinding(anyString(), anyString(), anyString(), anyLong());
+        verifyNoInteractions(removalRuntime, removalProvider);
+    }
+    @Test void removalRejectsStaleBindingLeaseOrWrongPersonaWithoutTouchingMoney() {
+        removalLease();var app = removalApplication();
+        assertThrows(HostingRentApplicationException.class, () -> app.remove(REMOVAL_ACTOR, "other", REMOVAL_AGENT, "remove"));
+        assertThrows(HostingRentApplicationException.class, () -> app.remove(REMOVAL_ACTOR, "persona-remove", REMOVAL_AGENT, "missing"));
+        jdbc.update("UPDATE economy_hosting_lease SET binding_id='8' WHERE lease_id='remove'");
+        assertThrows(HostingRentApplicationException.class, () -> app.remove(REMOVAL_ACTOR, "persona-remove", REMOVAL_AGENT, "remove"));
+        assertEquals("ACTIVE", leases.selectLatestLease("tenant", "client", REMOVAL_AGENT).getStatus());
+        assertEquals(1000, balance());assertEquals(0, charges());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM task_scheduled_work", Integer.class));
+    }
+    @Test void removalApplicationRollsBackRentalAndFinishingWorkWithCallingTransaction() {
+        removalLease();var app = removalApplication();
+        assertThrows(IllegalStateException.class, () -> new org.springframework.transaction.support.TransactionTemplate(manager)
+                .executeWithoutResult(tx -> {app.remove(REMOVAL_ACTOR, "persona-remove", REMOVAL_AGENT, "remove");throw new IllegalStateException("caller rollback");}));
+        assertEquals("ACTIVE", leases.selectLatestLease("tenant", "client", REMOVAL_AGENT).getStatus());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM task_scheduled_work", Integer.class));
+        assertEquals(1000, balance());assertEquals(0, charges());
+    }
+
     private HostingRentRenewalService.Result stop(String leaseId) {
         return service.stopRenewal(scope, new EconomyPrincipal(EconomyPrincipalType.USER, "user"), leaseId);
     }

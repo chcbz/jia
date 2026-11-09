@@ -43,6 +43,7 @@ public final class HostingRentApplicationService {
     private final HostingRentOwnerResolver owners;
     private final EconomyHostingRentMapper rent;
     private final HostingRentLedgerService ledger;
+    private final HostingRentRenewalService renewal;
     private final AgentHostingRentBindingMapper roots;
     private final AgentPersonaBindingDao bindings;
     private final AgentRuntimeDao runtimes;
@@ -55,12 +56,13 @@ public final class HostingRentApplicationService {
 
     public HostingRentApplicationService(AgentHostingRentProperties properties, EconomyPreviewGate preview,
             HostingRentOwnerResolver owners, EconomyHostingRentMapper rent, HostingRentLedgerService ledger,
+            HostingRentRenewalService renewal,
             AgentHostingRentBindingMapper roots, AgentPersonaBindingDao bindings, AgentRuntimeDao runtimes,
             AgentIdentityService identities, ObjectProvider<ManagedHostingProvisioner> provisioners,
             HostingRentReconciler reconciler, PlatformTransactionManager transactionManager,
             @org.springframework.beans.factory.annotation.Value("${economy.hosting-rent.schema-enabled:false}") boolean schemaEnabled) {
         this.properties = properties; this.preview = preview; this.owners = owners; this.rent = rent;
-        this.ledger = ledger; this.roots = roots; this.bindings = bindings; this.runtimes = runtimes;
+        this.ledger = ledger; this.renewal = renewal; this.roots = roots; this.bindings = bindings; this.runtimes = runtimes;
         this.identities = identities; this.provisioners = provisioners; this.reconciler = reconciler;
         this.transactions = new TransactionTemplate(transactionManager);
         this.reads = new TransactionTemplate(transactionManager);
@@ -223,6 +225,30 @@ public final class HostingRentApplicationService {
                     actor.scope(), actor.principal(), idempotencyKey, hash, quote.getQuoteId())));
         });
     }
+
+    /** Stop the exact invitation's financial lifecycle, not its execution identity.
+     * Binding/identity -> lease -> schedule matches skill admission; no task or provider I/O.
+     * The retained ACTIVE identity permits already accepted work until private handover finishes. */
+    public RemovalView remove(Actor actor, String personaCode, String agentId, String leaseId) {
+        if (!schemaEnabled) throw new HostingRentApplicationException(503, "HOSTING_RENT_NOT_READY");
+        preview.requireMutationAllowed(actor.tenantId(), actor.clientId());
+        exact(personaCode, 100); requireCanonicalShape(agentId); exact(leaseId, 100);
+        return transactions.execute(status -> {
+            String owner = owners.requireOwner(actor);
+            var identity = identities.lockRegistrationIdentityInScope(
+                    actor.tenantId(), actor.clientId(), owner, agentId);
+            var binding = identities.requireActiveBinding(identity, null);
+            if (!agentId.equals(identity.getCanonicalAgentId()) || !personaCode.equals(binding.getPersonaCode()))
+                throw forbidden();
+            var lease = ownedLease(actor, leaseId, agentId);
+            if (!personaCode.equals(lease.getPersonaCode())
+                    || !Objects.equals(Long.toString(binding.getId()), lease.getBindingId())) throw forbidden();
+            var result = renewal.stopRenewal(actor.scope(), actor.principal(), leaseId);
+            return new RemovalView(agentId, leaseId, result.status());
+        });
+    }
+
+    public record RemovalView(String agentId, String leaseId, String status) { }
 
     public LeaseView lookup(Actor actor, String agentId) {
         requireEnabled(actor); requireCanonicalShape(agentId);

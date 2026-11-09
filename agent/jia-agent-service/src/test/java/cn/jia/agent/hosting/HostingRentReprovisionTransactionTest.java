@@ -11,6 +11,7 @@ import cn.jia.economy.config.EconomyPreviewGate;
 import cn.jia.economy.config.EconomyPreviewProperties;
 import cn.jia.economy.entity.*;
 import cn.jia.economy.hosting.HostingRentLedgerService;
+import cn.jia.economy.hosting.HostingRentRenewalService;
 import cn.jia.economy.mapper.EconomyHostingRentMapper;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.ObjectProvider;
@@ -87,7 +88,7 @@ class HostingRentReprovisionTransactionTest {
         });
         app = new HostingRentApplicationService(new AgentHostingRentProperties(true, "1", "1000000000", "2592000"),
                 new EconomyPreviewGate(new EconomyPreviewProperties(true, List.of(new EconomyPreviewProperties.AllowedScope("0", "Client-A")))),
-                owners, rent, ledger, mock(AgentHostingRentBindingMapper.class), bindings, mock(AgentRuntimeDao.class), identities,
+                owners, rent, ledger, mock(HostingRentRenewalService.class), mock(AgentHostingRentBindingMapper.class), bindings, mock(AgentRuntimeDao.class), identities,
                 providers, reconciler, new DataSourceTransactionManager(dataSource), true);
     }
     @AfterEach void close() { jdbc.execute("DROP ALL OBJECTS"); }

@@ -1,6 +1,9 @@
 package cn.jia.agent.api;
 
 import cn.jia.agent.entity.AgentPersonaBindRequestDTO;
+import cn.jia.agent.hosting.HostingRentApplicationService;
+import cn.jia.agent.hosting.HostingRentApplicationException;
+import cn.jia.agent.hosting.HostingRentHttp;
 import cn.jia.agent.entity.AgentTaskTeamRecommendationDTO;
 import cn.jia.agent.entity.AgentTaskTeamRecommendationRequestDTO;
 import cn.jia.agent.service.AbilityEvaluationService;
@@ -69,7 +72,14 @@ class AgentControllerTest {
         Object catalogResponse = controller.personaCatalog(auth);
         controller.bindPersona("wuyong", request, auth);
         controller.repairPersonaBinding(17L, auth);
-        controller.unbindPersona("wuyong", auth);
+        var rent = mock(HostingRentApplicationService.class);
+        controller.setHostingRent(rent);
+        var removal = assertInstanceOf(ResponseEntity.class, controller.unbindPersona("wuyong", auth,
+                "{\"agentId\":\"agt_0123456789abcdef0123456789abcdef\",\"leaseId\":\"lease-original\"}"
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        assertEquals("private, no-store", removal.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL));
+        verify(rent).remove(new HostingRentHttp.Actor("login-sub", "0", "Client-A", "Owner-A"),
+                "wuyong", "agt_0123456789abcdef0123456789abcdef", "lease-original");
 
         ResponseEntity<?> response = assertInstanceOf(ResponseEntity.class, catalogResponse);
         assertEquals("private, no-store", response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL));
@@ -78,7 +88,7 @@ class AgentControllerTest {
         verify(agentService).listPersonaCatalog("0", "Client-A", "Owner-A");
         verify(provisioning).bind(scope, "wuyong", "local");
         verify(provisioning).repair(scope, 17L);
-        verify(provisioning).unbind(scope, "wuyong");
+        verifyNoMoreInteractions(provisioning);
     }
 
     @Test
@@ -183,10 +193,20 @@ class AgentControllerTest {
                     () -> controller.bindPersona("wuyong", request, authentication));
             assertThrows(AgentBizException.class,
                     () -> controller.repairPersonaBinding(1L, authentication));
-            assertThrows(AgentBizException.class,
-                    () -> controller.unbindPersona("wuyong", authentication));
+            assertThrows(HostingRentApplicationException.class,
+                    () -> controller.unbindPersona("wuyong", authentication, "{}".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
         }
         verifyNoInteractions(provisioning, agentService);
+    }
+
+    @Test
+    void removalRequiresExplicitLeaseAndNeverFallsBackToDestructiveUnbind() {
+        var rent = mock(HostingRentApplicationService.class); controller.setHostingRent(rent);
+        for (String body : List.of("{}", "{\"agentId\":\"agent\"}", "{\"leaseId\":\"lease\"}")) {
+            assertThrows(HostingRentApplicationException.class, () -> controller.unbindPersona(
+                    "wuyong", jwt("Owner-A", "Client-A"), body.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        }
+        verifyNoInteractions(rent, provisioning, agentService);
     }
 
     private static JwtAuthenticationToken jwt(String jiacn, String clientId) {
@@ -195,7 +215,7 @@ class AgentControllerTest {
 
     private static JwtAuthenticationToken jwtTenant(
             String tenantId, String jiacn, String clientId) {
-        Jwt token = Jwt.withTokenValue("token").header("alg", "none")
+        Jwt token = Jwt.withTokenValue("token").subject("login-sub").header("alg", "none")
                 .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60))
                 .claim("tenant_id", tenantId).claim("tenant_claim_version", "1")
                 .claim("jiacn", jiacn).claim("client_id", clientId).build();
@@ -203,7 +223,7 @@ class AgentControllerTest {
     }
 
     private static JwtAuthenticationToken jwtClaims(Object jiacn, Object clientId) {
-        Jwt.Builder builder = Jwt.withTokenValue("token").claim("tenant_id", "0").header("alg", "none")
+        Jwt.Builder builder = Jwt.withTokenValue("token").subject("login-sub").claim("tenant_id", "0").header("alg", "none")
                 .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60));
         if (jiacn != null) builder.claim("jiacn", jiacn);
         if (clientId != null) builder.claim("client_id", clientId);

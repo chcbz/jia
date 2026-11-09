@@ -197,9 +197,13 @@ public class AgentController {
     }
 
     @DeleteMapping("/personas/{personaCode}/bind")
-    public Object unbindPersona(@PathVariable String personaCode, Authentication authentication) {
-        requirePersonaProvisioningService().unbind(requireJwtScope(authentication), personaCode);
-        return JsonResult.success();
+    public Object unbindPersona(@PathVariable String personaCode, Authentication authentication,
+            @cn.jia.core.annotation.ApiJsonData @RequestBody byte[] rawBody) {
+        var actor = HostingRentHttp.actor(authentication);
+        var body = HostingRentHttp.body(rawBody, Set.of("agentId", "leaseId"), Set.of());
+        if (hostingRent == null) throw new HostingRentApplicationException(503, "HOSTING_RENT_NOT_READY");
+        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .body(JsonResult.success(hostingRent.remove(actor, personaCode, body.get("agentId"), body.get("leaseId"))));
     }
 
     private AgentPersonaProvisioningService requirePersonaProvisioningService() {

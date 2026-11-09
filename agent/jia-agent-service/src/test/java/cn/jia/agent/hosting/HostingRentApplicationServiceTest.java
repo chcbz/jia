@@ -63,7 +63,7 @@ class HostingRentApplicationServiceTest {
         application = new HostingRentApplicationService(new AgentHostingRentProperties(true, "1", "1000000000", "2592000"),
                 new EconomyPreviewGate(new EconomyPreviewProperties(true, List.of(
                         new EconomyPreviewProperties.AllowedScope("0", "Client-A")))), owners, rent,
-                ledger, roots, bindings, runtimes, identities, providers, reconciler,
+                ledger, mock(HostingRentRenewalService.class), roots, bindings, runtimes, identities, providers, reconciler,
                 new DataSourceTransactionManager(dataSource), true);
         when(owners.requireOwner(ACTOR)).thenReturn("Tenant-A");
         when(roots.lockPersona("wuyong")).thenReturn(new AgentPersonaEntity().setPersonaCode("wuyong").setName("fixture")
