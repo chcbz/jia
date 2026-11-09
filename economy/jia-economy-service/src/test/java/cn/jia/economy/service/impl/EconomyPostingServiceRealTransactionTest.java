@@ -608,6 +608,48 @@ class EconomyPostingServiceRealTransactionTest {
         }
     }
 
+    @Test
+    void availableIncreaseIsTransactionalAndReplayDoesNotNotifyAgain() {
+        insertAccount("acct-user", EconomyAccountOwnerType.USER, USER, EconomyAccountPurpose.AVAILABLE, 0, false);
+        insertAccount("acct-issuance", EconomyAccountOwnerType.SYSTEM, "wen", EconomyAccountPurpose.WEN_ISSUANCE, 0, true);
+        var facts = new java.util.ArrayList<cn.jia.economy.service.EconomyAvailableBalanceListener.Increase>();
+        service.setAvailableBalanceListeners(List.of(fact -> {
+            assertTrue(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive());
+            facts.add(fact);
+        }));
+        var command = issueCommand("00000000-0000-0000-0000-000000000021", HASH_ONE, 100);
+        var first = treasury.issue(command); treasury.issue(command);
+        assertEquals(1, facts.size());
+        assertEquals(scope(), facts.getFirst().scope()); assertEquals(USER, facts.getFirst().userId());
+        assertEquals(100, facts.getFirst().amountWen()); assertEquals(first.transactionId(), facts.getFirst().transactionId());
+    }
+
+    @Test
+    void durableRegistrationFailureRollsBackBalanceJournalAndRegisteredFact() {
+        insertAccount("acct-user", EconomyAccountOwnerType.USER, USER, EconomyAccountPurpose.AVAILABLE, 0, false);
+        insertAccount("acct-issuance", EconomyAccountOwnerType.SYSTEM, "wen", EconomyAccountPurpose.WEN_ISSUANCE, 0, true);
+        jdbc.execute("CREATE TABLE balance_wakeup_test (id INT PRIMARY KEY)");
+        service.setAvailableBalanceListeners(List.of(fact -> {
+            jdbc.update("INSERT INTO balance_wakeup_test VALUES (1)");
+            throw new IllegalStateException("registration failed");
+        }));
+        assertThrows(IllegalStateException.class, () -> treasury.issue(
+                issueCommand("00000000-0000-0000-0000-000000000022", HASH_ONE, 100)));
+        assertEquals(0L, balance("acct-user")); assertEquals(0L, balance("acct-issuance"));
+        for (String table : List.of("economy_transaction", "economy_entry", "balance_wakeup_test"))
+            assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class));
+    }
+
+    @Test
+    void reservationDoesNotWakeRenewalForDecreaseOrEscrowIncrease() {
+        var held = new EconomyAccountKey("WEN", EconomyAccountOwnerType.TASK, "task-1", EconomyAccountPurpose.ESCROW);
+        insertAccount("acct-user", EconomyAccountOwnerType.USER, USER, EconomyAccountPurpose.AVAILABLE, 500, false);
+        insertAccount("acct-escrow", held.ownerType(), held.ownerId(), held.purpose(), 0, false);
+        var calls = new AtomicInteger(); service.setAvailableBalanceListeners(List.of(fact -> calls.incrementAndGet()));
+        service.post(reserveCommand("00000000-0000-0000-0000-000000000023", HASH_ONE, userAvailable(), held, 100, null));
+        assertEquals(0, calls.get());
+    }
+
     private EconomyPostingCommand issueCommand(String key, byte[] hash, long amount) {
         return issueCommand(scope(), key, hash, amount);
     }

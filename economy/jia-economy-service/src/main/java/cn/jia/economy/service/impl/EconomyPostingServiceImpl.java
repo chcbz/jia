@@ -23,6 +23,7 @@ import cn.jia.economy.service.EconomyPostingCommand;
 import cn.jia.economy.service.EconomyPostingLine;
 import cn.jia.economy.service.EconomyPostingResult;
 import cn.jia.economy.service.EconomyPostingService;
+import cn.jia.economy.service.EconomyAvailableBalanceListener;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -74,6 +75,13 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
     private final Supplier<String> transactionIds;
     private final Supplier<String> escrowIds;
     private final LongSupplier clock;
+    private List<EconomyAvailableBalanceListener> balanceListeners = List.of();
+
+    /** Domain extensions are optional when no balance-driven capability is installed. */
+    @Autowired(required = false)
+    void setAvailableBalanceListeners(List<EconomyAvailableBalanceListener> listeners) {
+        this.balanceListeners = List.copyOf(listeners);
+    }
 
     @Autowired
     public EconomyPostingServiceImpl(
@@ -204,6 +212,19 @@ public class EconomyPostingServiceImpl implements EconomyPostingService {
                 reservation.getTenantId(), reservation.getClientId(), transactionId,
                 postedLines.size(), posting.debitTotal(), posting.creditTotal(), now),
                 "journal POSTED finalize");
+
+        if (!balanceListeners.isEmpty()) {
+            for (var entry : accounts.entrySet()) {
+                EconomyAccountKey account = entry.getKey();
+                long increase = entry.getValue().signedAmount();
+                if (account.ownerType() == EconomyAccountOwnerType.USER
+                        && account.purpose() == EconomyAccountPurpose.AVAILABLE && increase > 0) {
+                    var fact = new EconomyAvailableBalanceListener.Increase(posting.command().scope(),
+                            account.ownerId(), increase, transactionId, now);
+                    for (var listener : balanceListeners) listener.increased(fact);
+                }
+            }
+        }
 
         return new EconomyPostingResult(
                 transactionId, "POSTED", EconomyConstants.CURRENCY_WEN, now,
