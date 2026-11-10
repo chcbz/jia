@@ -249,7 +249,8 @@ public final class SkillManagementService {
         var a=new HostingRentHttp.Actor(hint.getActorId(),hint.getTenantId(),hint.getClientId(),hint.getOwnerJiacn());
         enabled(a);
         return Boolean.TRUE.equals(tx.execute(t->{
-            marketplace.actorLock(a);var row=lockOriginalRuntime(a,p.agentId());
+            if(!positionChange(hint))marketplace.actorLock(a);
+            var row=lockOriginalRuntime(a,p.agentId());
             require(Objects.equals(String.valueOf(row.getBindingId()),p.bindingId())
                     && candidate.installationId().equals(row.getRuntimeInstallationId()) && candidate.hostId().equals(row.getRuntimeHostId())
                     && hosting.stoppedRelationship(p),409,"SKILL_DELIVERY_FENCED");

@@ -721,7 +721,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         assertTrue(service.settleHandoverChanges(stopped));
         assertEquals(100_000_000L,wallet());assertEquals(0,count("economy_skill_order"));
         var after=businessSnapshot();
-        for(String table:List.of("economy_transaction","economy_entry","agent_skill_installation","agent_skill_entitlement","agent_skill_management_result"))
+        for(String table:List.of("economy_transaction","economy_entry","agent_skill_actor_root","agent_skill_installation","agent_skill_entitlement","agent_skill_management_result"))
             assertEquals(before.get(table),after.get(table),table);
         assertEquals(receipt,db.findCommand("0",ACTOR.clientId(),text(command(c),"commandId")).getEvidenceJson());
         assertEquals("FAILED_FINAL",current(c).get("status"));assertEquals("NONE",current(c).get("fundingStatus"));
