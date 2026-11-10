@@ -79,9 +79,17 @@ class PlatformKnowledgeUsageHttpMySqlTest {
             when(catalog.find("platform", "gpt-6-luna", "standard")).thenAnswer(call -> Optional.of(current.get()));
             var recorder = new PlatformKnowledgeUsageRecorder(relations, costs, catalog);
             var servletPrincipal = new SecurityContextHolderAwareRequestFilter(); servletPrincipal.afterPropertiesSet();
+            var nativeFilter = new AgentRuntimeAuthenticationFilter(identity.auth);
+            // Production HttpSecurity mounts this closed filter only on its native matcher.
+            // The installation-Bearer session exchange is a different credential lane.
+            jakarta.servlet.Filter nativeLane = (request, response, chain) -> {
+                if (AgentRuntimeAuthenticationFilter.selectsRuntimeCredentialLane((jakarta.servlet.http.HttpServletRequest) request))
+                    nativeFilter.doFilter(request, response, chain);
+                else chain.doFilter(request, response);
+            };
             var mvc = MockMvcBuilders.standaloneSetup(new PlatformKnowledgeUsageController(recorder, identity.auth), new AgentRuntimeV1Controller(runtime))
                     .setControllerAdvice(new ApiEnvelopeAdvice(), new ApiRequestEnvelopeAdvice())
-                    .addFilters(new RequestIdFilter(), new AgentRuntimeAuthenticationFilter(identity.auth), servletPrincipal).build();
+                    .addFilters(new RequestIdFilter(), nativeLane, servletPrincipal).build();
             var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
             var serverError = new AtomicReference<Throwable>(); var responses = new AtomicInteger();
             server.createContext("/", exchange -> {
