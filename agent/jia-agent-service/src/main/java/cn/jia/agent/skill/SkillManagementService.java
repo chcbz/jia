@@ -222,9 +222,9 @@ public final class SkillManagementService {
         return row;
     }
 
-    /** Internal handover phase. Only pristine native marketplace intents may be cancelled without a Runtime result.
+    /** Internal handover phase. Settles proven failures or pristine native marketplace intents after actual stop.
      * Claimed/unknown work returns false and still needs original execution evidence; no public endpoint. */
-    public boolean cancelUndispatchedForHandover(cn.jia.agent.hosting.ManagedHostingProvisioner.CurrentOperation stopped,String changeId) {
+    public boolean settleStoppedChangeForHandover(cn.jia.agent.hosting.ManagedHostingProvisioner.CurrentOperation stopped,String changeId) {
         var p=stopped.preparation();var candidate=stopped.candidate();
         var hint=db.findChange(p.tenantId(),p.clientId(),changeId);
         require(hint!=null && p.agentId().equals(hint.getAgentId()) && p.ownerJiacn().equals(hint.getOwnerJiacn())
@@ -243,6 +243,15 @@ public final class SkillManagementService {
             var c=db.lockChange(a.tenantId(),a.clientId(),changeId);var value=dto(c);
             var cmd=db.lockCommand(a.tenantId(),a.clientId(),c.getCommandId());
             if("CANCELLED".equals(cmd.getState()))return true;
+            if("RESULT".equals(cmd.getState()) && cmd.getEvidenceJson()!=null) {
+                // FAILED_RETRYABLE is the existing business fact for a validated non-switch result.
+                // Do not repeat installation/entitlement failure CAS or replace its original receipt.
+                if("FAILED_RETRYABLE".equals(value.get("status"))) {
+                    terminateFailedChange(a,c,value,"ENTITLEMENT_TERMINATED");return true;
+                }
+                if("FAILED_FINAL".equals(value.get("status"))
+                        && "ENTITLEMENT_TERMINATED".equals(value.get("reasonCode")))return true;
+            }
             if(!"PENDING".equals(cmd.getState()) || !state.getSkillRevision().toString().equals(value.get("skillRevision")))return false;
             var data=decode(cmd.getDataJson(),"CommandData");
             if("READ".equals(data.get("phase")) || !writer.getObject().neverDispatched(c,cmd))return false;
@@ -552,18 +561,22 @@ public final class SkillManagementService {
             if(!"FAILED_RETRYABLE".equals(value.get("status")))continue;
             var c=db.lockChange(a.tenantId(),a.clientId(),hint.getChangeId());value=dto(c);
             if(!"FAILED_RETRYABLE".equals(value.get("status")))continue;
-            if(value.get("orderId")!=null) {
-                var order=trade.selectOrderForUpdate(a.tenantId(),a.clientId(),text(value,"orderId"));
-                require(order!=null&&Set.of("INSTALLING","REFUNDED").contains(order.getStatus()),409,"SKILL_STATE_CONFLICT");
-                if(!"REFUNDED".equals(order.getStatus())) {
-                    var binding=app.deliveryBinding(a.tenantId(),a.clientId(),text(object(value.get("target")),"skillInstallationId"));
-                    String transaction=marketplace.settle(a,order,binding,false,System.currentTimeMillis());
-                    one(trade.markOrderRefunded(a.tenantId(),a.clientId(),order.getOrderId(),order.getVersion(),transaction,System.currentTimeMillis()));
-                }
-                value.put("fundingStatus",order.getPriceWen()>0?"REFUNDED":"NONE");
-            }
-            value.put("status","FAILED_FINAL");value.put("retryAllowed",false);value.put("reasonCode","STATE_CHANGED");save(c,value);
+            terminateFailedChange(a,c,value,"STATE_CHANGED");
         }
+    }
+    /** Original order refund only. The installation and immutable no-switch receipt are already final. */
+    private void terminateFailedChange(HostingRentHttp.Actor a,SkillChangeEntity c,Map<String,Object> value,String reason) {
+        if(value.get("orderId")!=null) {
+            var order=trade.selectOrderForUpdate(a.tenantId(),a.clientId(),text(value,"orderId"));
+            require(order!=null&&Set.of("INSTALLING","REFUNDED").contains(order.getStatus()),409,"SKILL_STATE_CONFLICT");
+            if(!"REFUNDED".equals(order.getStatus())) {
+                var binding=app.deliveryBinding(a.tenantId(),a.clientId(),text(object(value.get("target")),"skillInstallationId"));
+                String transaction=marketplace.settle(a,order,binding,false,System.currentTimeMillis());
+                one(trade.markOrderRefunded(a.tenantId(),a.clientId(),order.getOrderId(),order.getVersion(),transaction,System.currentTimeMillis()));
+            }
+            value.put("fundingStatus",order.getPriceWen()>0?"REFUNDED":"NONE");
+        }
+        value.put("status","FAILED_FINAL");value.put("retryAllowed",false);value.put("reasonCode",reason);save(c,value);
     }
     private Map<String,Object> visibleChange(HostingRentHttp.Actor a,String agent,String id,boolean lock) {
         var c=lock?db.lockChange(a.tenantId(),a.clientId(),id):db.findChange(a.tenantId(),a.clientId(),id);

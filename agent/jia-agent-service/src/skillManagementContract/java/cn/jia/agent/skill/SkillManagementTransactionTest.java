@@ -637,8 +637,8 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
     }
     @Test void neverDispatchedPreparationRefundsOnceWithoutInventingRuntimeResult() {
         var c=install();var handover=stoppedHandover();String id=text(c,"skillChangeId");
-        assertTrue(service.cancelUndispatchedForHandover(handover,id));
-        var once=businessSnapshot();assertTrue(service.cancelUndispatchedForHandover(handover,id));assertEquals(once,businessSnapshot());
+        assertTrue(service.settleStoppedChangeForHandover(handover,id));
+        var once=businessSnapshot();assertTrue(service.settleStoppedChangeForHandover(handover,id));assertEquals(once,businessSnapshot());
         assertEquals(100_000_000L,wallet());assertEquals("FAILED_FINAL",current(c).get("status"));
         assertEquals("REFUNDED",current(c).get("fundingStatus"));assertEquals(0,count("agent_skill_management_result"));
         var cmd=db.findCommand("0",ACTOR.clientId(),text(command(c),"commandId"));
@@ -649,7 +649,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
     }
     @Test void preparedButNeverDispatchedActivationRefundsAndKeepsOriginalPrepareReceipt() {
         var c=install();report(c,"PREPARED",null);var activation=current(c);var handover=stoppedHandover();
-        assertTrue(service.cancelUndispatchedForHandover(handover,text(c,"skillChangeId")));
+        assertTrue(service.settleStoppedChangeForHandover(handover,text(c,"skillChangeId")));
         assertEquals(100_000_000L,wallet());assertEquals(1,count("agent_skill_management_result"));
         var cmd=db.findCommand("0",ACTOR.clientId(),text(command(activation),"commandId"));
         assertEquals("CANCELLED",cmd.getState());assertNull(cmd.getEvidenceJson());
@@ -663,26 +663,26 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
             assertEquals(1,recoveryMapper.claimDelivery(d,"old-sender",now+60000,now));
             assertEquals(1,recoveryMapper.claimOutbox(o,"old-sender",now+60000,now));
         });
-        var handover=stoppedHandover();assertFalse(service.cancelUndispatchedForHandover(handover,text(c,"skillChangeId")));
+        var handover=stoppedHandover();assertFalse(service.settleStoppedChangeForHandover(handover,text(c,"skillChangeId")));
         assertEquals(99_999_950L,wallet());assertEquals("PENDING",jdbc.queryForObject("SELECT state FROM agent_skill_change_command",String.class));
         // Losing the lease or restoring PENDING does not erase the durable claim version/count.
         jdbc.update("UPDATE agent_command_delivery SET status='PENDING',lease_owner=NULL,lease_until=NULL");
         jdbc.update("UPDATE agent_outbox_event SET status='PENDING',lease_owner=NULL,lease_until=NULL");
-        assertFalse(service.cancelUndispatchedForHandover(handover,text(c,"skillChangeId")));
+        assertFalse(service.settleStoppedChangeForHandover(handover,text(c,"skillChangeId")));
         assertEquals(99_999_950L,wallet());
     }
     @Test void staleRecoveryCandidateCannotDispatchAfterAtomicUndispatchedCancellation() {
         var c=install();long now=System.currentTimeMillis();var stale=recoveryMapper.candidates("0",null,now,now-60000).getFirst();
-        var handover=stoppedHandover();assertTrue(service.cancelUndispatchedForHandover(handover,text(c,"skillChangeId")));
+        var handover=stoppedHandover();assertTrue(service.settleStoppedChangeForHandover(handover,text(c,"skillChangeId")));
         clearInvocations(sessions);recovery.recover(stale,now);
         verify(sessions,never()).dispatch(anyString(),anyString(),anyString(),any(),any());
         assertTrue(recoveryMapper.candidates("0",null,Long.MAX_VALUE-1,Long.MAX_VALUE-1).isEmpty());
-        assertTrue(service.cancelUndispatchedForHandover(handover,text(c,"skillChangeId")));assertEquals(100_000_000L,wallet());
+        assertTrue(service.settleStoppedChangeForHandover(handover,text(c,"skillChangeId")));assertEquals(100_000_000L,wallet());
     }
     @Test void cancellationRollbackPreservesFundsAndOriginalUnsentCommand() {
         var c=install();var handover=stoppedHandover();var before=businessSnapshot();
         assertThrows(IllegalStateException.class,()->tx.executeWithoutResult(t->{
-            assertTrue(service.cancelUndispatchedForHandover(handover,text(c,"skillChangeId")));
+            assertTrue(service.settleStoppedChangeForHandover(handover,text(c,"skillChangeId")));
             throw new IllegalStateException("later handover step failed");
         }));
         assertEquals(before,businessSnapshot());assertEquals(99_999_950L,wallet());
@@ -691,19 +691,51 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
     @Test void internalUndispatchedSettlementDoesNotRequireOriginalUserToRemainLoggedIn() {
         var c=install();var handover=stoppedHandover();
         doThrow(new HostingRentApplicationException(403,"HOSTING_RENT_OWNER_UNPROVEN")).when(ownerResolver).requireOwner(any());
-        assertTrue(service.cancelUndispatchedForHandover(handover,text(c,"skillChangeId")));assertEquals(100_000_000L,wallet());
+        assertTrue(service.settleStoppedChangeForHandover(handover,text(c,"skillChangeId")));assertEquals(100_000_000L,wallet());
         assertThrows(HostingRentApplicationException.class,()->service.quote(ACTOR,"new",quoteData(),false));
+    }
+    @Test void stoppedRetryablePreparationRefundsOnceWithoutRewritingFailedInstallationOrEvidence() {
+        var c=install();report(c,"FAILED","DEPENDENCY_MISSING");var handover=stoppedHandover();
+        String id=text(c,"skillChangeId");
+        var installation=businessSnapshot().get("agent_skill_installation");
+        var entitlement=businessSnapshot().get("agent_skill_entitlement");
+        String receipt=db.findCommand("0",ACTOR.clientId(),text(command(c),"commandId")).getEvidenceJson();
+        assertTrue(service.settleStoppedChangeForHandover(handover,id));assertEquals(100_000_000L,wallet());
+        assertEquals(installation,businessSnapshot().get("agent_skill_installation"));
+        assertEquals(entitlement,businessSnapshot().get("agent_skill_entitlement"));
+        assertEquals(receipt,db.findCommand("0",ACTOR.clientId(),text(command(c),"commandId")).getEvidenceJson());
+        assertEquals("FAILED_FINAL",current(c).get("status"));assertEquals("REFUNDED",current(c).get("fundingStatus"));
+        var once=businessSnapshot();assertTrue(service.settleStoppedChangeForHandover(handover,id));assertEquals(once,businessSnapshot());
+    }
+    @Test void stoppedRetryableRefundRollsBackWithOriginalParentTransaction() {
+        var c=install();report(c,"FAILED","DEPENDENCY_MISSING");var handover=stoppedHandover();var before=businessSnapshot();
+        assertThrows(IllegalStateException.class,()->tx.execute(t->{
+            assertTrue(service.settleStoppedChangeForHandover(handover,text(c,"skillChangeId")));
+            throw new IllegalStateException("handover rollback");
+        }));
+        assertEquals(before,businessSnapshot());assertEquals(99_999_950L,wallet());
+        assertEquals("FAILED_RETRYABLE",current(c).get("status"));
+    }
+    @Test void stoppedUnknownPreparationCannotUseFailedChangeRefund() {
+        var c=install();report(c,"UNKNOWN","RECEIPT_UNKNOWN");var handover=stoppedHandover();var before=businessSnapshot();
+        assertFalse(service.settleStoppedChangeForHandover(handover,text(c,"skillChangeId")));
+        assertEquals(before,businessSnapshot());assertEquals(99_999_950L,wallet());
+    }
+    @Test void stoppedAppliedInstallDoesNotRefundCapturedFee() {
+        var c=install();finishInstall(c);var handover=stoppedHandover();var before=businessSnapshot();
+        assertFalse(service.settleStoppedChangeForHandover(handover,text(c,"skillChangeId")));
+        assertEquals(before,businessSnapshot());assertEquals(99_999_950L,wallet());
     }
     @Test void finishingWithoutStopOrDifferentBindingCannotCancelOriginalSkillFees() {
         var c=install();var handover=stoppedHandover();rentalStatus("FINISHING");
-        assertThrows(SkillMarketplaceException.class,()->service.cancelUndispatchedForHandover(handover,text(c,"skillChangeId")));
+        assertThrows(SkillMarketplaceException.class,()->service.settleStoppedChangeForHandover(handover,text(c,"skillChangeId")));
         stoppedHandover();runtime.setBindingId(8L);
-        assertThrows(SkillMarketplaceException.class,()->service.cancelUndispatchedForHandover(handover,text(c,"skillChangeId")));
+        assertThrows(SkillMarketplaceException.class,()->service.settleStoppedChangeForHandover(handover,text(c,"skillChangeId")));
         assertEquals(99_999_950L,wallet());assertEquals("PENDING",jdbc.queryForObject("SELECT state FROM agent_skill_change_command",String.class));
     }
     @Test void neverDispatchedDisableTerminatesRepairWithoutRefundOrChangingPublicInstallation() {
         var c=install();finishInstall(c);var disable=policyChange("DISABLE",current(c));var handover=stoppedHandover();
-        assertTrue(service.cancelUndispatchedForHandover(handover,text(disable,"skillChangeId")));
+        assertTrue(service.settleStoppedChangeForHandover(handover,text(disable,"skillChangeId")));
         assertEquals("SUCCEEDED",current(disable).get("status"));assertEquals(99_999_950L,wallet());
         assertEquals("ACTIVE",jdbc.queryForObject("SELECT status FROM economy_skill_order",String.class));
         assertEquals("SUCCEEDED",jdbc.queryForObject("SELECT status FROM agent_skill_installation",String.class));
@@ -713,7 +745,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
     @Test void corruptPristineOutboxCannotBeUsedAsProofForARefund() {
         var c=install();var handover=stoppedHandover();
         jdbc.update("UPDATE agent_outbox_event SET wire_payload_hash=?",new byte[32]);
-        assertThrows(SkillMarketplaceException.class,()->service.cancelUndispatchedForHandover(handover,text(c,"skillChangeId")));
+        assertThrows(SkillMarketplaceException.class,()->service.settleStoppedChangeForHandover(handover,text(c,"skillChangeId")));
         assertEquals(99_999_950L,wallet());assertEquals("PENDING",jdbc.queryForObject("SELECT state FROM agent_skill_change_command",String.class));
         assertEquals(0,count("agent_skill_management_result"));
     }
