@@ -385,7 +385,7 @@ class R8TenantPrivateChatTest {
         caller.setClientId("spoof-client");
         EsContextHolder.setContext(caller);
         try {
-            relay.start();
+            startScheduled(relay, new cn.jia.core.security.FixedTenantAdmissionPolicy(TENANT,CLIENT));
             assertTrue(attempted.await(3, TimeUnit.SECONDS));
             assertEquals("RETRY", awaitOutboxStatus(dispatch.dispatchEventId(), "RETRY", 3_000));
         } finally {
@@ -530,7 +530,7 @@ class R8TenantPrivateChatTest {
                 sockets, builtin, broker, realConversationService(broker));
         relay.setDispatchAuthority(dispatchAuthority);
         try {
-            relay.start();
+            startScheduled(relay, new cn.jia.core.security.FixedTenantAdmissionPolicy(TENANT,CLIENT));
             assertEquals("AWAITING_ACK", awaitOutboxStatus(
                     dispatch.dispatchEventId(), "AWAITING_ACK", 3_000));
         } finally {
@@ -672,7 +672,8 @@ class R8TenantPrivateChatTest {
                     return null;
                 }).when(relay).deliverClaim(any());
             }
-            production.start(); grey.start();
+            startScheduled(production,new cn.jia.core.security.FixedTenantAdmissionPolicy("0",null));
+            startScheduled(grey,new cn.jia.core.security.FixedTenantAdmissionPolicy("1","cyf-local"));
             assertTrue(done.await(10, TimeUnit.SECONDS));
         }
         assertEquals(8, delivered.size());
@@ -709,6 +710,11 @@ class R8TenantPrivateChatTest {
                  payload_json,version,available_at,lease_until,attempt_count,fencing_token,created_at,updated_at)
                 VALUES (?,?,?,?,?,'DISPATCH',?,'{}',0,?,?,0,0,?,?)
                 """, event, tenant, OWNER, client, event, status, now - 1000, now - 1000, now, now);
+    }
+
+    private void startScheduled(ChatDeliberationOutboxRelay relay, cn.jia.core.security.FixedTenantAdmissionPolicy scope) {
+        relay.configureScheduling(mock(cn.jia.task.scheduling.ScheduleService.class),transactionManager,scope,"test-node");
+        relay.start();relay.onApplicationReady(null);relay.executeScheduled(null);
     }
 
     private ChatDeliberationOutboxRelay fixedTenantRelay(AgentWebSocketHandler sockets,

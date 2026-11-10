@@ -120,28 +120,33 @@ class ChatDeliberationOutboxCommitTest {
         final ChatDeliberationOutboxService outbox=mock(ChatDeliberationOutboxService.class);
         final java.util.concurrent.ScheduledExecutorService scheduler=mock(java.util.concurrent.ScheduledExecutorService.class);
         final java.util.concurrent.atomic.AtomicLong now=new java.util.concurrent.atomic.AtomicLong(1000);
-        final java.util.List<Runnable> callbacks=new java.util.ArrayList<>();
+        final java.util.List<Long> deadlines=new java.util.ArrayList<>();
+        final cn.jia.task.scheduling.ScheduleService schedules=mock(cn.jia.task.scheduling.ScheduleService.class);
+        final org.springframework.transaction.PlatformTransactionManager transactions=mock(org.springframework.transaction.PlatformTransactionManager.class);
         final java.util.List<Long> delays=new java.util.ArrayList<>();
         final ChatDeliberationOutboxRelay relay=new ChatDeliberationOutboxRelay(outbox,null,null,null,null,null,null);
         @org.junit.jupiter.api.BeforeEach void setup() {
-            doAnswer(call->{callbacks.add(call.getArgument(0));delays.add(call.getArgument(1));return mock(java.util.concurrent.ScheduledFuture.class);})
-                .when(scheduler).schedule(any(Runnable.class),anyLong(),eq(java.util.concurrent.TimeUnit.MILLISECONDS));
+            when(transactions.getTransaction(any())).thenReturn(new org.springframework.transaction.support.SimpleTransactionStatus());
+            doAnswer(call->{long at=call.getArgument(1);deadlines.add(at);delays.add(at-now.get());return null;})
+                .when(schedules).signal(any(),anyLong());
+            relay.configureScheduling(schedules,transactions,new cn.jia.core.security.FixedTenantAdmissionPolicy("0",null),"node-a");
             when(outbox.discover(anyLong(),anyInt())).thenReturn(java.util.List.of());
             when(outbox.nextDueAt(anyLong())).thenReturn(null); // SQL MIN on an empty partition is NULL, not Mockito boxed-zero.
-            relay.scheduling(()->scheduler,now::get);relay.start();
+            relay.scheduling(()->scheduler,now::get);relay.start();relay.onApplicationReady(null);
         }
         @org.junit.jupiter.api.AfterEach void close() {relay.stop();}
-        void tick() {callbacks.get(callbacks.size()-1).run();}
+        void tick() {relay.executeScheduled(null);}
         @Test void idleUsesSingleFiveSecondRecoveryInsteadOfHalfSecondDiscovery() {
             tick();assertEquals(5000L,delays.get(delays.size()-1));
             verify(scheduler,never()).scheduleWithFixedDelay(any(),anyLong(),anyLong(),any());
+            verify(scheduler,never()).schedule(any(Runnable.class),anyLong(),any());
             for(int i=0;i<12;i++){now.addAndGet(5000);tick();}
             verify(outbox,times(13)).discover(anyLong(),anyInt());
         }
         @Test void burstHintsCoalesceAndEarlierHintReplacesTheRecoveryWake() {
-            tick();int before=callbacks.size();
+            tick();int before=deadlines.size();
             for(int i=0;i<100;i++)relay.onWorkAvailable(new ChatDeliberationOutboxWakeup(now.get()));
-            assertEquals(before+1,callbacks.size());assertEquals(0L,delays.get(delays.size()-1));
+            assertEquals(before+1,deadlines.size());assertEquals(0L,delays.get(delays.size()-1));
             tick();verify(outbox,times(2)).discover(anyLong(),anyInt());
         }
         @Test void persistentFutureDeadlineSurvivesRestartAndIsNotRoundedToCompensation() {
@@ -160,10 +165,12 @@ class ChatDeliberationOutboxCommitTest {
                 relay.pollOnce();return java.util.List.of();});
             tick();verify(outbox).discover(anyLong(),anyInt());assertEquals(0L,delays.get(delays.size()-1));
         }
-        @Test void stoppedOrReplacedLifecycleCannotExecuteOldTimer() {
-            Runnable old=callbacks.get(0);relay.stop();int size=callbacks.size();
-            relay.onWorkAvailable(new ChatDeliberationOutboxWakeup(now.get()));assertEquals(size,callbacks.size());
-            relay.start();old.run();verifyNoInteractions(outbox);tick();verify(outbox).discover(anyLong(),anyInt());
+        @Test void stoppedCallbackDoesNotDiscoverAndRestartWaitsForApplicationReady() {
+            relay.stop();int size=deadlines.size();
+            relay.onWorkAvailable(new ChatDeliberationOutboxWakeup(now.get()));tick();
+            assertEquals(size,deadlines.size());verifyNoInteractions(outbox);
+            relay.start();tick();verifyNoInteractions(outbox);
+            relay.onApplicationReady(null);tick();verify(outbox).discover(anyLong(),anyInt());
         }
         @Test void fullDeliverySlotsSkipSqlAndCompletionDrainsBacklogWithoutWaitingForCompensation() {
             var unused=(java.util.concurrent.ExecutorService)org.springframework.test.util.ReflectionTestUtils.getField(relay,"deliveryExecutor");

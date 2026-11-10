@@ -9,6 +9,18 @@ import cn.jia.chat.deliberation.InteractionRoute;
 import cn.jia.chat.handler.AgentWebSocketHandler;
 import cn.jia.core.util.JsonUtil;
 import lombok.extern.slf4j.Slf4j;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
+import cn.jia.task.scheduling.ScheduleKey;
+import cn.jia.task.scheduling.ScheduleService;
+import cn.jia.task.scheduling.ScheduledInvocation;
+import cn.jia.task.scheduling.ScheduledJobHandler;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
@@ -39,7 +51,38 @@ import java.util.concurrent.atomic.AtomicReference;
 /** Durable restart-scanning relay. Socket/SSE sends are optimizations; DB state remains authoritative. */
 @Slf4j
 @Component
-public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseable {
+@ConditionalOnProperty(name = "cyf.task.scheduling.enabled", havingValue = "true")
+public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseable, ScheduledJobHandler {
+    public static final String HANDLER = "chat.deliberation-outbox";
+    private ScheduleService schedules;
+    private ScheduleKey scheduleKey;
+    private TransactionTemplate notificationTransaction;
+    private boolean ready;
+
+    @Autowired public void configureScheduling(ScheduleService schedules, PlatformTransactionManager manager,
+            FixedTenantAdmissionPolicy scope, @Value("${cyf.task.scheduling.node-id}") String node) {
+        if (node == null || node.isBlank()) throw new IllegalArgumentException("Chat delivery requires a scheduler node identity");
+        this.schedules = schedules;
+        this.scheduleKey = new ScheduleKey(scope.clientId() == null ? "" : scope.clientId(), HANDLER, "recovery", node);
+        this.notificationTransaction = new TransactionTemplate(manager);
+        this.notificationTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    }
+    @Override public String getName() { return HANDLER; }
+    @EventListener public synchronized void onApplicationReady(ApplicationReadyEvent event) {
+        if (!running.get() || ready) return;
+        scheduleWake(scheduler, clock.getAsLong(), false);
+        ready = true;
+    }
+    @Override public void executeScheduled(ScheduledInvocation invocation) {
+        final ScheduledExecutorService owner;
+        final long generation;
+        synchronized (this) {
+            if (!running.get() || !ready) return;
+            owner = scheduler; generation = wakeGeneration;
+        }
+        scan(owner, generation);
+    }
+
     private static final long DEFAULT_LEASE_MILLIS = 300_000L;
     private static final long DEFAULT_HEARTBEAT_MILLIS = 30_000L;
     private static final long HOSTED_ACK_TIMEOUT_MILLIS = 30_000L;
@@ -77,7 +120,6 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
     private final AtomicBoolean polling = new AtomicBoolean();
     private java.util.function.LongSupplier clock = System::currentTimeMillis;
     private java.util.function.Supplier<ScheduledExecutorService> schedulerFactory = this::newScheduler;
-    private ScheduledFuture<?> pendingWake;
     private long scheduledAt = Long.MAX_VALUE;
     private long requestedAt = Long.MAX_VALUE;
     private long wakeGeneration;
@@ -127,7 +169,8 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
         deliveryExecutor = Executors.newFixedThreadPool(maxConcurrentDeliveries, r -> {
             Thread t = new Thread(r, "chat-deliberation-outbox-delivery"); t.setDaemon(true); return t;
         });
-        scheduleWake(scheduler, clock.getAsLong());
+        ++wakeGeneration; ready = false;
+        scheduledAt = requestedAt = Long.MAX_VALUE;
     }
 
     // Package-local deterministic clock/scheduler seam; production uses the existing executors.
@@ -139,26 +182,25 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
 
     @org.springframework.context.event.EventListener
     public synchronized void onWorkAvailable(ChatDeliberationOutboxWakeup hint) {
-        if (!running.get() || scheduler == null) return;
+        if (!running.get() || !ready || scheduler == null) return;
         requestedAt = Math.min(requestedAt, Math.max(clock.getAsLong(), hint.availableAt()));
-        if (!polling.get()) scheduleWake(scheduler, requestedAt);
+        if (!polling.get()) scheduleWake(scheduler, requestedAt, true);
     }
 
-    private void scheduleWake(ScheduledExecutorService owner, long at) {
+    private void scheduleWake(ScheduledExecutorService owner, long at, boolean afterCommitHint) {
         if (!running.get() || scheduler != owner || at >= scheduledAt) return;
-        if (pendingWake != null) pendingWake.cancel(false);
-        long generation = ++wakeGeneration;
+        // afterCommit still has the old JDBC resource bound; its hint needs an independent commit.
+        if (afterCommitHint) notificationTransaction.executeWithoutResult(status -> schedules.signal(scheduleKey, at));
+        else schedules.signal(scheduleKey, at);
         scheduledAt = at;
-        pendingWake = owner.schedule(() -> scan(owner, generation),
-                Math.max(0, at - clock.getAsLong()), TimeUnit.MILLISECONDS);
     }
 
     private void scan(ScheduledExecutorService owner, long generation) {
         synchronized (this) {
             if (!running.get() || scheduler != owner || generation != wakeGeneration) return;
-            pendingWake = null; scheduledAt = Long.MAX_VALUE;
+            scheduledAt = Long.MAX_VALUE;
             if (!polling.compareAndSet(false, true)) {
-                scheduleWake(owner, clock.getAsLong() + 500L); return;
+                scheduleWake(owner, clock.getAsLong() + 500L, false); return;
             }
             requestedAt = Long.MAX_VALUE;
         }
@@ -181,7 +223,7 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
                     if (next != null) at = Math.min(at, Math.max(now, next));
                     // A transport failure plus repeated hints must not create an immediate retry loop.
                     if (failed) at = Math.max(at, now + 500L);
-                    scheduleWake(owner, at);
+                    scheduleWake(owner, at, false);
                 }
             }
         }
@@ -645,8 +687,7 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
     @Override public synchronized void stop(){
         running.set(false);
         ++wakeGeneration;
-        if (pendingWake != null) pendingWake.cancel(false);
-        pendingWake = null; scheduledAt = requestedAt = Long.MAX_VALUE;
+        ready = false; scheduledAt = requestedAt = Long.MAX_VALUE;
         if(scheduler!=null)scheduler.shutdownNow();
         if(deliveryExecutor!=null) for (Runnable queued : deliveryExecutor.shutdownNow())
             if (queued instanceof ClaimedDelivery delivery) delivery.abandon();
