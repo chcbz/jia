@@ -7,7 +7,6 @@ import cn.jia.task.job.JobRegistry;
 import cn.jia.core.util.DateUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
@@ -16,7 +15,7 @@ import java.util.concurrent.*;
 /**
  * 任务执行器
  * 负责管理和执行所有注册的任务
- * 支持手动触发和定时调度两种模式
+ * 保留普通任务手动触发；持久定时任务由统一调度处理
  *
  * @author chc
  */
@@ -122,23 +121,6 @@ public class JobExecutor {
             return "Execution failed: " + e.getMessage();
         } finally {
             runningJobs.remove(jobName);
-        }
-    }
-
-    /**
-     * 定时扫描执行任务
-     * 每分钟执行一次，检查所有注册的处理器是否有cron表达式
-     */
-    @Scheduled(cron = "0 * * * * ?")
-    public void scheduledExecute() {
-        Map<String, JobHandler> handlers = jobRegistry.getAllHandlers();
-        for (JobHandler handler : handlers.values()) {
-            String cron = handler.getCron();
-            if (cron != null && !cron.isEmpty()) {
-                // 这里可以扩展为基于cron表达式的调度
-                // 目前简单实现，实际生产环境建议使用Quartz等成熟框架
-                log.debug("Job {} has cron expression: {}", handler.getName(), cron);
-            }
         }
     }
 
