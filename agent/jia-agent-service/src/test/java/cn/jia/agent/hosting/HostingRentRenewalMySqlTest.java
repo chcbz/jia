@@ -477,7 +477,7 @@ class HostingRentRenewalMySqlTest {
         // Move only the synthetic lease's timeline to the next due period, never alter quote history.
         long due = now() - 1000;
         jdbc.update("UPDATE economy_hosting_lease SET paid_from=?,paid_through=? WHERE lease_id=?", due - PERIOD, due, reserved.leaseId());
-        credit(200, "first-fee-next-period");
+        credit(200, "00000000-0000-0000-0000-000000000203");
         trigger(); trigger();
         assertEquals(1, charges()); assertEquals(50, balance());
         assertEquals(500L, lease(reserved.leaseId()).getAmountWen());
