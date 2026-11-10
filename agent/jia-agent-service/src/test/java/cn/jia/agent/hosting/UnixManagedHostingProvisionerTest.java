@@ -245,6 +245,7 @@ class UnixManagedHostingProvisionerTest {
             assertFalse(real.quiesce(initial, original, "stale-handover"));
             var current = candidates.get(free.operationId()); assertNotNull(current);
             assertFalse(real.flushEvidence(free, current, "finish-real")); // no durable stop yet
+            assertFalse(real.cleanup(free, current, "finish-real")); // stop/evidence not yet sufficient
             assertTrue(real.quiesce(free, current, "finish-real"));
             assertTrue(real.quiesce(free, current, "finish-real"));
             assertFalse(real.quiesce(free, current, "different-handover"));
@@ -253,6 +254,11 @@ class UnixManagedHostingProvisionerTest {
             assertFalse(real.flushEvidence(free, current, "finish-real")); // pending is not success
             assertTrue(real.flushEvidence(free, current, "finish-real"));
             assertTrue(real.flushEvidence(free, current, "finish-real")); // same durable receipt
+            assertFalse(real.cleanup(initial, original, "finish-real"));
+            assertFalse(real.cleanup(free, current, "different-handover"));
+            assertTrue(real.cleanup(free, current, "finish-real"));
+            assertTrue(real.cleanup(free, current, "finish-real")); // durable receipt, no second erasure
+
 
             assertEquals(ManagedHostingProvisioner.Outcome.UNKNOWN, real.prepareAndObserve(free).outcome());
         } catch (Exception | AssertionError failure) {
@@ -401,6 +407,38 @@ class UnixManagedHostingProvisionerTest {
         verifyNoInteractions(sessions); verify(credentials, never()).ensureInstallation(any(), any());
         TransactionSynchronizationManager.setActualTransactionActive(true);
         try { assertThrows(IllegalStateException.class, () -> adapter.flushEvidence(preparation(), candidate(), "finish-fixture-lease")); }
+        finally { TransactionSynchronizationManager.clear(); }
+    }
+
+    @Test void cleanupUsesSharedFixtureAndNeverConfusesStopEvidenceOrPendingWithCleaned() throws Exception {
+        Map<String, Object> frozen;
+        try (var input = getClass().getResourceAsStream("/hosting/hosting-cleanup-v1.json")) {
+            assertNotNull(input); frozen = JSON.readValue(input.readAllBytes(), new TypeReference<Map<String, Object>>() {});
+        }
+        @SuppressWarnings("unchecked") var publicRequest = (Map<String, Object>) frozen.get("request");
+        var request = UnixManagedHostingProvisioner.handoverRequest(preparation(), candidate(), "finish-fixture-lease", "cleanup");
+        assertEquals(publicRequest.get("data"), UnixManagedHostingProvisioner.hostingData(request));
+        @SuppressWarnings("unchecked") var reply = (Map<String, Object>) frozen.get("reply");
+        var envelope = cn.jia.core.entity.ProtocolMessage.event("finish-fixture-request", "hosting.cleanup", "finish-fixture-message", publicRequest.get("data"));
+        var response = UnixManagedHostingProvisioner.hostingResponse(envelope, reply);
+        assertTrue(UnixManagedHostingProvisioner.decodeHandover(request, candidate(), response, "CLEANED"));
+        for (var field : List.of("handoverId", "bindingId", "ownerJiacn", "leaseId", "installationId", "hostId", "outcome")) {
+            var changed = new LinkedHashMap<>(response); changed.put(field, "wrong");
+            assertFalse(UnixManagedHostingProvisioner.decodeHandover(request, candidate(), changed, "CLEANED"), field);
+        }
+        var adapter = adapter();
+        doReturn(response).when(adapter).exchange(anyMap());
+        assertTrue(adapter.cleanup(preparation(), candidate(), "finish-fixture-lease"));
+        for (var outcome : List.of("QUIESCED", "EVIDENCE_ACCEPTED", "CLEANUP_PENDING")) {
+            var pending = new LinkedHashMap<>(response); pending.put("outcome", outcome);
+            doReturn(pending).when(adapter).exchange(anyMap());
+            assertFalse(adapter.cleanup(preparation(), candidate(), "finish-fixture-lease"));
+        }
+        doThrow(new java.net.SocketTimeoutException("lost receipt")).when(adapter).exchange(anyMap());
+        assertFalse(adapter.cleanup(preparation(), candidate(), "finish-fixture-lease"));
+        verifyNoInteractions(sessions); verify(credentials, never()).ensureInstallation(any(), any());
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        try { assertThrows(IllegalStateException.class, () -> adapter.cleanup(preparation(), candidate(), "finish-fixture-lease")); }
         finally { TransactionSynchronizationManager.clear(); }
     }
 

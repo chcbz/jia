@@ -87,6 +87,9 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
     @Override public boolean flushEvidence(Preparation p, Candidate candidate, String handoverId) {
         return handover(p, candidate, handoverId, "evidence", "EVIDENCE_ACCEPTED");
     }
+    @Override public boolean cleanup(Preparation p, Candidate candidate, String handoverId) {
+        return handover(p, candidate, handoverId, "cleanup", "CLEANED");
+    }
     private boolean handover(Preparation p, Candidate candidate, String handoverId, String method, String outcome) {
         outsideTransaction();
         if (!validPreparation(p) || candidate == null || !exact(handoverId, 100)
@@ -103,7 +106,7 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
         return handoverRequest(p, candidate, handoverId, "quiesce");
     }
     static Map<String, Object> handoverRequest(Preparation p, Candidate candidate, String handoverId, String method) {
-        if (!exact(handoverId, 100) || !Set.of("quiesce", "evidence").contains(method)) throw new IllegalArgumentException("Invalid handover request");
+        if (!exact(handoverId, 100) || !Set.of("quiesce", "evidence", "cleanup").contains(method)) throw new IllegalArgumentException("Invalid handover request");
         var request = request(p, method, candidate);
         request.put("handoverId", handoverId);
         return request;
