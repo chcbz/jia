@@ -22,7 +22,6 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -184,9 +183,7 @@ public final class HostingRentApplicationService {
             }
             if (binding.getId() == null || rent.attachBinding(actor.tenantId(), actor.clientId(), receipt.leaseId(),
                     binding.getId().toString()) != 1) throw conflict("HOSTING_RENT_CONFLICT");
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override public void afterCommit() { reconciler.wake(); } // Signal only; NO I/O or posting here.
-            });
+            reconciler.wakeInitial(actor.clientId(), receipt.intentId());
             return mutationView(quote.getAgentId(), receipt);
         });
     }
@@ -338,9 +335,7 @@ public final class HostingRentApplicationService {
                     .setTenantId(actor.tenantId()).setClientId(actor.clientId());
             if (rent.acceptReprovision(actor.tenantId(), actor.clientId(), leaseId, version, now) != 1
                     || rent.insertReprovision(request) != 1) throw conflict("HOSTING_RENT_CONCURRENCY_CONFLICT");
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override public void afterCommit() { reconciler.wake(); }
-            });
+            reconciler.wakeReprovision(actor.clientId(), request.getRequestId());
             // Deliberately NO ledger call, no profile I/O and no change to price/paid periods/latest paid intent.
             return reprovisionReceipt(request, requestHash);
         });

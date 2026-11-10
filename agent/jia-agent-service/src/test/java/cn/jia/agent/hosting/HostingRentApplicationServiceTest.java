@@ -133,7 +133,7 @@ class HostingRentApplicationServiceTest {
         order.verify(ledger).reserve(any()); order.verify(bindings).insert(any());
         order.verify(identities).provisionOpaqueIdentity(any(),anyString());
         order.verify(runtimes).attachReleasedBinding(eq(23L),eq(17L),eq("Tenant-A"),anyLong());
-        order.verify(reconciler).wake();
+        order.verify(reconciler).wakeInitial(eq(ACTOR.clientId()), anyString());
     }
 
     @Test void incompleteHandoverRefusesQuoteAndReserveWithoutFunds() {
@@ -270,8 +270,8 @@ class HostingRentApplicationServiceTest {
     }
 
     @Test
-    void reserveIdentityAndBindingShareTransactionAndOnlyWakeAfterCommit() {
-        doAnswer(call -> { assertEquals(4, count()); return null; }).when(reconciler).wake();
+    void reserveIdentityBindingAndDurableScheduleShareTransaction() {
+        doAnswer(call -> { assertTrue(TransactionSynchronizationManager.isActualTransactionActive()); assertEquals(4, count()); return null; }).when(reconciler).wakeInitial(eq(ACTOR.clientId()), anyString());
         var result = application.bind(ACTOR, "wuyong", KEY, confirmation());
         assertEquals("1000000000", result.amountWen());
         assertEquals("2592000", ((HostingRentApplicationService.MutationView) result).periodSeconds());
@@ -279,7 +279,7 @@ class HostingRentApplicationServiceTest {
         var order = inOrder(ledger, bindings, identities, runtimes, reconciler);
         order.verify(ledger).reserve(any()); order.verify(bindings).insert(any());
         order.verify(identities).provisionOpaqueIdentity(any(), anyString());
-        order.verify(runtimes).insert(any()); order.verify(reconciler).wake();
+        order.verify(runtimes).insert(any()); order.verify(reconciler).wakeInitial(eq(ACTOR.clientId()), anyString());
         verify(provider, never()).prepareAndObserve(any());
     }
 

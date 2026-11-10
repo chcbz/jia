@@ -117,7 +117,7 @@ class HostingRentReprovisionTransactionTest {
         when(provider.available()).thenReturn(false);
         assertEquals(receipt, confirm(KEY, "4"));
         assertEquals("IDEMPOTENCY_CONFLICT", assertThrows(HostingRentApplicationException.class, () -> confirm(KEY, "5")).code());
-        verifyNoInteractions(ledger); verify(provider, never()).prepareAndObserve(any()); verify(reconciler, times(1)).wake();
+        verifyNoInteractions(ledger); verify(provider, never()).prepareAndObserve(any()); verify(reconciler, times(1)).wakeReprovision(eq("Client-A"), anyString());
     }
     @Test void twoConcurrentSameKeyConfirmationsAdvanceOnceAndReturnSameReceipt() throws Exception {
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {

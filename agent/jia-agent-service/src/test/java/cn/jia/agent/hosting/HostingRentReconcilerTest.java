@@ -46,12 +46,13 @@ class HostingRentReconcilerTest {
     private final ManagedHostingCredentials credentials = mock(ManagedHostingCredentials.class);
     private EconomyHostingProvisioningIntentEntity intent;
     private EconomyHostingLeaseEntity lease;
+    private final cn.jia.task.scheduling.ScheduleService schedules = mock(cn.jia.task.scheduling.ScheduleService.class);
     private HostingRentReconciler worker;
     private DataSourceTransactionManager manager;
     private JdbcTemplate jdbc;
 
     @Test void pendingDiscoveryUsesProcessScopeForBothQueues() {
-        worker.reconcilePending();
+        worker.schedulePending();
         verify(mapper).selectPendingIntents(TENANT, CLIENT, 0L);
         verify(mapper).selectPendingReprovisions(TENANT, CLIENT, 0L);
     }
@@ -90,10 +91,12 @@ class HostingRentReconcilerTest {
         ObjectProvider<ManagedHostingProvisioner> providers = mock(ObjectProvider.class);
         when(providers.getIfAvailable()).thenReturn(provider);
         when(provider.available()).thenReturn(true);
+        ObjectProvider<cn.jia.task.scheduling.ScheduleService> scheduleProvider = mock(ObjectProvider.class);
+        when(scheduleProvider.getObject()).thenReturn(schedules);
         worker = new HostingRentReconciler(new AgentHostingRentProperties(true, "1", "1000000000", "2592000"),
                 new EconomyPreviewGate(new EconomyPreviewProperties(true, List.of(
                         new EconomyPreviewProperties.AllowedScope(TENANT, CLIENT)))), mapper, ledger, identities,
-                owners, providers, credentials, manager, bindings, new cn.jia.core.security.FixedTenantAdmissionPolicy(TENANT, CLIENT), true);
+                owners, providers, credentials, manager, bindings, new cn.jia.core.security.FixedTenantAdmissionPolicy(TENANT, CLIENT), true, scheduleProvider);
         intent = new EconomyHostingProvisioningIntentEntity().setId(1L).setTenantId(TENANT).setClientId(CLIENT)
                 .setPrincipalType("USER").setPrincipalId("Login-A").setAgentId(AGENT).setPersonaCode("wuyong")
                 .setIntentId("hri-test").setLeaseId("hrl-test").setQuotePurpose("INITIAL")
@@ -121,6 +124,47 @@ class HostingRentReconcilerTest {
                 .when(ledger).confirmProvisioningSucceeded(any());
         doAnswer(call -> { transition(call.getArgument(0), "FAILED_NO_EFFECT"); return null; })
                 .when(ledger).confirmProvisioningFailedNoEffect(any());
+    }
+
+    private cn.jia.task.scheduling.ScheduledInvocation initialInvocation() {
+        return new cn.jia.task.scheduling.ScheduledInvocation(TENANT,
+                new cn.jia.task.scheduling.ScheduleKey(CLIENT, HostingRentReconciler.HANDLER, "initial:hri-test", ""), 1);
+    }
+
+    @Test void durableCallbackTargetsOneIntentAndLeavesUnknownForUnifiedRetry() {
+        when(mapper.selectIntent(TENANT, CLIENT, "hri-test")).thenReturn(intent);
+        assertThrows(IllegalStateException.class, () -> worker.executeScheduled(initialInvocation()));
+        assertEquals("PROVISIONING_UNKNOWN", intent.getStatus());
+        verify(provider).prepareAndObserve(any());
+        verify(mapper, never()).selectPendingIntents(anyString(), any(), anyLong());
+        verify(mapper, never()).selectPendingReprovisions(anyString(), any(), anyLong());
+        verify(ledger, never()).capture(any()); verify(ledger, never()).refund(any());
+    }
+
+    @Test void terminalDurableCallbackDoesNotQueryProviderOrRescanBusinessTables() {
+        intent.setStatus("ACTIVE"); when(mapper.selectIntent(TENANT, CLIENT, "hri-test")).thenReturn(intent);
+        worker.executeScheduled(initialInvocation());
+        verify(provider, never()).available(); verify(provider, never()).prepareAndObserve(any());
+        verify(mapper, never()).selectPendingIntents(anyString(), any(), anyLong());
+    }
+
+    @Test void scheduledIoRejectsOuterTransactionAndWrongPartition() {
+        assertThrows(IllegalStateException.class, () -> new TransactionTemplate(manager).executeWithoutResult(
+                tx -> worker.executeScheduled(initialInvocation())));
+        assertThrows(RuntimeException.class, () -> worker.executeScheduled(new cn.jia.task.scheduling.ScheduledInvocation("other",
+                initialInvocation().key(), 1)));
+        verifyNoInteractions(mapper, ledger);
+    }
+
+    @Test void wakeupParticipatesInCallerTransactionRatherThanAfterCommit() {
+        jdbc.execute("CREATE TABLE durable_signal(id INT PRIMARY KEY)");
+        doAnswer(call -> { assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
+            jdbc.update("INSERT INTO durable_signal VALUES(1)"); return null; }).when(schedules).signal(any(), eq(0L));
+        assertThrows(IllegalStateException.class, () -> new TransactionTemplate(manager).executeWithoutResult(tx -> {
+            worker.wakeInitial(CLIENT, "hri-test"); throw new IllegalStateException("rollback business");
+        }));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM durable_signal", Integer.class));
+        verify(schedules).signal(initialInvocation().key(), 0);
     }
 
     @AfterEach
@@ -160,7 +204,7 @@ class HostingRentReconcilerTest {
     }
 
     @Test
-    void durablePollWithoutWakeMarksUnknownBeforeIoThenCapturesExactSuccessProof() {
+    void domainReconciliationMarksUnknownBeforeIoThenCapturesExactSuccessProof() {
         when(provider.prepareAndObserve(any())).thenAnswer(call -> {
             assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
             assertEquals("PROVISIONING_UNKNOWN", intent.getStatus());
@@ -177,8 +221,8 @@ class HostingRentReconcilerTest {
             intent.setStatus("ACTIVE"); lease.setStatus("ACTIVE");
             return null;
         });
-        worker.reconcilePending(); // No wake signal; recovery comes from persisted intent.
-        worker.reconcilePending(); // Terminal state fences a repeated row/callback.
+        worker.reconcileOne(intent, provider); // Authoritative intent, not a scheduler memory flag.
+        worker.reconcileOne(intent, provider); // Terminal state fences a repeated row/callback.
         verify(provider, times(1)).prepareAndObserve(any());
         verify(ledger, times(1)).capture(any());
         verify(ledger, never()).refund(any());
@@ -193,18 +237,18 @@ class HostingRentReconcilerTest {
     @Test
     void exceptionNullUnknownAndMismatchedProofNeverRefundOrCapture() {
         when(provider.prepareAndObserve(any())).thenThrow(new IllegalStateException("timeout fixture"));
-        worker.reconcilePending();
+        assertThrows(IllegalStateException.class, () -> worker.reconcileOne(intent, provider));
         assertEquals("PROVISIONING_UNKNOWN", intent.getStatus());
         doReturn(null).when(provider).prepareAndObserve(any());
-        worker.reconcilePending();
+        worker.reconcileOne(intent, provider);
         doAnswer(call -> new ManagedHostingProvisioner.Observation(call.getArgument(0),
                 ManagedHostingProvisioner.Outcome.UNKNOWN, null)).when(provider).prepareAndObserve(any());
-        worker.reconcilePending();
+        worker.reconcileOne(intent, provider);
         var wrong = new ManagedHostingProvisioner.Preparation(TENANT, CLIENT, OWNER, AGENT,
                 "different-intent", "hrl-test", "17", 1800000000000L);
         doReturn(new ManagedHostingProvisioner.Observation(wrong, ManagedHostingProvisioner.Outcome.FAILED_NO_EFFECT, "wrong-proof"))
                 .when(provider).prepareAndObserve(any());
-        worker.reconcilePending();
+        worker.reconcileOne(intent, provider);
         verify(ledger, times(1)).markProvisioningUnknown(any());
         verify(ledger, never()).confirmProvisioningSucceeded(any());
         verify(ledger, never()).confirmProvisioningFailedNoEffect(any());
@@ -217,7 +261,7 @@ class HostingRentReconcilerTest {
         intent.setStatus("PROVISIONING_UNKNOWN").setVersion(2L);
         when(provider.prepareAndObserve(any())).thenAnswer(call -> new ManagedHostingProvisioner.Observation(
                 call.getArgument(0), ManagedHostingProvisioner.Outcome.FAILED_NO_EFFECT, "trusted-no-effect"));
-        worker.reconcilePending();
+        worker.reconcileOne(intent, provider);
         ArgumentCaptor<HostingRentSettlementCommand> command = ArgumentCaptor.forClass(HostingRentSettlementCommand.class);
         verify(ledger).refund(command.capture());
         assertEquals(3L, command.getValue().expectedIntentVersion());
@@ -284,7 +328,7 @@ class HostingRentReconcilerTest {
             return new ManagedHostingProvisioner.Observation(call.getArgument(0),
                     ManagedHostingProvisioner.Outcome.SERVICE_READY, "fresh-live-proof", System.currentTimeMillis());
         });
-        worker.reconcilePending();
+        worker.reconcileOne(intent, provider);
         verify(ledger).capture(argThat(c -> c.expectedIntentVersion() == 3));
         verify(provider).prepareAndObserve(any());
         verify(ledger, never()).confirmProvisioningSucceeded(any());
@@ -296,52 +340,53 @@ class HostingRentReconcilerTest {
     @Test void committedReadyOfflineUnknownWrongAssociationAndLegacyLinkCannotCaptureOrRefund() {
         intent.setStatus("SERVICE_READY").setVersion(3L);
         when(provider.prepareAndObserve(any())).thenThrow(new IllegalStateException("offline"));
-        worker.reconcilePending();
+        assertThrows(IllegalStateException.class, () -> worker.reconcileOne(intent, provider));
         doAnswer(call -> new ManagedHostingProvisioner.Observation(call.getArgument(0),
                 ManagedHostingProvisioner.Outcome.UNKNOWN, null)).when(provider).prepareAndObserve(any());
-        worker.reconcilePending();
+        worker.reconcileOne(intent, provider);
         var wrong = new ManagedHostingProvisioner.Preparation(TENANT, CLIENT, OWNER, AGENT,
                 "other-intent", "hrl-test", "17", intent.getReservedAt());
         doReturn(new ManagedHostingProvisioner.Observation(wrong, ManagedHostingProvisioner.Outcome.SERVICE_READY, "stale"))
                 .when(provider).prepareAndObserve(any());
-        worker.reconcilePending();
+        worker.reconcileOne(intent, provider);
         intent.setRuntimeInstallationId(null).setRuntimeManifestSha256(null).setRuntimeProvisionGeneration(0L);
         doAnswer(call -> new ManagedHostingProvisioner.Observation(call.getArgument(0),
                 ManagedHostingProvisioner.Outcome.SERVICE_READY, "legacy-ready")).when(provider).prepareAndObserve(any());
-        worker.reconcilePending();
+        worker.reconcileOne(intent, provider);
         verifyNoInteractions(ledger);
     }
 
     @Test
     void changedBindingOrStaleOldIntentCannotReachSettlementOrProvisioning() {
         lease.setLatestIntentId("new-order-intent");
-        worker.reconcilePending();
+        worker.reconcileOne(intent, provider);
         verifyNoInteractions(ledger); verify(provider, never()).prepareAndObserve(any());
         lease.setLatestIntentId("hri-test");
         when(provider.prepareAndObserve(any())).thenAnswer(call -> {
             when(bindings.findActiveByTenantClientAndPersonaForUpdate(TENANT, CLIENT, "wuyong")).thenReturn(null);
             return new ManagedHostingProvisioner.Observation(call.getArgument(0), ManagedHostingProvisioner.Outcome.SERVICE_READY, "ready");
         });
-        worker.reconcilePending();
+        worker.reconcileOne(intent, provider);
         verify(ledger, never()).capture(any()); verify(ledger, never()).refund(any());
     }
 
     @Test
-    void boundedScanMovesBeyondOneHundredHeldOrdersThenWrapsWithoutLosingDurableState() {
+    void startupPagesBeyondOneHundredHeldOrdersWithoutPeriodicEmptyScans() {
         var rows = java.util.stream.LongStream.rangeClosed(1, 100).mapToObj(id ->
                 new EconomyHostingProvisioningIntentEntity().setId(id).setIntentId("held-" + id)
                         .setTenantId(TENANT).setClientId(CLIENT)).toList();
         when(mapper.selectPendingIntents(TENANT, CLIENT, 0L)).thenReturn(rows);
         when(mapper.selectPendingIntents(TENANT, CLIENT, 100L)).thenReturn(List.of());
-        worker.reconcilePending(); worker.reconcilePending(); worker.reconcilePending();
-        verify(mapper, times(2)).selectPendingIntents(TENANT, CLIENT, 0L); verify(mapper).selectPendingIntents(TENANT, CLIENT, 100L);
+        worker.schedulePending();
+        verify(mapper).selectPendingIntents(TENANT, CLIENT, 0L); verify(mapper).selectPendingIntents(TENANT, CLIENT, 100L);
+        verify(schedules, times(100)).signal(any(), eq(0L));
         verify(provider, never()).prepareAndObserve(any()); verifyNoInteractions(ledger);
     }
 
     @Test
     void noProviderIoIsAllowedInsideCallerTransaction() {
         assertThrows(IllegalStateException.class, () -> new TransactionTemplate(manager).executeWithoutResult(
-                status -> worker.reconcilePending()));
+                status -> worker.reconcileOne(intent, provider)));
         verify(provider, never()).prepareAndObserve(any()); verifyNoInteractions(mapper, ledger);
     }
 

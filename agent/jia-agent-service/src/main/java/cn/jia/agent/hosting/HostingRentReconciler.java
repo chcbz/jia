@@ -10,7 +10,12 @@ import cn.jia.economy.hosting.HostingRentOutcomeCommand;
 import cn.jia.economy.hosting.HostingRentSettlementCommand;
 import cn.jia.economy.mapper.EconomyHostingRentMapper;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.scheduling.annotation.Scheduled;
+import cn.jia.task.scheduling.ScheduleService;
+import cn.jia.task.scheduling.ScheduleKey;
+import cn.jia.task.scheduling.ScheduledJobHandler;
+import cn.jia.task.scheduling.ScheduledInvocation;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -19,11 +24,12 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicBoolean;
+
 
 /** Narrow durable rent reconciliation, not a generic outbox. Every external step is outside a transaction. */
 @Component
-public final class HostingRentReconciler {
+public final class HostingRentReconciler implements ScheduledJobHandler {
+    public static final String HANDLER = "hosting-rent.provision";
     private final AgentHostingRentProperties properties;
     private final EconomyPreviewGate preview;
     private final EconomyHostingRentMapper mapper;
@@ -36,10 +42,7 @@ public final class HostingRentReconciler {
     private final cn.jia.agent.dao.AgentPersonaBindingDao bindings;
     private final boolean schemaEnabled;
     private final cn.jia.core.security.FixedTenantAdmissionPolicy scope;
-    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(HostingRentReconciler.class);
-    private final AtomicBoolean wake = new AtomicBoolean();
-    private long freeScanAfterId;
-    private long scanAfterId; // Fair bounded pages; resets on restart, never replaces durable intent state.
+    private final ObjectProvider<ScheduleService> schedules;
 
     public HostingRentReconciler(AgentHostingRentProperties properties, EconomyPreviewGate preview,
             EconomyHostingRentMapper mapper, HostingRentLedgerService ledger, AgentIdentityService identities,
@@ -47,45 +50,75 @@ public final class HostingRentReconciler {
             ManagedHostingCredentials credentials, PlatformTransactionManager transactionManager,
             cn.jia.agent.dao.AgentPersonaBindingDao bindings,
             cn.jia.core.security.FixedTenantAdmissionPolicy scope,
-            @org.springframework.beans.factory.annotation.Value("${economy.hosting-rent.schema-enabled:false}") boolean schemaEnabled) {
+            @org.springframework.beans.factory.annotation.Value("${economy.hosting-rent.schema-enabled:false}") boolean schemaEnabled,
+            ObjectProvider<ScheduleService> schedules) {
         this.properties = properties; this.preview = preview; this.mapper = mapper; this.ledger = ledger;
         this.identities = identities; this.owners = owners; this.providers = providers;
         this.credentials = credentials;
         this.transactions = new TransactionTemplate(transactionManager);
-        this.bindings = bindings; this.schemaEnabled = schemaEnabled; this.scope = scope;
+        this.bindings = bindings; this.schemaEnabled = schemaEnabled; this.scope = scope; this.schedules = schedules;
     }
 
-    public void wake() { wake.set(true); }
+    @Override public String getName() { return HANDLER; }
 
-    @Scheduled(fixedDelayString = "${agent.hosting-rent.reconcile-delay-ms:5000}")
-    public void reconcilePending() {
+    /** Joins the caller's reserve/reprovision transaction; Redis is only an after-commit hint. */
+    public void wakeInitial(String clientId, String intentId) { signal(clientId, "initial:" + intentId); }
+    public void wakeReprovision(String clientId, String requestId) { signal(clientId, "reprovision:" + requestId); }
+    private void signal(String clientId, String key) {
+        schedules.getObject().signal(new ScheduleKey(clientId, HANDLER, key, ""), 0);
+    }
+
+    /** One startup catch-up, not a periodic business-table poll. New work is registered atomically. */
+    @EventListener(ApplicationReadyEvent.class)
+    public void schedulePending() {
         if (!properties.configured() || !schemaEnabled) return;
+        long cursor = 0;
+        while (true) {
+            var page = mapper.selectPendingIntents(scope.businessTenantId(), scope.clientId(), cursor);
+            for (var row : page) wakeInitial(row.getClientId(), row.getIntentId());
+            if (page.size() < 100) break;
+            cursor = page.getLast().getId();
+        }
+        cursor = 0;
+        while (true) {
+            var page = mapper.selectPendingReprovisions(scope.businessTenantId(), scope.clientId(), cursor);
+            for (var row : page) wakeReprovision(row.getClientId(), row.getRequestId());
+            if (page.size() < 100) break;
+            cursor = page.getLast().getId();
+        }
+    }
+
+    @Override public void executeScheduled(ScheduledInvocation invocation) {
+        scope.requireAdmitted(invocation.tenantId(), invocation.key().clientId());
         if (TransactionSynchronizationManager.isActualTransactionActive()) throw new IllegalStateException("rent I/O must be after commit");
-        ManagedHostingProvisioner provider = providers.getIfAvailable();
-        if (provider == null || !provider.available()) return;
-        wake.getAndSet(false);
-        // Poll even without a wake: the persisted intent, NOT the in-memory signal, survives crashes.
-        var page = mapper.selectPendingIntents(scope.businessTenantId(), scope.clientId(), scanAfterId);
-        scanAfterId = page.size() < 100 ? 0L : page.getLast().getId();
-        for (EconomyHostingProvisioningIntentEntity row : page) {
-            if (!preview.allows(row.getTenantId(), row.getClientId())) continue;
-            try { reconcileOne(row, provider); }
-            catch (RuntimeException unknown) {
-                // Never infer no-effect from exception/timeout/rollback. Persisted escrow stays held.
-                // No filesystem compensation or exception-as-failure settlement here.
-                LOG.warn("Hosting rent reconciliation deferred for intent {} ({})",
-                        row.getIntentId(), unknown.getClass().getSimpleName());
-            }
-        }
-        var freePage = mapper.selectPendingReprovisions(scope.businessTenantId(), scope.clientId(), freeScanAfterId);
-        freeScanAfterId = freePage.size() < 100 ? 0L : freePage.getLast().getId();
-        for (var row : freePage) {
-            if (!preview.allows(row.getTenantId(), row.getClientId())) continue;
-            try { reconcileFree(row, provider); }
-            catch (RuntimeException unknown) {
-                LOG.warn("Free hosting reconciliation deferred for request {} ({})", row.getRequestId(), unknown.getClass().getSimpleName());
-            }
-        }
+        if (!properties.configured() || !schemaEnabled || !preview.allows(invocation.tenantId(), invocation.key().clientId()))
+            throw new IllegalStateException("Hosting provisioning partition unavailable");
+        String key = invocation.key().businessKey(), tenant = invocation.tenantId(), client = invocation.key().clientId();
+        if (key.startsWith("initial:")) {
+            String id = key.substring("initial:".length());
+            var row = mapper.selectIntent(tenant, client, id);
+            if (!pending(row)) return;
+            reconcileOne(row, requireProvider());
+            if (pending(mapper.selectIntent(tenant, client, id))) throw new IllegalStateException("Hosting initial outcome pending");
+        } else if (key.startsWith("reprovision:")) {
+            String id = key.substring("reprovision:".length());
+            var row = transactions.execute(status -> mapper.selectReprovisionForUpdate(tenant, client, id));
+            if (!pending(row)) return;
+            reconcileFree(row, requireProvider());
+            var current = transactions.execute(status -> mapper.selectReprovisionForUpdate(tenant, client, id));
+            if (pending(current)) throw new IllegalStateException("Hosting reprovision outcome pending");
+        } else throw new IllegalArgumentException("Unknown hosting schedule key");
+    }
+    private ManagedHostingProvisioner requireProvider() {
+        var provider = providers.getIfAvailable();
+        if (provider == null || !provider.available()) throw new IllegalStateException("Hosting provider unavailable");
+        return provider;
+    }
+    private static boolean pending(EconomyHostingProvisioningIntentEntity row) {
+        return row != null && java.util.Set.of("FUNDS_RESERVED", "PROVISIONING_UNKNOWN", "SERVICE_READY", "FAILED_NO_EFFECT").contains(row.getStatus());
+    }
+    private static boolean pending(EconomyHostingReprovisionEntity row) {
+        return row != null && java.util.Set.of("ACCEPTED", "PROVISIONING_UNKNOWN").contains(row.getStatus());
     }
 
     void reconcileOne(EconomyHostingProvisioningIntentEntity row, ManagedHostingProvisioner provider) {
