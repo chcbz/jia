@@ -102,13 +102,14 @@ public class AgentTaskFormalDeliveryDaoImpl implements AgentTaskFormalDeliveryDa
                 || reviewedAt <= 0) {
             throw new IllegalArgumentException("formal delivery review transition is invalid");
         }
-        id(reviewedByJiacn, "reviewedByJiacn");
-        if (reviewedByJiacn.length() > 50) {
-            throw new IllegalArgumentException("reviewedByJiacn is invalid");
-        }
-        if (next == AgentTaskFormalDeliveryState.CHANGES_REQUESTED) requiredText(reviewReason, "reviewReason");
-        if (next == AgentTaskFormalDeliveryState.ACCEPTED && reviewReason != null) {
-            throw new IllegalArgumentException("accepted formal delivery must not retain review reason");
+        boolean automatic = next == AgentTaskFormalDeliveryState.ACCEPTED && reviewedByJiacn == null
+                && AgentTaskFormalDeliveryState.HOSTING_EXPIRY_REVIEW_REASON.equals(reviewReason);
+        if (!automatic) {
+            id(reviewedByJiacn, "reviewedByJiacn");
+            if (reviewedByJiacn.length() > 50) throw new IllegalArgumentException("reviewedByJiacn is invalid");
+            if (next == AgentTaskFormalDeliveryState.CHANGES_REQUESTED) requiredText(reviewReason, "reviewReason");
+            if (next == AgentTaskFormalDeliveryState.ACCEPTED && reviewReason != null)
+                throw new IllegalArgumentException("accepted owner review must not retain review reason");
         }
         return mapper.reviewByVersion(tenantId, clientId, deliveryId, expected.value(), expectedVersion,
                 next.value(), reviewedByJiacn, reviewReason, reviewedAt, expectedVersion + 1);

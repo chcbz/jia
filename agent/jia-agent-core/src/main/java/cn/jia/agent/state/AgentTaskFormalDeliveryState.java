@@ -13,6 +13,9 @@ public enum AgentTaskFormalDeliveryState {
     ACCEPTED("accepted"),
     CHANGES_REQUESTED("changes_requested");
 
+    /** Persisted automatic acceptance reason; never a client-supplied owner decision. */
+    public static final String HOSTING_EXPIRY_REVIEW_REASON = "hosting_rent_expired";
+
     private static final Map<String, AgentTaskFormalDeliveryState> BY_VALUE =
             java.util.Arrays.stream(values()).collect(Collectors.toUnmodifiableMap(
                     AgentTaskFormalDeliveryState::value, Function.identity()));

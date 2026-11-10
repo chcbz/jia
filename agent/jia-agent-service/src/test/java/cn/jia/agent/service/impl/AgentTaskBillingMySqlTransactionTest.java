@@ -97,6 +97,7 @@ class AgentTaskBillingMySqlTransactionTest {
     private AgentTaskExecutionGrantServiceImpl assignment;
     private AgentTaskFormalDeliveryDecisionService decisions;
     private AgentTaskCancellationService cancellation;
+    private cn.jia.agent.hosting.HostingRentTaskSettlement rentSettlement;
     private AgentTaskBountyBootstrapOutboxDao outbox;
     private AgentTaskBountyBootstrapOutboxService bootstrap;
     private AgentTaskEventAfterCommitPublisher publisher;
@@ -152,7 +153,7 @@ class AgentTaskBillingMySqlTransactionTest {
         new EconomySchemaInitializer(jdbc).afterPropertiesSet();
         // Read unchanged production definitions; no parallel hand-written table schema.
         String schema = Files.readString(DDL.resolve("schema.sql"));
-        for (String table : List.of("agent_task_meta", "agent_task_member", "agent_task_work_item", "agent_task_event", "agent_task_artifact")) {
+        for (String table : List.of("agent_task_meta", "agent_task_member", "agent_task_work_item", "agent_task_event", "agent_task_artifact", "agent_persona_binding")) {
             int start = schema.indexOf("CREATE TABLE IF NOT EXISTS " + table + " (");
             assertTrue(start >= 0, table);
             jdbc.execute(schema.substring(start, schema.indexOf(";\n", start)));
@@ -161,13 +162,16 @@ class AgentTaskBillingMySqlTransactionTest {
                 "agent-task-bounty-bootstrap-outbox-v1.sql", "agent-task-formal-delivery-r2.sql")) {
             new ResourceDatabasePopulator(new FileSystemResource(DDL.resolve(file))).execute(source);
         }
+        new ResourceDatabasePopulator(new org.springframework.core.io.ClassPathResource("db/economy-v0-hosting-rent.sql")).execute(source);
         manager = new DataSourceTransactionManager(source);
         var config = new MybatisConfiguration(); config.setMapUnderscoreToCamelCase(true);
         for (Class<?> mapper : List.of(AgentTaskMetaMapper.class, AgentTaskMemberMapper.class,
                 AgentTaskWorkItemMapper.class, AgentTaskEventMapper.class, AgentTaskExecutionGrantMapper.class,
                 AgentTaskBountyBootstrapOutboxMapper.class, AgentTaskFormalDeliveryMapper.class, AgentTaskCancellationMapper.class,
                 PersonalWorkspaceExecutionMapper.class, PersonalWorkspaceExecutionInputMapper.class, PersonalWorkspaceExecutionOutputMapper.class, SkillExecutionMapper.class, AgentTaskProviderCostConsentMapper.class,
-                EconomyLedgerMapper.class, EconomyTaskBillingMapper.class, ControlledImageBridgeOperationMapper.class)) config.addMapper(mapper);
+                EconomyLedgerMapper.class, EconomyTaskBillingMapper.class, ControlledImageBridgeOperationMapper.class,
+                cn.jia.economy.mapper.EconomyHostingRentMapper.class, cn.jia.economy.mapper.EconomyHostingRenewalMapper.class,
+                HostingRentFinishingMapper.class, AgentPersonaBindingMapper.class)) config.addMapper(mapper);
         var global = new GlobalConfig(); global.setIdentifierGenerator(new DefaultIdentifierGenerator());
         var factory = new MybatisSqlSessionFactoryBean(); factory.setDataSource(source);
         factory.setConfiguration(config); factory.setGlobalConfig(global);
@@ -264,6 +268,13 @@ class AgentTaskBillingMySqlTransactionTest {
                 executionCancellation,
                 mock(cn.jia.chat.service.TaskDiscussionCancellation.class),
                 proxy(leases,AgentWorkItemLeaseService.class),consentCancellation);
+        var rentBindings = new cn.jia.agent.dao.impl.AgentPersonaBindingDaoImpl();
+        ReflectionTestUtils.setField(rentBindings, "baseMapper", sql.getMapper(AgentPersonaBindingMapper.class));
+        rentSettlement = new cn.jia.agent.hosting.HostingRentTaskSettlement(sql.getMapper(HostingRentFinishingMapper.class),
+                rentBindings, sql.getMapper(cn.jia.economy.mapper.EconomyHostingRentMapper.class),
+                sql.getMapper(cn.jia.economy.mapper.EconomyHostingRenewalMapper.class), roots,
+                new AgentTaskFormalDeliveryDaoImpl(sql.getMapper(AgentTaskFormalDeliveryMapper.class)), decisions,
+                cancellation, new cn.jia.core.security.FixedTenantAdmissionPolicy(TENANT, CLIENT));
         jdbc.update("INSERT INTO agent_task_meta(task_id,owner_jiacn,tenant_id,client_id) VALUES(?,?,?,?)",
                 TASK, OWNER, TENANT, CLIENT);
         jdbc.update("""
@@ -284,6 +295,69 @@ class AgentTaskBillingMySqlTransactionTest {
         } finally { if (httpContext != null) httpContext.close(); }
         if (publisher != null) publisher.close();
         if (admin != null && database != null) admin.execute("DROP DATABASE IF EXISTS `" + database + "`");
+    }
+
+    private void expiredRelationship() {
+        jdbc.update("INSERT INTO agent_persona_binding(id,jiacn,persona_code,agent_id,bound_at,status,tenant_id,client_id) VALUES(7,?,'hero',?,1,1,?,?)",
+                OWNER, AGENT, TENANT, CLIENT);
+        jdbc.update("""
+                INSERT INTO economy_hosting_lease(lease_id,principal_type,principal_id,persona_code,agent_id,binding_id,
+                plan_id,plan_version,amount_wen,period_seconds,status,paid_from,paid_through,locked_at,latest_intent_id,version,tenant_id,client_id,create_time,update_time)
+                VALUES('expired-lease','USER',?,'hero',?,'7','hosted',1,500,2592000,'FINISHING',1,2,2,'intent',1,?,?,1,1)
+                """, PAYER, AGENT, TENANT, CLIENT);
+    }
+    @Test void expiredRelationshipSettlementAcceptsOnlyOriginalOwnersDeliveredTask() {
+        assign(); prepareSubmitted(); expiredRelationship();
+        jdbc.update("INSERT INTO agent_task_meta(task_id,owner_jiacn,tenant_id,client_id,assigned_agent_id,reward_status) VALUES('foreign','other-owner',?,?,?,'running')",
+                TENANT, CLIENT, AGENT);
+        rentSettlement.settleExpiredTasks(new EconomyScope(TENANT, CLIENT), "expired-lease");
+        rentSettlement.settleExpiredTasks(new EconomyScope(TENANT, CLIENT), "expired-lease");
+        assertEquals("CAPTURED", charge());
+        assertEquals("completed", jdbc.queryForObject("SELECT reward_status FROM agent_task_meta WHERE task_id=?", String.class,TASK));
+        assertEquals("running", jdbc.queryForObject("SELECT reward_status FROM agent_task_meta WHERE task_id='foreign'", String.class));
+        assertEquals(2,count("economy_transaction"));
+        assertEquals(1,jdbc.queryForObject("SELECT live_slot FROM economy_hosting_lease",Integer.class));
+        assertEquals(1,jdbc.queryForObject("SELECT status FROM agent_persona_binding",Integer.class));
+    }
+    @Test void expiredRelationshipSettlementCancelsFailedTaskAndReleasesHoldOnce() {
+        assign(); expiredRelationship(); jdbc.update("UPDATE agent_task_meta SET reward_status='failed'");
+        rentSettlement.settleExpiredTasks(new EconomyScope(TENANT, CLIENT), "expired-lease");
+        rentSettlement.settleExpiredTasks(new EconomyScope(TENANT, CLIENT), "expired-lease");
+        assertEquals("cancelled",taskState()); assertEquals("RELEASED",charge()); assertEquals(100,wallet(jdbc));
+        assertEquals(2,count("economy_transaction"));
+    }
+    @Test void expiredRelationshipSettlementDoesNotForceVoluntaryRemovalOrWrongBinding() {
+        assign(); expiredRelationship(); jdbc.update("UPDATE economy_hosting_lease SET locked_at=NULL");
+        rentSettlement.settleExpiredTasks(new EconomyScope(TENANT, CLIENT), "expired-lease");
+        assertEquals("HELD",charge()); assertEquals("assigned",taskState());
+        jdbc.update("UPDATE economy_hosting_lease SET locked_at=2,binding_id='8'");
+        rentSettlement.settleExpiredTasks(new EconomyScope(TENANT, CLIENT), "expired-lease");
+        assertEquals("HELD",charge()); assertEquals(1,count("economy_transaction"));
+    }
+
+    @Test
+    void automaticExpiryAcceptanceCapturesOnceAndPersistsSystemNotOwnerAudit() {
+        assign(); prepareSubmitted();
+        var command = new AgentTaskFormalDeliveryDecisionDTO(); command.setDeliveryId("delivery-1");
+        command.setDecision("accepted"); command.setExpectedTaskVersion(4L); command.setExpectedDeliveryVersion(0L);
+        assertFalse(decisions.acceptForHostingExpiry(TENANT, CLIENT, TASK, OWNER, command).getReplayed());
+        assertTrue(decisions.acceptForHostingExpiry(TENANT, CLIENT, TASK, OWNER, command).getReplayed());
+        assertEquals("CAPTURED", charge()); assertEquals("completed", taskState());
+        assertNull(jdbc.queryForObject("SELECT reviewed_by_jiacn FROM agent_task_formal_delivery", String.class));
+        assertEquals("hosting_rent_expired", jdbc.queryForObject("SELECT review_reason FROM agent_task_formal_delivery", String.class));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_event WHERE event_type='FORMAL_DELIVERY_ACCEPTED' AND actor_type='system' AND actor_id IS NULL", Integer.class));
+    }
+
+    @Test
+    void automaticExpiryEventFailureRollsBackMoneyAndCanRetry() {
+        assign(); prepareSubmitted(); failEvent = TaskEventType.FORMAL_DELIVERY_ACCEPTED;
+        var command = new AgentTaskFormalDeliveryDecisionDTO(); command.setDeliveryId("delivery-1");
+        command.setDecision("accepted"); command.setExpectedTaskVersion(4L); command.setExpectedDeliveryVersion(0L);
+        assertThrows(InjectedFailure.class, () -> decisions.acceptForHostingExpiry(TENANT, CLIENT, TASK, OWNER, command));
+        assertEquals("HELD", charge()); assertEquals("reviewing", taskState());
+        assertEquals("submitted", jdbc.queryForObject("SELECT state FROM agent_task_formal_delivery", String.class));
+        failEvent = null; decisions.acceptForHostingExpiry(TENANT, CLIENT, TASK, OWNER, command);
+        assertEquals("CAPTURED", charge());
     }
 
     @Test

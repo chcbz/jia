@@ -93,6 +93,21 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
                 root -> decideLocked(tenantId, clientId, taskId, ownerJiacn, root, decision));
     }
 
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public AgentTaskFormalDeliveryViewDTO acceptForHostingExpiry(String tenantId, String clientId, String taskId,
+            String ownerJiacn, AgentTaskFormalDeliveryDecisionDTO command) {
+        requireScope(tenantId, clientId, taskId, ownerJiacn);
+        Decision input = normalize(command);
+        if (input.state() != AgentTaskFormalDeliveryState.ACCEPTED)
+            throw invalid("Automatic hosting expiry can only accept a submitted delivery");
+        Decision decision = new Decision(input.deliveryId(), input.expectedTaskVersion(),
+                input.expectedDeliveryVersion(), input.state(),
+                AgentTaskFormalDeliveryState.HOSTING_EXPIRY_REVIEW_REASON, true);
+        return mutationTransaction.executeWithLockedTaskRootInOwnerScope(tenantId, clientId, ownerJiacn, taskId,
+                root -> decideLocked(tenantId, clientId, taskId, ownerJiacn, root, decision));
+    }
+
     private AgentTaskFormalDeliveryViewDTO decideLocked(String tenantId, String clientId, String taskId,
             String ownerJiacn, AgentTaskMetaEntity root, Decision decision) {
         requireRootScope(root, tenantId, clientId, ownerJiacn, taskId);
@@ -121,7 +136,7 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
         long decidedAt = now();
         int reviewed = deliveryDao.reviewByVersion(tenantId, clientId, delivery.getDeliveryId(),
                 AgentTaskFormalDeliveryState.SUBMITTED.value(), decision.expectedDeliveryVersion(),
-                decision.state().value(), ownerJiacn, decision.reviewReason(), decidedAt);
+                decision.state().value(), reviewer(ownerJiacn, decision), decision.reviewReason(), decidedAt);
         if (reviewed == 0) throw conflict("Formal delivery decision changed concurrently");
         requireOne(reviewed, "Formal delivery decision CAS affected an unexpected row count");
 
@@ -212,8 +227,11 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
         if (decision.state() == AgentTaskFormalDeliveryState.CHANGES_REQUESTED) {
             formal.put(TaskEventPayload.Key.REASON_CODE, "owner_changes_requested");
         }
+        if (decision.automatic()) formal.put(TaskEventPayload.Key.REASON_CODE,
+                AgentTaskFormalDeliveryState.HOSTING_EXPIRY_REVIEW_REASON);
         eventWriter.append(AgentTaskMutationEventSupport.command(tenantId, clientId, ownerJiacn, taskId,
-                formalEvent, TaskEventType.ActorType.ROLE, OWNER_ROLE,
+                formalEvent, decision.automatic() ? TaskEventType.ActorType.SYSTEM : TaskEventType.ActorType.ROLE,
+                decision.automatic() ? null : OWNER_ROLE,
                 TaskEventType.Aggregate.FORMAL_DELIVERY, decision.deliveryId(), formal, occurredAt,
                 decision.expectedDeliveryVersion() + 1));
 
@@ -258,11 +276,15 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
                         .put(TaskEventPayload.Key.RESULT_VERSION, taskResult), occurredAt, taskResult));
     }
 
+    private static String reviewer(String ownerJiacn, Decision decision) {
+        return decision.automatic() ? null : ownerJiacn;
+    }
+
     private boolean isReplay(AgentTaskFormalDeliveryEntity delivery, String ownerJiacn,
             Decision decision) {
         return decision.state().value().equals(delivery.getState())
                 && Objects.equals(decision.expectedDeliveryVersion() + 1, delivery.getVersion())
-                && ownerJiacn.equals(delivery.getReviewedByJiacn())
+                && Objects.equals(reviewer(ownerJiacn, decision), delivery.getReviewedByJiacn())
                 && Objects.equals(decision.reviewReason(), delivery.getReviewReason())
                 && delivery.getReviewedAt() != null && delivery.getReviewedAt() > 0;
     }
@@ -307,7 +329,7 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
             throw invalid("Accepted formal delivery must not carry a review reason");
         }
         return new Decision(command.getDeliveryId(), command.getExpectedTaskVersion(),
-                command.getExpectedDeliveryVersion(), state, reason);
+                command.getExpectedDeliveryVersion(), state, reason, false);
     }
 
     private AgentTaskFormalDeliveryEntity copyDecision(AgentTaskFormalDeliveryEntity delivery,
@@ -320,7 +342,7 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
         result.setManifestArtifactId(delivery.getManifestArtifactId());
         result.setManifestArtifactVersion(delivery.getManifestArtifactVersion());
         result.setSubmittedAt(delivery.getSubmittedAt()); result.setState(decision.state().value());
-        result.setVersion(decision.expectedDeliveryVersion() + 1); result.setReviewedByJiacn(ownerJiacn);
+        result.setVersion(decision.expectedDeliveryVersion() + 1); result.setReviewedByJiacn(reviewer(ownerJiacn, decision));
         result.setReviewReason(decision.reviewReason()); result.setReviewedAt(decidedAt);
         return result;
     }
@@ -428,5 +450,5 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
     private static AgentTaskCollaborationException notFound(String message) { return new AgentTaskCollaborationException(Reason.NOT_FOUND, message); }
     private static AgentTaskCollaborationException forbidden(String message) { return new AgentTaskCollaborationException(Reason.FORBIDDEN, message); }
     private record Decision(String deliveryId, long expectedTaskVersion, long expectedDeliveryVersion,
-                            AgentTaskFormalDeliveryState state, String reviewReason) { }
+                            AgentTaskFormalDeliveryState state, String reviewReason, boolean automatic) { }
 }

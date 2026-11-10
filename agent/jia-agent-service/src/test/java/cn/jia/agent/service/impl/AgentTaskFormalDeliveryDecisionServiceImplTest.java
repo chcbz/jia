@@ -158,6 +158,57 @@ class AgentTaskFormalDeliveryDecisionServiceImplTest {
     }
 
     @Test
+    void automaticAcceptanceUsesSystemAuditAndSameRootLockedCapture() throws Exception {
+        when(deliveryDao.findForUpdate(TENANT, CLIENT, DELIVERY)).thenReturn(delivery());
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, OWNER, TASK, WORK)).thenReturn(workItem());
+        when(memberDao.findByTaskAndAgentForUpdate(TENANT, CLIENT, OWNER, TASK, "agent-a")).thenReturn(member());
+        when(billing.capture(billingTask())).thenAnswer(i -> { assertTrue(rootLocked); return null; });
+        when(deliveryDao.reviewByVersion(TENANT, CLIENT, DELIVERY, "submitted", 0L,
+                "accepted", null, "hosting_rent_expired", 2_000L)).thenReturn(1);
+        when(taskMetaDao.updateStatusByVersionInOwnerScope(TENANT, CLIENT, OWNER, TASK, 4L,
+                "completed", 100L, 2_000L, null)).thenReturn(1);
+        when(workItemDao.updateByVersion(eq(TENANT), eq(CLIENT), eq(OWNER), eq(WORK), eq(8L), any())).thenReturn(1);
+        when(memberDao.updateByVersion(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq("agent-a"), eq(3L), any())).thenReturn(1);
+        when(deliveryDao.listItems(TENANT, CLIENT, DELIVERY)).thenReturn(List.of(item()));
+        assertEquals("accepted", service.acceptForHostingExpiry(TENANT, CLIENT, TASK, OWNER, accepted()).getState());
+        verify(billing).capture(billingTask());
+        ArgumentCaptor<AgentTaskEventWriteCommand> events = ArgumentCaptor.forClass(AgentTaskEventWriteCommand.class);
+        verify(eventWriter, org.mockito.Mockito.times(4)).append(events.capture());
+        var event = events.getAllValues().getFirst();
+        assertEquals("system", event.getActorType()); org.junit.jupiter.api.Assertions.assertNull(event.getActorId());
+        @SuppressWarnings("unchecked") var payload = (java.util.Map<String,Object>) new com.fasterxml.jackson.databind.ObjectMapper()
+                .readValue(event.getEventJson(), java.util.Map.class);
+        assertEquals("hosting_rent_expired", payload.get("reasonCode"));
+        AgentTaskWorkspaceEventValidator.validate(event.getEventType(), event.getActorType(), event.getActorId(),
+                event.getAggregateType(), event.getAggregateId(), payload, TASK);
+        assertThrows(RuntimeException.class, () -> AgentTaskWorkspaceEventValidator.validate(event.getEventType(),
+                "role", "task_owner", event.getAggregateType(), event.getAggregateId(), payload, TASK));
+        payload.remove("reasonCode");
+        assertThrows(RuntimeException.class, () -> AgentTaskWorkspaceEventValidator.validate(event.getEventType(),
+                "system", null, event.getAggregateType(), event.getAggregateId(), payload, TASK));
+    }
+
+    @Test
+    void automaticReplayIsReadOnlyAndCannotBeReplayedAsAnOwnerDecision() {
+        var row = delivery().setState("accepted").setVersion(1L).setReviewedByJiacn(null)
+                .setReviewReason("hosting_rent_expired").setReviewedAt(2_000L);
+        when(deliveryDao.findForUpdate(TENANT, CLIENT, DELIVERY)).thenReturn(row);
+        when(deliveryDao.listItems(TENANT, CLIENT, DELIVERY)).thenReturn(List.of(item()));
+        assertTrue(service.acceptForHostingExpiry(TENANT, CLIENT, TASK, OWNER, accepted()).getReplayed());
+        assertThrows(AgentTaskCollaborationException.class, () -> service.decide(TENANT, CLIENT, TASK, OWNER, accepted()));
+        org.mockito.Mockito.verifyNoInteractions(billing, taskMetaDao, workItemDao, memberDao, eventWriter);
+    }
+
+    @Test
+    void publicOwnerDecisionCannotRequestAutomaticAuthorityAndAutomaticPathCannotRequestRework() {
+        var command = accepted(); command.setReviewReason("hosting_rent_expired");
+        assertThrows(AgentTaskCollaborationException.class, () -> service.decide(TENANT, CLIENT, TASK, OWNER, command));
+        assertThrows(AgentTaskCollaborationException.class,
+                () -> service.acceptForHostingExpiry(TENANT, CLIENT, TASK, OWNER, changesRequested()));
+        org.mockito.Mockito.verifyNoInteractions(transaction, billing, deliveryDao, eventWriter);
+    }
+
+    @Test
     void crossTenantOwnerCannotDecide() {
         when(transaction.executeWithLockedTaskRootInOwnerScope(
                 eq(TENANT), eq(CLIENT), eq("owner-b"), eq(TASK), any())).thenAnswer(invocation -> {

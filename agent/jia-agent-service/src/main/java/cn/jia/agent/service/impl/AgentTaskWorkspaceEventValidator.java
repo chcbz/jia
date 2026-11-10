@@ -2,6 +2,7 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.common.TaskEventPayload;
 import cn.jia.agent.common.TaskEventType;
+import cn.jia.agent.state.AgentTaskFormalDeliveryState;
 import java.math.BigInteger;
 import java.util.Map;
 import java.util.Set;
@@ -187,10 +188,12 @@ public final class AgentTaskWorkspaceEventValidator {
         if (TaskEventType.FORMAL_DELIVERY_ACCEPTED.equals(eventType)
                 || TaskEventType.FORMAL_DELIVERY_CHANGES_REQUESTED.equals(eventType)) {
             requireAggregateType(row, TaskEventType.Aggregate.FORMAL_DELIVERY);
-            if (!TaskEventType.ActorType.ROLE.equals(row.getActorType())
-                    || !"task_owner".equals(row.getActorId())) {
-                throw invalid();
-            }
+            boolean automatic = TaskEventType.FORMAL_DELIVERY_ACCEPTED.equals(eventType)
+                    && TaskEventType.ActorType.SYSTEM.equals(row.getActorType()) && row.getActorId() == null
+                    && AgentTaskFormalDeliveryState.HOSTING_EXPIRY_REVIEW_REASON.equals(
+                            payload.get(TaskEventPayload.Key.REASON_CODE));
+            if (!automatic && (!TaskEventType.ActorType.ROLE.equals(row.getActorType())
+                    || !"task_owner".equals(row.getActorId()))) throw invalid();
             requireEqualId(payload, TaskEventPayload.Key.DELIVERY_ID, row.getAggregateId());
             requireId(payload, TaskEventPayload.Key.WORK_ITEM_ID);
             String from = requireString(payload, TaskEventPayload.Key.FROM_STATUS);
@@ -201,13 +204,15 @@ public final class AgentTaskWorkspaceEventValidator {
                 throw invalid();
             }
             if (TaskEventType.FORMAL_DELIVERY_ACCEPTED.equals(eventType)) {
-                if (!"accepted".equals(to) || payload.containsKey(TaskEventPayload.Key.REASON_CODE)
-                        || !payload.keySet().equals(Set.of(
+                Set<String> expectedKeys = automatic ? Set.of(
                         TaskEventPayload.Key.DELIVERY_ID, TaskEventPayload.Key.WORK_ITEM_ID,
                         TaskEventPayload.Key.FROM_STATUS, TaskEventPayload.Key.TO_STATUS,
-                        TaskEventPayload.Key.EXPECTED_VERSION, TaskEventPayload.Key.RESULT_VERSION))) {
-                    throw invalid();
-                }
+                        TaskEventPayload.Key.EXPECTED_VERSION, TaskEventPayload.Key.RESULT_VERSION,
+                        TaskEventPayload.Key.REASON_CODE) : Set.of(
+                        TaskEventPayload.Key.DELIVERY_ID, TaskEventPayload.Key.WORK_ITEM_ID,
+                        TaskEventPayload.Key.FROM_STATUS, TaskEventPayload.Key.TO_STATUS,
+                        TaskEventPayload.Key.EXPECTED_VERSION, TaskEventPayload.Key.RESULT_VERSION);
+                if (!"accepted".equals(to) || !payload.keySet().equals(expectedKeys)) throw invalid();
             } else if (!"changes_requested".equals(to)
                     || !"owner_changes_requested".equals(
                     requireString(payload, TaskEventPayload.Key.REASON_CODE))
