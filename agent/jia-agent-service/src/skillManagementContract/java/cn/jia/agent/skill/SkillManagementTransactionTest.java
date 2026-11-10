@@ -787,6 +787,23 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
             AGENT,"accepted","request",body,false));
         assertEquals(99_999_950L,wallet());assertEquals(1,count("economy_skill_order"));assertEquals(1,count("agent_outbox_event"));
     }
+    @Test void stoppedReceivedPreparationRefundsOriginalHoldExactlyOnce() {
+        var c=install();
+        var stopped=result(c,evidence(c,"NOT_STARTED","ENTITLEMENT_TERMINATED"));
+        var receipt=service.result(proof(),stopped);assertEquals(receipt,service.result(proof(),stopped));
+        var ended=current(c);assertEquals("FAILED_FINAL",ended.get("status"));assertEquals("REFUNDED",ended.get("fundingStatus"));
+        assertEquals(false,ended.get("retryAllowed"));assertEquals(100_000_000L,wallet());
+        assertEquals(1,count("economy_skill_order"));assertEquals(1,count("agent_skill_management_result"));
+    }
+    @Test void stoppedReceivedActivationRefundsWithoutClaimingAnAppliedInstallation() {
+        var c=install();report(c,"PREPARED",null);var activation=current(c);
+        var stopped=result(activation,evidence(activation,"NOT_STARTED","ENTITLEMENT_TERMINATED"));
+        var receipt=service.result(proof(),stopped);assertEquals(receipt,service.result(proof(),stopped));
+        var ended=current(c);assertEquals("FAILED_FINAL",ended.get("status"));assertEquals("REFUNDED",ended.get("fundingStatus"));
+        assertEquals(false,ended.get("retryAllowed"));assertEquals(100_000_000L,wallet());
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM agent_skill_installation WHERE status='SUCCEEDED'",Integer.class));
+        assertEquals(1,count("economy_skill_order"));
+    }
     @Test void terminalReasonCannotRefundUnknownPreparation() {
         var c=install();var unknown=result(c,evidence(c,"UNKNOWN","ENTITLEMENT_TERMINATED"));validate("Result",unknown);
         service.result(proof(),unknown);c=current(c);assertEquals("RECOVERY_REQUIRED",c.get("status"));
