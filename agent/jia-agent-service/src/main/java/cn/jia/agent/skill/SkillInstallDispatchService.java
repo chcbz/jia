@@ -34,6 +34,15 @@ public final class SkillInstallDispatchService {
     private SkillManagementService management;
     @org.springframework.beans.factory.annotation.Autowired
     public void setManagement(SkillManagementService management) {this.management=management;}
+    /** Local socket ownership only; original dispatch still checks the full business/fencing contract. */
+    public boolean canDispatch(String tenant,String client,String agent) {
+        var transport=sessions.getIfAvailable();
+        if(transport==null)return false;
+        try {
+            var proof=authentication.currentRegisteredProof(tenant,client,agent);
+            return transport.isReady(tenant,client,agent,SkillMarketplaceService.sessionFence(proof));
+        } catch(IllegalArgumentException disconnected) { return false; }
+    }
     public AgentRawCommandDispatchResult dispatch(String tenant,String client,String owner,String change,String agent,String commandId,byte[] wire) {
         require(management!=null,503,"SKILL_STATE_UNAVAILABLE");
         return management.dispatch(tenant,client,owner,change,agent,commandId,wire);

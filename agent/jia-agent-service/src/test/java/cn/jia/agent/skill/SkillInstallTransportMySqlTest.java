@@ -32,9 +32,9 @@ class SkillInstallTransportMySqlTest {
         return beans.getBeanProvider(cn.jia.task.scheduling.ScheduleService.class);
     }
     private void dispatchPendingSkills() {
-        for(var row:mapper.pending("0",null,0))
+        for(var row:mapper.pendingForAgent("0",null,"agt_fixture",0))
             recovery.executeScheduled(new cn.jia.task.scheduling.ScheduledInvocation("0",
-                    SkillInstallRecoveryService.key(row),1));
+                    SkillInstallRecoveryService.key(row,"node-1"),1));
     }
 
     private JdbcTemplate admin,jdbc;
@@ -69,8 +69,8 @@ class SkillInstallTransportMySqlTest {
         commands=sql.getMapper(AgentCommandTransportMapper.class);mapper=sql.getMapper(AgentSkillInstallRecoveryMapper.class);
         var manager=new DataSourceTransactionManager(ds);tx=new TransactionTemplate(manager);
         var preview=new EconomyPreviewGate(new EconomyPreviewProperties(true,List.of(new EconomyPreviewProperties.AllowedScope("0","Client-A"))));
-        writer=new SkillInstallCommandWriter(new AgentCommandTransportDaoImpl(commands),scheduleProvider());dispatch=mock(SkillInstallDispatchService.class);
-        recovery=new SkillInstallRecoveryService(mapper,new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class)),dispatch,manager,new FixedTenantAdmissionPolicy("0", null),scheduleProvider());
+        writer=new SkillInstallCommandWriter(new AgentCommandTransportDaoImpl(commands),scheduleProvider(),"node-1");dispatch=mock(SkillInstallDispatchService.class);when(dispatch.canDispatch(anyString(),anyString(),anyString())).thenReturn(true);
+        recovery=new SkillInstallRecoveryService(mapper,new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class)),dispatch,manager,new FixedTenantAdmissionPolicy("0", null),scheduleProvider(),"node-1");
         long now=System.currentTimeMillis();
         change=new cn.jia.agent.entity.skill.SkillChangeEntity().setChangeId("change-fixture")
                 .setAgentId("agt_fixture").setOwnerJiacn("Owner-A");
@@ -118,7 +118,7 @@ class SkillInstallTransportMySqlTest {
         assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM agent_consumer_inbox",Integer.class));
     }
     @Test void claimCasCannotOverwriteLeaseOrCrossCaseScope() {
-        pending();long now=System.currentTimeMillis();var d=mapper.pending("0",null,0).getFirst();
+        pending();long now=System.currentTimeMillis();var d=mapper.pendingForAgent("0",null,"agt_fixture",0).getFirst();
         assertEquals(1,mapper.claimDelivery(d,"owner-1",now+60000,now));
         assertEquals(0,mapper.claimDelivery(d,"owner-2",now+60000,now));
         d.setVersion(d.getVersion()+1).setStatus("CONSUMED");

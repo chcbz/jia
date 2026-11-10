@@ -17,10 +17,12 @@ import static cn.jia.agent.skill.SkillMarketplaceService.one;
 public final class SkillInstallCommandWriter {
     public static final String DESTINATION="agent.skill-install.ws.v1";
     private final AgentCommandTransportDao commands;
+    private final String nodeId;
     private final org.springframework.beans.factory.ObjectProvider<cn.jia.task.scheduling.ScheduleService> schedules;
     public SkillInstallCommandWriter(AgentCommandTransportDao commands,
-            org.springframework.beans.factory.ObjectProvider<cn.jia.task.scheduling.ScheduleService> schedules) {
-        this.commands=commands;this.schedules=schedules;
+            org.springframework.beans.factory.ObjectProvider<cn.jia.task.scheduling.ScheduleService> schedules,
+            @org.springframework.beans.factory.annotation.Value("${cyf.task.scheduling.node-id:}") String nodeId) {
+        this.commands=commands;this.schedules=schedules;this.nodeId=nodeId;
     }
     /** Under original skill roots, lock the same delivery -> outbox roots as native recovery.
      * Pristine inserted versions prove no claim was ever committed; PENDING alone proves nothing.
@@ -91,7 +93,7 @@ public final class SkillInstallCommandWriter {
                 .setLastError("SKILL_WS_PENDING").setVersion(0L);
         o.setTenantId(change.getTenantId());o.setClientId(change.getClientId());o.setCreateTime(now);o.setUpdateTime(now);
         one(commands.insertOutbox(o));
-        schedules.getObject().signal(SkillInstallRecoveryService.key(d),0);
+        schedules.getObject().signal(SkillInstallRecoveryService.key(d,nodeId),0);
         return new AgentCommandTransportWriteResult(d.getId(),command.getCommandId(),command.getMessageId(),event,false);
     }
 }

@@ -643,6 +643,10 @@ def runtimeCapabilityRegressionSourceSet = sourceSets.create('runtimeCapabilityR
     java.include 'cn/jia/chat/service/SkillCapabilityExecutionFactsTest.java'
     java.include 'cn/jia/chat/service/ChatActionCapabilityServiceTest.java'
     java.include 'cn/jia/chat/service/NativeSkillScriptSessionLookupImplTest.java'
+    java.include 'cn/jia/chat/handler/AgentWebSocketSkillExecutionRegistrationTest.java'
+    java.include 'cn/jia/chat/handler/AgentWebSocketRuntimeAuthenticationTest.java'
+    java.include 'cn/jia/chat/handler/UnifiedRuntimeTestSupport.java'
+    java.include 'cn/jia/chat/handler/SkillExecutionFixtures.java'
     resources.srcDir 'src/test/resources'
     compileClasspath += sourceSets.main.output
     runtimeClasspath += output + compileClasspath

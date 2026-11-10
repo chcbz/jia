@@ -23,10 +23,10 @@ public interface AgentSkillInstallRecoveryMapper {
           AND EXISTS (SELECT 1 FROM agent_outbox_event o WHERE o.delivery_id=d.id
             AND CAST(o.destination AS BINARY)=CAST('agent.skill-install.ws.v1' AS BINARY))
         """;
-    /** Startup catch-up includes future retries and live claims, with stable keyset pagination. */
-    @Select("<script>" + PENDING + " AND d.id&gt;#{afterId} ORDER BY d.id LIMIT 100 </script>")
-    List<AgentCommandDeliveryEntity> pending(@Param("tenantId") String tenantId,@Param("clientId") String clientId,
-                                           @Param("afterId") long afterId);
+    /** Exact-Agent reconnect catch-up includes future retries and live claims, using stable keyset pagination. */
+    @Select("<script>" + PENDING + " AND d.target_agent_id=#{agentId} AND CAST(d.target_agent_id AS BINARY)=CAST(#{agentId} AS BINARY) AND d.id&gt;#{afterId} ORDER BY d.id LIMIT 100 </script>")
+    List<AgentCommandDeliveryEntity> pendingForAgent(@Param("tenantId") String tenantId,@Param("clientId") String clientId,
+                                           @Param("agentId") String agentId,@Param("afterId") long afterId);
     @Select("<script>" + PENDING + " AND d.id=#{id} </script>")
     AgentCommandDeliveryEntity findPending(@Param("tenantId") String tenantId,@Param("clientId") String clientId,
                                           @Param("id") long id);

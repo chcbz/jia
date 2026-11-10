@@ -47,6 +47,29 @@ class AgentWebSocketSkillExecutionRegistrationTest {
         assertEquals(State.DISCONNECTED, registry.lookup(new Scope(TENANT, CLIENT, "foreign-owner", AGENT), fence).state());
         assertEquals(State.FENCED, registry.lookup(scope, new SessionFence(fence.runtimeInstallationId(), "foreign-host", "runtime-a", 1)).state());
     }
+    @Test void readyListenersOnlyRunAfterAuthenticatedDeliveredLocalRegistration() throws Exception {
+        var f=fixture();var listener=mock(cn.jia.agent.service.AgentSessionReadyListener.class);
+        f.handler.setSessionReadyListeners(List.of(listener));
+        doAnswer(call->{
+            assertEquals(State.AVAILABLE,registry.lookup(scope,fence).state());
+            return null;
+        }).when(listener).sessionReady(TENANT,CLIENT,AGENT);
+        register(f,SkillExecutionFixtures.catalog());
+        verify(listener).sessionReady(TENANT,CLIENT,AGENT);
+        clearInvocations(listener);
+        doThrow(new java.io.IOException("receipt unavailable")).when(f.session).sendMessage(any());
+        register(f,SkillExecutionFixtures.catalog());verifyNoInteractions(listener);
+    }
+    @Test void failedDurableReadyCallbackDoesNotKeepARegisteredTransport() throws Exception {
+        var f=fixture();var listener=mock(cn.jia.agent.service.AgentSessionReadyListener.class);
+        f.handler.setSessionReadyListeners(List.of(listener));
+        doThrow(new IllegalStateException("schedule unavailable")).when(listener).sessionReady(TENANT,CLIENT,AGENT);
+        register(f,SkillExecutionFixtures.catalog());
+        assertEquals(State.DISCONNECTED,registry.lookup(scope,fence).state());
+        assertTrue(f.frames.stream().anyMatch(frame->frame.contains("AGENT_REGISTRATION_UNAVAILABLE")));
+        verify(f.auth,atLeastOnce()).disconnect("socket-a");
+        verify(f.session).close(CloseStatus.SERVER_ERROR);
+    }
     @Test void actualAuthenticationRecordIsProjectedBeforeRegistrationReceiptSerialization() throws Exception {
         var f = fixture();
         when(f.auth.bind(eq("socket-a"), any(AgentRuntimeAuthenticationService.Proof.class), any()))

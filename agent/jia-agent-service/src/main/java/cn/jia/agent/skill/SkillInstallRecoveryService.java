@@ -6,8 +6,6 @@ import cn.jia.agent.entity.*;
 import cn.jia.agent.service.impl.AgentCommandCanonicalCodec;
 import cn.jia.task.scheduling.*;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.event.EventListener;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -20,9 +18,10 @@ import static cn.jia.agent.skill.SkillMarketplaceService.one;
  * No broker ACK is fabricated. Same-message replay is safe only through the real Runtime
  * installation idempotence. Original live orders remain recoverable without an artificial task-invitation deadline. */
 @Service
-public final class SkillInstallRecoveryService implements ScheduledJobHandler {
+public final class SkillInstallRecoveryService implements ScheduledJobHandler, cn.jia.agent.service.AgentSessionReadyListener {
     public static final String HANDLER = "skill.native-delivery";
     private final ObjectProvider<ScheduleService> schedules;
+    private final String nodeId;
     private final AgentSkillInstallRecoveryMapper mapper;
     private final AgentCommandRecoveryDao dao;
     private final SkillInstallDispatchService dispatch;
@@ -30,17 +29,19 @@ public final class SkillInstallRecoveryService implements ScheduledJobHandler {
     private final FixedTenantAdmissionPolicy processScope;
     public SkillInstallRecoveryService(AgentSkillInstallRecoveryMapper mapper,AgentCommandRecoveryDao dao,
             SkillInstallDispatchService dispatch,PlatformTransactionManager manager,
-            FixedTenantAdmissionPolicy processScope, ObjectProvider<ScheduleService> schedules) {
+            FixedTenantAdmissionPolicy processScope, ObjectProvider<ScheduleService> schedules,
+            @org.springframework.beans.factory.annotation.Value("${cyf.task.scheduling.node-id:}") String nodeId) {
         this.mapper=mapper;this.dao=dao;this.dispatch=dispatch;tx=new TransactionTemplate(manager);
-        this.processScope=processScope;this.schedules=schedules;
+        this.processScope=processScope;this.schedules=schedules;this.nodeId=nodeId;
     }
     @Override public String getName() { return HANDLER; }
-    @EventListener(ApplicationReadyEvent.class)
-    public void schedulePending() {
+    /** Registration/reconnection is the recovery boundary, not an all-Agent periodic scan. */
+    @Override public void sessionReady(String tenant,String client,String agent) {
+        processScope.requireAdmitted(tenant,client);
         long cursor=0;
         while(true) {
-            var page=mapper.pending(processScope.businessTenantId(),processScope.clientId(),cursor);
-            for(var row:page) schedules.getObject().signal(key(row),nextAttempt(row));
+            var page=mapper.pendingForAgent(tenant,client,agent,cursor);
+            for(var row:page) schedules.getObject().signal(key(row,nodeId),nextAttempt(row));
             if(page.size()<100)return;
             cursor=page.getLast().getId();
         }
@@ -49,16 +50,21 @@ public final class SkillInstallRecoveryService implements ScheduledJobHandler {
         processScope.requireAdmitted(invocation.tenantId(),invocation.key().clientId());
         if(TransactionSynchronizationManager.isActualTransactionActive())
             throw new IllegalStateException("Skill transport I/O must be outside the scheduler transaction");
+        if(nodeId.isBlank() || !nodeId.equals(invocation.key().targetNode()))
+            throw new IllegalArgumentException("Skill recovery belongs to its local transport node");
         long id=Long.parseLong(invocation.key().businessKey());
         var row=mapper.findPending(invocation.tenantId(),invocation.key().clientId(),id);
         if(row==null)return; // terminal/replaced command; no recurring empty scan
+        if(!dispatch.canDispatch(row.getTenantId(),row.getClientId(),row.getTargetAgentId()))return;
+        // No local session: retire this node's wakeup. The new authenticated registration registers its node.
         long now=System.currentTimeMillis();
         long deferredUntil=nextAttempt(row)<=now?recover(row,now):0;
         row=mapper.findPending(invocation.tenantId(),invocation.key().clientId(),id);
-        if(row!=null)schedules.getObject().reschedule(key(row),Math.max(nextAttempt(row),deferredUntil));
+        if(row!=null)schedules.getObject().reschedule(key(row,nodeId),Math.max(nextAttempt(row),deferredUntil));
     }
-    static ScheduleKey key(AgentCommandDeliveryEntity row) {
-        return new ScheduleKey(row.getClientId(),HANDLER,Long.toString(row.getId()),"");
+    static ScheduleKey key(AgentCommandDeliveryEntity row,String nodeId) {
+        if(nodeId.isBlank())throw new IllegalStateException("Skill recovery requires a configured local node");
+        return new ScheduleKey(row.getClientId(),HANDLER,Long.toString(row.getId()),nodeId);
     }
     static long nextAttempt(AgentCommandDeliveryEntity row) {
         long due="PENDING".equals(row.getStatus())?0:Math.addExact(row.getUpdateTime(),60000L);

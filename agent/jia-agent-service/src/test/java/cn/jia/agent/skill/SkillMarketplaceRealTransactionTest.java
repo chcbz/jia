@@ -56,9 +56,9 @@ public class SkillMarketplaceRealTransactionTest {
         return beans.getBeanProvider(cn.jia.task.scheduling.ScheduleService.class);
     }
     private void dispatchPendingSkills() {
-        for(var row:recoveryMapper.pending("0",null,0))
+        for(var row:recoveryMapper.pendingForAgent("0",null,AGENT,0))
             recovery.executeScheduled(new cn.jia.task.scheduling.ScheduledInvocation("0",
-                    SkillInstallRecoveryService.key(row),1));
+                    SkillInstallRecoveryService.key(row,"node-1"),1));
     }
 
     cn.jia.agent.position.PositionSkillService positionService;
@@ -178,7 +178,7 @@ public class SkillMarketplaceRealTransactionTest {
         when(agents.requireOwnedAgentCapabilities(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
         versions=new SkillAgentVersions(app,runtimes,provider(agents),owner,manager);
         var commands=new AgentCommandTransportDaoImpl(sql.getMapper(AgentCommandTransportMapper.class));
-        var writer=new SkillInstallCommandWriter(commands,scheduleProvider());
+        var writer=new SkillInstallCommandWriter(commands,scheduleProvider(),"node-1");
         var packages=new SkillPackages(packageRoot); keys=mock(ApiKeyService.class);
         key=new OauthApiKeyEntity();key.setId("key-1");key.setJiacn(ACTOR.ownerJiacn());key.setClientId(ACTOR.clientId());key.setTenantId(ACTOR.tenantId());key.setStatus(1);
         when(keys.get("key-1")).thenReturn(key);
@@ -193,7 +193,7 @@ public class SkillMarketplaceRealTransactionTest {
         service=new SkillMarketplaceService(market,app,trade,versions,runtimes,provider(writer),provider(packages),provider(authentication),provider(sessions),manager,positionService);
         dispatch=new SkillInstallDispatchService(app,market,service,versions,authentication,commands,provider(sessions),manager);
         recoveryMapper=sql.getMapper(AgentSkillInstallRecoveryMapper.class);
-        recovery=new SkillInstallRecoveryService(recoveryMapper,new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class)),dispatch,manager,new FixedTenantAdmissionPolicy("0", null),scheduleProvider());
+        recovery=new SkillInstallRecoveryService(recoveryMapper,new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class)),dispatch,manager,new FixedTenantAdmissionPolicy("0", null),scheduleProvider(),"node-1");
         ackCommands=spy(new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class)));
         nativeAcks=new SkillInstallAckService(app,market,ackCommands,recoveryMapper,authentication,service,manager);
         commandsForResults=commands;transactionManagerForResults=manager;

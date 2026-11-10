@@ -179,6 +179,12 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     private ChatReplyPreviewRegistry replyPreviews;
     @Autowired public void setReplyPreviews(ChatReplyPreviewRegistry value) { replyPreviews = value; }
 
+    private List<cn.jia.agent.service.AgentSessionReadyListener> sessionReadyListeners=List.of();
+    @Autowired(required=false)
+    public void setSessionReadyListeners(List<cn.jia.agent.service.AgentSessionReadyListener> listeners) {
+        this.sessionReadyListeners=List.copyOf(listeners);
+    }
+
     private final ChatClient chatClient;
     private final ObjectProvider<AgentService> agentServiceProvider;
     private final ChatMessageDao chatMessageDao;
@@ -1037,6 +1043,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 try {skillManagement.capabilitiesChanged(proof);}
                 catch(RuntimeException unavailable) {log.warn("Skill catalog confirmation deferred: {}",unavailable.getClass().getSimpleName());}
             }
+            stage = "durable_session_ready";
+            for(var listener:sessionReadyListeners)
+                listener.sessionReady(proof.scope().tenantId(),proof.scope().clientId(),result.getAgentId());
             signalRegisteredReconnect(session, result.getAgentId());
             sendCapabilityIndex(session, payload);
         } catch (Exception e) {
@@ -1056,6 +1065,11 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             removeTypedDeliberationSession(session.getId());
             removeTypedInspectionSession(session.getId());
             sendError(session, payload, "AGENT_REGISTRATION_UNAVAILABLE", "Agent registration is unavailable");
+            if ("durable_session_ready".equals(stage)) {
+                // The registration receipt was already delivered; close to force a fresh reliable reconnect.
+                try { session.close(CloseStatus.SERVER_ERROR); }
+                catch (java.io.IOException closeFailure) { log.warn("Failed to close incomplete Agent registration"); }
+            }
         }
     }
 

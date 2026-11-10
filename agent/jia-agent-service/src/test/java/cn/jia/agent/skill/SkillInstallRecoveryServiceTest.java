@@ -23,11 +23,12 @@ class SkillInstallRecoveryServiceTest {
     private final AgentCommandRecoveryDao dao=mock(AgentCommandRecoveryDao.class);
     private final SkillInstallDispatchService dispatch=mock(SkillInstallDispatchService.class);
     private final EconomyPreviewGate preview=new EconomyPreviewGate(new EconomyPreviewProperties(true,List.of(new EconomyPreviewProperties.AllowedScope("0","c"))));
-    private final SkillInstallRecoveryService service=new SkillInstallRecoveryService(mapper,dao,dispatch,mock(PlatformTransactionManager.class),new FixedTenantAdmissionPolicy("0", null),scheduleProvider());
+    private final SkillInstallRecoveryService service=new SkillInstallRecoveryService(mapper,dao,dispatch,mock(PlatformTransactionManager.class),new FixedTenantAdmissionPolicy("0", null),scheduleProvider(),"node-1");
     private AgentCommandDeliveryEntity d;
     private AgentOutboxEventEntity o;
     void fixture() { fixture("0"); }
     void fixture(String tenant) {
+        when(dispatch.canDispatch(anyString(),anyString(),anyString())).thenReturn(true);
         // Schema-2 PREPARE persisted by the real SM-C1 producer, not the retired task wire.
         var data=SkillManagementCodec.map("schemaVersion",2,"commandId","cmd_prepare","skillChangeId","o","action","INSTALL",
                 "tenantId",tenant,"clientId","c","ownerJiacn","owner-a","agentId","a","runtimeInstallationId","rti_fixture",
@@ -82,28 +83,28 @@ class SkillInstallRecoveryServiceTest {
     }
     @Test void scheduledCallbackRequiresConfiguredProcessScope() {
         assertThrows(RuntimeException.class,()->service.executeScheduled(new ScheduledInvocation("foreign",
-                new ScheduleKey("c",SkillInstallRecoveryService.HANDLER,"1",""),1)));
+                new ScheduleKey("c",SkillInstallRecoveryService.HANDLER,"1","node-1"),1)));
         verifyNoInteractions(mapper,dao,dispatch,schedules);
     }
     @Test void configuredPartitionIsPassedToDiscoveryBeforeLimit() {
         var scoped=new SkillInstallRecoveryService(mapper,dao,dispatch,mock(PlatformTransactionManager.class),
-                new FixedTenantAdmissionPolicy("tenant-blue", "c"),scheduleProvider());
-        when(mapper.pending("tenant-blue","c",0)).thenReturn(List.of());
-        scoped.schedulePending();
-        verify(mapper).pending("tenant-blue","c",0);
+                new FixedTenantAdmissionPolicy("tenant-blue", "c"),scheduleProvider(),"node-1");
+        when(mapper.pendingForAgent("tenant-blue","c","a",0)).thenReturn(List.of());
+        scoped.sessionReady("tenant-blue","c","a");
+        verify(mapper).pendingForAgent("tenant-blue","c","a",0);
         verifyNoMoreInteractions(mapper);verifyNoInteractions(dao,dispatch,schedules);
     }
-    @Test void startupIncludesFutureClaimsAndPagesWithoutRedispatching() {
+    @Test void reconnectIncludesFutureClaimsAndPagesWithoutRedispatching() {
         fixture();var page=new ArrayList<AgentCommandDeliveryEntity>();
         for(long id=1;id<=100;id++) {
             var row=new AgentCommandDeliveryEntity().setStatus("PENDING").setLeaseUntil(now+60000);
             row.setId(id);row.setClientId("c");page.add(row);
         }
-        when(mapper.pending("0",null,0)).thenReturn(page);
-        when(mapper.pending("0",null,100)).thenReturn(List.of());
-        service.schedulePending();
+        when(mapper.pendingForAgent("0","c","a",0)).thenReturn(page);
+        when(mapper.pendingForAgent("0","c","a",100)).thenReturn(List.of());
+        service.sessionReady("0","c","a");
         verify(schedules,times(100)).signal(any(),eq(now+60000));
-        verify(mapper).pending("0",null,100);verifyNoInteractions(dao,dispatch);
+        verify(mapper).pendingForAgent("0","c","a",100);verifyNoInteractions(dao,dispatch);
     }
     @Test void terminalCallbackDoesNotScanOrReschedule() {
         service.executeScheduled(invocation());
@@ -114,25 +115,37 @@ class SkillInstallRecoveryServiceTest {
         fixture();d.setNextRetryAt(now+60000);
         when(mapper.findPending("0","c",1L)).thenReturn(d);
         service.executeScheduled(invocation());
-        verify(schedules).reschedule(SkillInstallRecoveryService.key(d),now+60000);
-        verifyNoInteractions(dao,dispatch);
+        verify(schedules).reschedule(SkillInstallRecoveryService.key(d,"node-1"),now+60000);
+        verifyNoInteractions(dao);verify(dispatch,never()).dispatch(anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),any());
     }
     @Test void liveOutboxLeaseDoesNotBecomeAnImmediateRetryLoop() {
         fixture();o.setLeaseUntil(now+60000);
         when(mapper.findPending("0","c",1L)).thenReturn(d);
         service.executeScheduled(invocation());
-        verify(schedules).reschedule(SkillInstallRecoveryService.key(d),now+60000);
-        verifyNoInteractions(dispatch);
+        verify(schedules).reschedule(SkillInstallRecoveryService.key(d,"node-1"),now+60000);
+        verify(dispatch,never()).dispatch(anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),any());
+    }
+    @Test void callbackWithoutLocalSocketRetiresRatherThanPollingOtherNodes() {
+        fixture();when(mapper.findPending("0","c",1L)).thenReturn(d);
+        when(dispatch.canDispatch("0","c","a")).thenReturn(false);
+        service.executeScheduled(invocation());
+        verifyNoInteractions(dao,schedules);
+        verify(dispatch,never()).dispatch(anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),any());
+    }
+    @Test void callbackCannotRunOnAnotherTransportNode() {
+        assertThrows(IllegalArgumentException.class,()->service.executeScheduled(new ScheduledInvocation("0",
+                new ScheduleKey("c",SkillInstallRecoveryService.HANDLER,"1","node-2"),1)));
+        verifyNoInteractions(mapper,dao,schedules,dispatch);
     }
     private ScheduledInvocation invocation() {
-        return new ScheduledInvocation("0",new ScheduleKey("c",SkillInstallRecoveryService.HANDLER,"1",""),1);
+        return new ScheduledInvocation("0",new ScheduleKey("c",SkillInstallRecoveryService.HANDLER,"1","node-1"),1);
     }
     @Test void nonNumericTenantRecoversOriginalWireWithoutTenantZeroGate() {
         fixture("tenant-blue");
         var gate=new EconomyPreviewGate(new EconomyPreviewProperties(true,
                 List.of(new EconomyPreviewProperties.AllowedScope("tenant-blue","c"))));
         var scoped=new SkillInstallRecoveryService(mapper,dao,dispatch,mock(PlatformTransactionManager.class),
-                new FixedTenantAdmissionPolicy("tenant-blue", "c"),scheduleProvider());
+                new FixedTenantAdmissionPolicy("tenant-blue", "c"),scheduleProvider(),"node-1");
         when(mapper.claimDelivery(eq(d),anyString(),anyLong(),anyLong())).thenReturn(1);
         when(mapper.claimOutbox(eq(o),anyString(),anyLong(),anyLong())).thenReturn(1);
         when(dispatch.dispatch(anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),any())).thenAnswer(call->{
