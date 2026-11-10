@@ -51,10 +51,11 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
               </if>
             """;
 
+    // Binary RHS preserves the message-column index and exact canonical ID comparison,
+    // independent of the connection collation used by numeric-to-CHAR conversion.
     String MEMORY_SOURCE_JOIN = """
             FROM chat_conversation c
-            JOIN chat_message m ON m.conversation_id = CAST(c.id AS CHAR)
-              AND CAST(m.conversation_id AS BINARY) = CAST(CAST(c.id AS CHAR) AS BINARY)
+            JOIN chat_message m ON m.conversation_id = CAST(CAST(c.id AS CHAR) AS BINARY)
             WHERE c.deleted_at IS NULL
               AND m.message_type IN ('USER', 'ASSISTANT')
             """ + EXACT_MESSAGE_OWNER_SCOPE + MEMORY_PROCESS_SCOPE;
