@@ -37,6 +37,9 @@ class AgentOutboxRelayConfigurationTest {
             .withBean(AgentOutboxRelayDao.class, () -> mock(AgentOutboxRelayDao.class))
             .withBean(PlatformTransactionManager.class,
                     () -> mock(PlatformTransactionManager.class))
+            .withBean(cn.jia.task.scheduling.ScheduleService.class,
+                    () -> mock(cn.jia.task.scheduling.ScheduleService.class))
+            .withPropertyValues("cyf.task.scheduling.enabled=true", "cyf.task.scheduling.node-id=node-a")
             .withUserConfiguration(AgentRabbitSafetyConfiguration.class);
 
     @Test
@@ -81,6 +84,20 @@ class AgentOutboxRelayConfigurationTest {
                     assertEquals(1, context.getBeansOfType(AgentOutboxRelayScheduler.class).size());
                     assertEquals(AgentRabbitActivationState.MQ_SHADOW,
                             context.getBean(AgentRabbitSafetyGate.class).state());
+                });
+    }
+
+    @Test
+    void unifiedSchedulingDisabledLeavesRabbitInfrastructureButNoBusinessPoller() {
+        RUNNER.withPropertyValues(concat(BROKER,
+                "agent.command-outbox.enabled=true", "agent.rabbit-topology.enabled=true",
+                "agent.rabbit-publish.enabled=true", "cyf.task.scheduling.enabled=false"))
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    assertTrue(context.containsBean("agentOutboxRelayService"));
+                    assertFalse(context.containsBean("agentOutboxRelayScheduler"));
+                    org.mockito.Mockito.verifyNoInteractions(context.getBean(AgentOutboxRelayDao.class),
+                            context.getBean(cn.jia.task.scheduling.ScheduleService.class));
                 });
     }
 

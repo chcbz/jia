@@ -59,6 +59,9 @@ public interface AgentOutboxRelayMapper {
             WHERE o.tenant_id=#{tenantId}
               AND CAST(o.tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(o.tenant_id)=OCTET_LENGTH(#{tenantId})
+              AND (#{processClientId} IS NULL OR (o.client_id=#{processClientId}
+                   AND CAST(o.client_id AS BINARY)=CAST(#{processClientId} AS BINARY)
+                   AND OCTET_LENGTH(o.client_id)=OCTET_LENGTH(#{processClientId})))
               AND CAST(o.destination AS BINARY)<>CAST('agent.skill-install.ws.v1' AS BINARY) AND ((o.status='PENDING' AND (o.next_retry_at IS NULL OR o.next_retry_at<=#{now}))
                 OR (o.status='RETRY' AND o.next_retry_at IS NOT NULL AND o.next_retry_at<=#{now})
                 OR (o.status='CLAIMED' AND o.lease_until IS NOT NULL AND o.lease_until<=#{now}))
@@ -69,7 +72,8 @@ public interface AgentOutboxRelayMapper {
             LIMIT #{limit}
             """)
     List<AgentOutboxCandidate> selectCorruptCandidates(
-            @Param("tenantId") String tenantId, @Param("now") long now, @Param("limit") int limit);
+            @Param("tenantId") String tenantId, @Param("processClientId") String processClientId,
+            @Param("now") long now, @Param("limit") int limit);
 
     @Select("""
             SELECT o.id AS outboxId, o.tenant_id AS tenantId, o.client_id AS clientId,
@@ -82,6 +86,9 @@ public interface AgentOutboxRelayMapper {
             WHERE o.tenant_id=#{tenantId}
               AND CAST(o.tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(o.tenant_id)=OCTET_LENGTH(#{tenantId})
+              AND (#{processClientId} IS NULL OR (o.client_id=#{processClientId}
+                   AND CAST(o.client_id AS BINARY)=CAST(#{processClientId} AS BINARY)
+                   AND OCTET_LENGTH(o.client_id)=OCTET_LENGTH(#{processClientId})))
               AND CAST(o.destination AS BINARY)<>CAST('agent.skill-install.ws.v1' AS BINARY) AND ((o.status='PENDING' AND (o.next_retry_at IS NULL OR o.next_retry_at<=#{now}))
                OR (o.status='RETRY' AND o.next_retry_at IS NOT NULL AND o.next_retry_at<=#{now}))
               AND (
@@ -91,7 +98,8 @@ public interface AgentOutboxRelayMapper {
             LIMIT #{limit}
             """)
     List<AgentOutboxCandidate> selectDueCandidates(
-            @Param("tenantId") String tenantId, @Param("now") long now, @Param("limit") int limit);
+            @Param("tenantId") String tenantId, @Param("processClientId") String processClientId,
+            @Param("now") long now, @Param("limit") int limit);
 
     @Select("""
             SELECT o.id AS outboxId, o.tenant_id AS tenantId, o.client_id AS clientId,
@@ -101,6 +109,9 @@ public interface AgentOutboxRelayMapper {
             WHERE o.tenant_id=#{tenantId}
               AND CAST(o.tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(o.tenant_id)=OCTET_LENGTH(#{tenantId})
+              AND (#{processClientId} IS NULL OR (o.client_id=#{processClientId}
+                   AND CAST(o.client_id AS BINARY)=CAST(#{processClientId} AS BINARY)
+                   AND OCTET_LENGTH(o.client_id)=OCTET_LENGTH(#{processClientId})))
               AND CAST(o.destination AS BINARY)<>CAST('agent.skill-install.ws.v1' AS BINARY) AND o.status='CLAIMED' AND o.lease_until IS NOT NULL AND o.lease_until<=#{now}
               AND (
             """ + DISCOVERY_ROW_VALID + """
@@ -109,7 +120,8 @@ public interface AgentOutboxRelayMapper {
             LIMIT #{limit}
             """)
     List<AgentOutboxCandidate> selectStaleCandidates(
-            @Param("tenantId") String tenantId, @Param("now") long now, @Param("limit") int limit);
+            @Param("tenantId") String tenantId, @Param("processClientId") String processClientId,
+            @Param("now") long now, @Param("limit") int limit);
 
     @Select("""
             SELECT id, command_id, task_id, work_item_id, target_agent_id, command_type,

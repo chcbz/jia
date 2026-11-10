@@ -11,6 +11,9 @@ import cn.jia.agent.service.impl.AgentRabbitOutboxPublisher;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import cn.jia.task.scheduling.ScheduleService;
 import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;
@@ -66,6 +69,7 @@ public class AgentOutboxRelayConfiguration {
                 admission.businessTenantId());
     }
 
+    @ConditionalOnProperty(name = "cyf.task.scheduling.enabled", havingValue = "true")
     @Bean(name = "agentOutboxRelayScheduler", defaultCandidate = false,
             destroyMethod = "close")
     public AgentOutboxRelayScheduler agentOutboxRelayScheduler(
@@ -73,8 +77,10 @@ public class AgentOutboxRelayConfiguration {
             @Qualifier("agentRabbitTopologyReadiness") AgentRabbitTopologyReadiness readiness,
             @Qualifier("agentOutboxRelaySettings") AgentOutboxRelaySettings settings,
             @Qualifier("agentOutboxRelayService") AgentOutboxRelayService relayService,
-            @Qualifier("agentOutboxPublisher") AgentOutboxPublisher publisher) {
+            @Qualifier("agentOutboxPublisher") AgentOutboxPublisher publisher,
+            ScheduleService schedules, FixedTenantAdmissionPolicy scope,
+            @Value("${cyf.task.scheduling.node-id}") String node) {
         return new AgentOutboxRelayScheduler(
-                gate, readiness, settings, relayService, publisher);
+                gate, readiness, settings, relayService, publisher, schedules, scope, node);
     }
 }

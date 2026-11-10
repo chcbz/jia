@@ -112,7 +112,8 @@ class AgentCommandRecoveryRealTransactionTest {
         dao = new AgentCommandRecoveryDaoImpl(
                 template.getMapper(AgentCommandRecoveryMapper.class));
         relayDao = new AgentOutboxRelayDaoImpl(
-                template.getMapper(AgentOutboxRelayMapper.class));
+                template.getMapper(AgentOutboxRelayMapper.class),
+                new cn.jia.core.security.FixedTenantAdmissionPolicy("tenant-a", null));
         inboxDao = new AgentCommandInboxDaoImpl(
                 template.getMapper(AgentCommandInboxMapper.class));
         manager = new DataSourceTransactionManager(source);

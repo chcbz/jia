@@ -58,6 +58,7 @@ class AgentOutboxRelayRealTransactionTest {
     private AgentOutboxRelayDao productionDao;
     private JdbcTemplate mysqlAdmin;
     private String mysqlSchema;
+    private AgentOutboxRelayMapper discoveryMapper;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -75,8 +76,10 @@ class AgentOutboxRelayRealTransactionTest {
         factoryBean.setConfiguration(configuration);
         factoryBean.setGlobalConfig(global);
         SqlSessionFactory factory = factoryBean.getObject();
+        discoveryMapper = new SqlSessionTemplate(factory).getMapper(AgentOutboxRelayMapper.class);
         productionDao = new AgentOutboxRelayDaoImpl(
-                new SqlSessionTemplate(factory).getMapper(AgentOutboxRelayMapper.class));
+                discoveryMapper,
+                new cn.jia.core.security.FixedTenantAdmissionPolicy("tenant-a", null));
         manager = new DataSourceTransactionManager(source);
         outer = new TransactionTemplate(manager);
         insertPending();
@@ -105,6 +108,28 @@ class AgentOutboxRelayRealTransactionTest {
             jdbc.update("UPDATE agent_outbox_event SET delivery_id=404");
             assertEquals(1, productionDao.selectCorruptCandidates(tenant, NOW, 1).size());
             assertEquals(List.of(), productionDao.selectCorruptCandidates(foreign, NOW, 1));
+        }
+    }
+
+    @Test
+    void configuredClientPartitionsEveryDiscoveryLaneBeforeLimitIncludingCaseAndPadding() {
+        jdbc.update("UPDATE agent_command_delivery SET id=42");
+        jdbc.update("UPDATE agent_outbox_event SET id=10,delivery_id=42");
+        insertPending();
+        var restricted = new AgentOutboxRelayDaoImpl(discoveryMapper,
+                new cn.jia.core.security.FixedTenantAdmissionPolicy("tenant-a", "client-a"));
+        for (String other : List.of("client-b", "Client-a", "client-a ")) {
+            jdbc.update("UPDATE agent_command_delivery SET client_id=? WHERE id=41", other);
+            jdbc.update("UPDATE agent_outbox_event SET client_id=? WHERE id=1", other);
+            jdbc.update("UPDATE agent_outbox_event SET status='PENDING',lease_until=NULL,delivery_id=CASE WHEN id=1 THEN 41 ELSE 42 END");
+            assertEquals(10L, restricted.selectDueCandidates("tenant-a", NOW, 1).getFirst().outboxId());
+            if (!other.endsWith(" "))
+                assertEquals(1L, productionDao.selectDueCandidates("tenant-a", NOW, 1).getFirst().outboxId());
+            jdbc.update("UPDATE agent_outbox_event SET status='CLAIMED',lease_until=?", NOW - 1);
+            assertEquals(10L, restricted.selectStaleCandidates("tenant-a", NOW, 1).getFirst().outboxId());
+            jdbc.update("UPDATE agent_outbox_event SET delivery_id=404");
+            assertEquals(10L, restricted.selectCorruptCandidates("tenant-a", NOW, 1).getFirst().outboxId());
+            assertEquals(1L, productionDao.selectCorruptCandidates("tenant-a", NOW, 1).getFirst().outboxId());
         }
     }
 

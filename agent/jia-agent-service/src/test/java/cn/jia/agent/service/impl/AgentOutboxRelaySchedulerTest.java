@@ -15,6 +15,9 @@ import cn.jia.agent.entity.AgentRabbitPublishResult;
 import cn.jia.agent.service.AgentOutboxPublisher;
 import cn.jia.agent.service.AgentOutboxRelayService;
 import org.junit.jupiter.api.Test;
+import cn.jia.task.scheduling.ScheduleService;
+import cn.jia.task.scheduling.ScheduleKey;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 
 import java.lang.reflect.Method;
 import java.util.List;
@@ -45,7 +48,8 @@ class AgentOutboxRelaySchedulerTest {
         AgentOutboxRelayService relay = mock(AgentOutboxRelayService.class);
         AgentOutboxPublisher publisher = mock(AgentOutboxPublisher.class);
         AgentOutboxRelayScheduler scheduler = new AgentOutboxRelayScheduler(
-                mqShadowGate(), ready(), settings(), relay, publisher);
+                mqShadowGate(), ready(), settings(), relay, publisher, mock(ScheduleService.class),
+                new FixedTenantAdmissionPolicy("tenant-a", null), "node-a");
         try {
             scheduler.start();
             Thread.sleep(30);
@@ -64,7 +68,8 @@ class AgentOutboxRelaySchedulerTest {
         AgentOutboxPublisher publisher = mock(AgentOutboxPublisher.class);
         AgentRabbitTopologyReadiness readiness = notReady();
         AgentOutboxRelayScheduler scheduler = new AgentOutboxRelayScheduler(
-                dispatchGate(), readiness, settings(), relay, publisher);
+                dispatchGate(), readiness, settings(), relay, publisher, mock(ScheduleService.class),
+                new FixedTenantAdmissionPolicy("tenant-a", null), "node-a");
         AgentOutboxCandidate fenced = new AgentOutboxCandidate(
                 1, "tenant-a", "client-a", 41, 1, Long.MAX_VALUE - 1, "PENDING");
         try {
@@ -93,7 +98,8 @@ class AgentOutboxRelaySchedulerTest {
         AgentOutboxPublisher publisher = mock(AgentOutboxPublisher.class);
         AgentRabbitTopologyReadiness readiness = notReady();
         AgentOutboxRelayScheduler scheduler = new AgentOutboxRelayScheduler(
-                dispatchGate(), readiness, settings(), relay, publisher);
+                dispatchGate(), readiness, settings(), relay, publisher, mock(ScheduleService.class),
+                new FixedTenantAdmissionPolicy("tenant-a", null), "node-a");
         AgentOutboxCandidate oldHint = new AgentOutboxCandidate(
                 1, "tenant-a", "client-a", 41, 1, Long.MAX_VALUE - 2, "PENDING");
         CountDownLatch published = new CountDownLatch(1);
@@ -133,7 +139,8 @@ class AgentOutboxRelaySchedulerTest {
         AgentOutboxPublisher publisher = mock(AgentOutboxPublisher.class);
         AgentRabbitTopologyReadiness readiness = notReady();
         AgentOutboxRelayScheduler scheduler = new AgentOutboxRelayScheduler(
-                dispatchGate(), readiness, settings(), relay, publisher);
+                dispatchGate(), readiness, settings(), relay, publisher, mock(ScheduleService.class),
+                new FixedTenantAdmissionPolicy("tenant-a", null), "node-a");
         CountDownLatch publisherStarted = new CountDownLatch(2);
         CountDownLatch releasePublisher = new CountDownLatch(1);
         CountDownLatch settled = new CountDownLatch(2);
@@ -182,6 +189,52 @@ class AgentOutboxRelaySchedulerTest {
             releasePublisher.countDown();
             scheduler.stop();
         }
+    }
+
+    @Test
+    void unifiedDeadlineWaitsForReadyAndStoppedCallbackDoesNotDiscover() {
+        var relay = mock(AgentOutboxRelayService.class);
+        var publisher = mock(AgentOutboxPublisher.class);
+        var schedules = mock(ScheduleService.class);
+        var scheduler = new AgentOutboxRelayScheduler(dispatchGate(), ready(), settings(), relay, publisher,
+                schedules, new FixedTenantAdmissionPolicy("tenant-a", "client-a"), "node-a");
+        var key = new ScheduleKey("client-a", AgentOutboxRelayScheduler.HANDLER, "recovery", "node-a");
+        try {
+            scheduler.start();
+            scheduler.executeScheduled(null);
+            org.mockito.Mockito.verifyNoInteractions(relay, publisher, schedules);
+            scheduler.onApplicationEvent(null);
+            verify(schedules).signal(org.mockito.ArgumentMatchers.eq(key), anyLong());
+            org.mockito.Mockito.verifyNoInteractions(relay, publisher);
+            scheduler.executeScheduled(null);
+            verify(relay).discover(anyLong(), anyInt());
+            verify(schedules, times(2)).signal(org.mockito.ArgumentMatchers.eq(key), anyLong());
+            scheduler.stop();
+            reset(relay, publisher, schedules);
+            scheduler.executeScheduled(null);
+            scheduler.onApplicationEvent(null);
+            org.mockito.Mockito.verifyNoInteractions(relay, publisher, schedules);
+        } finally { scheduler.stop(); }
+    }
+
+    @Test
+    void discoveryFailureKeepsNextDurableDeadlineAndPropagatesForTaskRecovery() {
+        var relay = mock(AgentOutboxRelayService.class);
+        var schedules = mock(ScheduleService.class);
+        var scheduler = new AgentOutboxRelayScheduler(dispatchGate(), ready(), settings(), relay,
+                mock(AgentOutboxPublisher.class), schedules,
+                new FixedTenantAdmissionPolicy("tenant-a", null), "node-a");
+        try {
+            scheduler.start();scheduler.onApplicationEvent(null);
+            when(relay.discover(anyLong(), anyInt())).thenThrow(new IllegalStateException("SQL unavailable"));
+            long before = System.currentTimeMillis();
+            org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+                    () -> scheduler.executeScheduled(null));
+            var deadline = org.mockito.ArgumentCaptor.forClass(Long.class);
+            verify(schedules, times(2)).signal(org.mockito.ArgumentMatchers.eq(new ScheduleKey("",
+                    AgentOutboxRelayScheduler.HANDLER, "recovery", "node-a")), deadline.capture());
+            assertTrue(deadline.getAllValues().get(1) >= before + settings().pollDelayMillis());
+        } finally { scheduler.stop(); }
     }
 
     private static AgentOutboxRelaySettings settings() {

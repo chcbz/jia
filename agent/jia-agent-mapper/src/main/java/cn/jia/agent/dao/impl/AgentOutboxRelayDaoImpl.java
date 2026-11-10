@@ -6,6 +6,7 @@ import cn.jia.agent.entity.AgentOutboxCandidate;
 import cn.jia.agent.entity.AgentOutboxEventEntity;
 import cn.jia.agent.mapper.AgentOutboxRelayMapper;
 import jakarta.inject.Named;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import lombok.RequiredArgsConstructor;
 
 import java.util.List;
@@ -14,20 +15,21 @@ import java.util.List;
 @RequiredArgsConstructor
 public class AgentOutboxRelayDaoImpl implements AgentOutboxRelayDao {
     private final AgentOutboxRelayMapper mapper;
+    private final FixedTenantAdmissionPolicy scope;
 
     @Override
     public List<AgentOutboxCandidate> selectCorruptCandidates(String tenantId, long now, int limit) {
-        return mapper.selectCorruptCandidates(tenantId, now, limit);
+        return mapper.selectCorruptCandidates(tenantId, scope.clientId(), now, limit);
     }
 
     @Override
     public List<AgentOutboxCandidate> selectDueCandidates(String tenantId, long now, int limit) {
-        return mapper.selectDueCandidates(tenantId, now, limit);
+        return mapper.selectDueCandidates(tenantId, scope.clientId(), now, limit);
     }
 
     @Override
     public List<AgentOutboxCandidate> selectStaleCandidates(String tenantId, long now, int limit) {
-        return mapper.selectStaleCandidates(tenantId, now, limit);
+        return mapper.selectStaleCandidates(tenantId, scope.clientId(), now, limit);
     }
 
     @Override

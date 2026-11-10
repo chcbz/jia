@@ -11,19 +11,29 @@ import cn.jia.agent.entity.AgentRabbitPublishResult;
 import cn.jia.agent.service.AgentOutboxPublisher;
 import cn.jia.agent.service.AgentOutboxRelayService;
 import org.springframework.context.SmartLifecycle;
+import org.springframework.context.ApplicationListener;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
+import cn.jia.task.scheduling.ScheduleService;
+import cn.jia.task.scheduling.ScheduleKey;
+import cn.jia.task.scheduling.ScheduledInvocation;
+import cn.jia.task.scheduling.ScheduledJobHandler;
 
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/** Bounded polling lifecycle. Every claim/publish/settle unit is independent and batch-free. */
-public final class AgentOutboxRelayScheduler implements SmartLifecycle, AutoCloseable {
+/** Durable node discovery lifecycle. Every claim/publish/settle unit is independent and batch-free. */
+public final class AgentOutboxRelayScheduler implements SmartLifecycle, AutoCloseable, ScheduledJobHandler, ApplicationListener<ApplicationReadyEvent> {
+    public static final String HANDLER = "agent.rabbit-outbox";
+    private final ScheduleService schedules;
+    private final ScheduleKey scheduleKey;
+    private boolean ready;
     private final AgentRabbitSafetyGate gate;
     private final AgentRabbitTopologyReadiness readiness;
     private final AgentOutboxRelaySettings settings;
@@ -33,7 +43,6 @@ public final class AgentOutboxRelayScheduler implements SmartLifecycle, AutoClos
     private final AtomicBoolean running = new AtomicBoolean();
     private final AtomicInteger inflight = new AtomicInteger();
 
-    private volatile ScheduledExecutorService poller;
     private volatile ExecutorService workers;
 
     public AgentOutboxRelayScheduler(
@@ -41,7 +50,11 @@ public final class AgentOutboxRelayScheduler implements SmartLifecycle, AutoClos
             AgentRabbitTopologyReadiness readiness,
             AgentOutboxRelaySettings settings,
             AgentOutboxRelayService relayService,
-            AgentOutboxPublisher publisher) {
+            AgentOutboxPublisher publisher, ScheduleService schedules,
+            FixedTenantAdmissionPolicy scope, String node) {
+        if (node == null || node.isBlank()) throw new IllegalArgumentException("Rabbit relay requires a scheduler node identity");
+        this.schedules = Objects.requireNonNull(schedules, "schedules");
+        this.scheduleKey = new ScheduleKey(scope.clientId() == null ? "" : scope.clientId(), HANDLER, "recovery", node);
         this.gate = Objects.requireNonNull(gate, "gate");
         this.readiness = Objects.requireNonNull(readiness, "readiness");
         this.settings = Objects.requireNonNull(settings, "settings");
@@ -52,18 +65,13 @@ public final class AgentOutboxRelayScheduler implements SmartLifecycle, AutoClos
     @Override
     public synchronized void start() {
         if (!running.compareAndSet(false, true)) return;
-        poller = Executors.newSingleThreadScheduledExecutor(runnable -> {
-            Thread thread = new Thread(runnable, "agent-outbox-relay-poller");
-            thread.setDaemon(true);
-            return thread;
-        });
+        ready = false;
         workers = Executors.newFixedThreadPool(settings.maxInflight(), runnable -> {
             Thread thread = new Thread(runnable, "agent-outbox-relay-publisher");
             thread.setDaemon(true);
             return thread;
         });
-        poller.scheduleWithFixedDelay(
-                this::safePoll, 0L, settings.pollDelayMillis(), TimeUnit.MILLISECONDS);
+
     }
 
     void pollOnce() {
@@ -93,11 +101,23 @@ public final class AgentOutboxRelayScheduler implements SmartLifecycle, AutoClos
         }
     }
 
-    private void safePoll() {
+    @Override public String getName() { return HANDLER; }
+
+    @Override public synchronized void onApplicationEvent(ApplicationReadyEvent event) {
+        if (!running.get() || ready) return;
+        schedules.signal(scheduleKey, System.currentTimeMillis());
+        ready = true;
+    }
+
+    @Override public synchronized void executeScheduled(ScheduledInvocation invocation) {
+        if (!running.get() || !ready) return;
         try {
             pollOnce();
-        } catch (RuntimeException ignored) {
-            // Fixed-delay retry; no row attempt is consumed unless its short claim committed.
+        } finally {
+            // Publisher I/O stays on the original workers, not on the shared scheduling pool.
+            // SQL failure propagates; the task lease retry remains the durable recovery owner.
+            if (running.get()) schedules.signal(scheduleKey,
+                    System.currentTimeMillis() + settings.pollDelayMillis());
         }
     }
 
@@ -139,9 +159,8 @@ public final class AgentOutboxRelayScheduler implements SmartLifecycle, AutoClos
             callback.run();
             return;
         }
-        ScheduledExecutorService localPoller = poller;
+        ready = false;
         ExecutorService localWorkers = workers;
-        if (localPoller != null) localPoller.shutdownNow();
         long deadline = System.nanoTime()
                 + TimeUnit.MILLISECONDS.toNanos(settings.shutdownDrainMillis());
         boolean interrupted = false;
