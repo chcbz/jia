@@ -358,4 +358,33 @@ class UnixManagedHostingProvisionerTest {
         finally { TransactionSynchronizationManager.clear(); }
     }
 
+    @Test @EnabledOnOs(OS.LINUX)
+    @EnabledIfEnvironmentVariable(named = "CYF_HOSTING_RUNTIME_SOURCE", matches = ".+")
+    void realRuntimeSocketQuiescesExactRelationshipWithoutStoppingPeers(@TempDir Path output) throws Exception {
+        Path source = Path.of(System.getenv("CYF_HOSTING_RUNTIME_SOURCE"));
+        Path fixture = source.resolve("conf/cyf-agent-runtime-v1/test/hosting-api-fixture.mjs");
+        assertTrue(Files.isRegularFile(fixture));
+        var process = new ProcessBuilder("/usr/local/bin/node", fixture.toString()).directory(source.toFile())
+                .redirectError(output.resolve("runtime.log").toFile()).start();
+        try (var lines = process.inputReader(); var commands = process.outputWriter()) {
+            String ready = lines.readLine(); assertNotNull(ready, "fixture did not start; see runtime.log");
+            var boot = JSON.readValue(ready, new TypeReference<Map<String,Object>>() {});
+            Path socket = Path.of((String) boot.get("socketPath"));
+            long uid = ((Number) Files.getAttribute(socket, "unix:uid")).longValue();
+            long gid = ((Number) Files.getAttribute(socket, "unix:gid")).longValue();
+            @SuppressWarnings("unchecked") var prepared = (Map<String,Object>) boot.get("candidate");
+            var current = UnixManagedHostingProvisioner.decodePrepared(preparation(), prepared); assertNotNull(current);
+            var real = adapter(socket, uid, gid, "fixture-owner");
+            assertTrue(real.quiesce(preparation(), current, "finish-real"));
+            assertTrue(real.quiesce(preparation(), current, "finish-real"));
+            assertFalse(real.quiesce(preparation(), current, "different-handover"));
+            commands.write("stop\n"); commands.flush();
+            var stopped = JSON.readValue(lines.readLine(), new TypeReference<Map<String,Object>>() {});
+            assertEquals(1, stopped.get("quiesced")); assertEquals(3, stopped.get("readyPeers"));
+            assertTrue(process.waitFor(10, TimeUnit.SECONDS)); assertEquals(0, process.exitValue());
+        } finally {
+            if (process.isAlive()) { process.destroy(); if (!process.waitFor(10, TimeUnit.SECONDS)) { process.destroyForcibly(); process.waitFor(); } }
+        }
+    }
+
 }
