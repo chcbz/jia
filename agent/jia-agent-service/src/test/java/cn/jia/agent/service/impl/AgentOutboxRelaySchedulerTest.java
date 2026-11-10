@@ -192,7 +192,7 @@ class AgentOutboxRelaySchedulerTest {
     }
 
     @Test
-    void unifiedDeadlineWaitsForReadyAndStoppedCallbackDoesNotDiscover() {
+    void unifiedDeadlineWaitsForReadyAndStoppedCallbackDoesNotDiscover() throws Exception {
         var relay = mock(AgentOutboxRelayService.class);
         var publisher = mock(AgentOutboxPublisher.class);
         var schedules = mock(ScheduleService.class);
@@ -218,7 +218,7 @@ class AgentOutboxRelaySchedulerTest {
     }
 
     @Test
-    void discoveryFailureKeepsNextDurableDeadlineAndPropagatesForTaskRecovery() {
+    void discoveryFailureKeepsNextDurableDeadlineAndPropagatesForTaskRecovery() throws Exception {
         var relay = mock(AgentOutboxRelayService.class);
         var schedules = mock(ScheduleService.class);
         var scheduler = new AgentOutboxRelayScheduler(dispatchGate(), ready(), settings(), relay,
