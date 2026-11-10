@@ -43,6 +43,7 @@ class HostingRentRenewalMySqlTest {
     private String database;
     private JdbcTemplate jdbc;
     private cn.jia.agent.mapper.AgentRuntimeMapper runtimeProjection;
+    private cn.jia.agent.mapper.AgentExternalServicePolicyMapper externalIdentities;
     private EconomyHostingRentMapper leases;
     private EconomyHostingRenewalMapper renewals;
     private EconomyLedgerMapper accounts;
@@ -140,6 +141,7 @@ class HostingRentRenewalMySqlTest {
         var retained = jdbc.queryForMap("SELECT * FROM agent_identity_registry WHERE id=?", old.getId());
         var next = inviteIdentity(identities, "new-owner", agent);
         assertNotEquals(old.getId(), next.getId()); assertNotEquals(old.getBindingId(), next.getBindingId());
+        assertEquals(next.getId(), externalIdentities.identity("tenant", "client", agent).getId());
         assertEquals(agent, identities.requireRegistrationIdentityInScope("tenant", "client", "new-owner", agent).getCanonicalAgentId());
         assertThrows(cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException.class,
                 () -> identities.requireRegistrationIdentityInScope("tenant", "client", "old-owner", agent));
@@ -207,17 +209,19 @@ class HostingRentRenewalMySqlTest {
         String ddl = new ClassPathResource("db/agent-identity-schema.sql").getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
         for (String table : List.of("agent_identity_registry", "agent_identity_alias")) {
             int start = ddl.indexOf("CREATE TABLE IF NOT EXISTS " + table);
-            jdbc.execute(ddl.substring(start, ddl.indexOf(";", start)));
+            jdbc.execute(ddl.substring(start, ddl.indexOf(";\n", start)));
         }
         // Use the production immutable-relationship trigger, not a permissive test-only owner update.
         int trigger = ddl.indexOf("CREATE TRIGGER trg_identity_registry_immutable_update");
         jdbc.execute(ddl.substring(trigger, ddl.indexOf("END$$", trigger) + 3));
         var configuration = new MybatisConfiguration(); configuration.setMapUnderscoreToCamelCase(true);
+        configuration.addMapper(cn.jia.agent.mapper.AgentExternalServicePolicyMapper.class);
         configuration.addMapper(cn.jia.agent.mapper.AgentIdentityRegistryMapper.class);
         configuration.addMapper(cn.jia.agent.mapper.AgentIdentityAliasMapper.class);
         configuration.addMapper(cn.jia.agent.mapper.AgentPersonaBindingMapper.class);
         var factory = new MybatisSqlSessionFactoryBean(); factory.setDataSource(jdbc.getDataSource()); factory.setConfiguration(configuration);
         var template = new SqlSessionTemplate(factory.getObject());
+        externalIdentities = template.getMapper(cn.jia.agent.mapper.AgentExternalServicePolicyMapper.class);
         var registry = new cn.jia.agent.dao.impl.AgentIdentityRegistryDaoImpl();
         var aliases = new cn.jia.agent.dao.impl.AgentIdentityAliasDaoImpl();
         var bindings = new cn.jia.agent.dao.impl.AgentPersonaBindingDaoImpl();

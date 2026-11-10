@@ -39,6 +39,7 @@ public interface AgentExternalServicePolicyMapper extends BaseMapper<AgentExtern
         SELECT * FROM agent_identity_registry
         WHERE BINARY tenant_id=BINARY #{tenant} AND BINARY client_id=BINARY #{client}
           AND BINARY canonical_agent_id=BINARY #{agent} AND canonical_type != 'SYSTEM'
+          AND lifecycle_status IN ('PROVISIONED','ACTIVE')
         """)
     AgentIdentityRegistryEntity identity(@Param("tenant") String tenant, @Param("client") String client,
             @Param("agent") String agent);
