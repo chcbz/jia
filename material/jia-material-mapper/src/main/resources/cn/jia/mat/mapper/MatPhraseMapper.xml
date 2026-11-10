@@ -25,4 +25,10 @@
         </where>
         ORDER BY RAND() LIMIT 1
     </select>
+    <select id="selectScheduledRandom" resultType="cn.jia.mat.entity.MatPhraseEntity">
+        SELECT * FROM mat_phrase
+        WHERE tenant_id = CAST(#{tenantId} AS BINARY)
+          AND client_id = CAST(#{clientId} AS BINARY)
+        ORDER BY RAND() LIMIT 1
+    </select>
 </mapper>

@@ -25,6 +25,8 @@ public interface MatVoteService {
 
 	MatVoteQuestionVO findOneQuestion(String jiacn);
 
+    MatVoteQuestionVO findScheduledQuestion(String clientId, String jiacn);
+
 	MatVoteQuestionEntity findQuestion(Long id);
 
 	void batchImport(String voteName, String txt, String answer) throws Exception;

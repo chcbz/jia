@@ -45,6 +45,14 @@ class WxDailyVoteKeysTest {
                 WxDailyVoteKeys.messageKey("wx-app", second));
     }
 
+    @Test
+    void answerPointersAreSharedByProducersAndPartitionedByExactAppAndAccount() {
+        assertEquals(WxDailyVoteKeys.answerPointer("app", "owner"), WxDailyVoteKeys.answerPointer("app", "owner"));
+        assertNotEquals(WxDailyVoteKeys.answerPointer("app", "owner"), WxDailyVoteKeys.answerPointer("App", "owner"));
+        assertNotEquals(WxDailyVoteKeys.answerPointer("app", "owner"), WxDailyVoteKeys.answerPointer("app", "Owner"));
+        assertNotEquals(WxDailyVoteKeys.answerPointer("app", "owner"), WxDailyVoteKeys.answerPointer("app", "owner "));
+    }
+
     private WxMpXmlMessage fallback(String content) {
         WxMpXmlMessage message = new WxMpXmlMessage();
         message.setFromUser("openid-secret-value");

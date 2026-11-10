@@ -14,4 +14,14 @@
         where id not in (select question_id from mat_vote_tick where jiacn = #{jiacn})
         limit 1
     </select>
+    <select id="selectScheduledQuestion" resultType="cn.jia.mat.entity.MatVoteQuestionEntity">
+        SELECT q.* FROM mat_vote_question q
+        WHERE q.tenant_id = CAST(#{tenantId} AS BINARY)
+          AND q.client_id = CAST(#{clientId} AS BINARY)
+          AND NOT EXISTS (SELECT 1 FROM mat_vote_tick t WHERE t.question_id=q.id
+            AND t.tenant_id = CAST(#{tenantId} AS BINARY)
+            AND t.client_id = CAST(#{clientId} AS BINARY)
+            AND t.jiacn = CAST(#{jiacn} AS BINARY))
+        ORDER BY q.id LIMIT 1
+    </select>
 </mapper>

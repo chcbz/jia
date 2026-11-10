@@ -158,7 +158,15 @@ public class MatVoteServiceImpl implements MatVoteService {
 
 	@Override
 	public MatVoteQuestionVO findOneQuestion(String jiacn) {
-		MatVoteQuestionEntity question = matVoteQuestionDao.selectNoTick(jiacn);
+		return withItems(matVoteQuestionDao.selectNoTick(jiacn));
+	}
+
+	@Override
+	public MatVoteQuestionVO findScheduledQuestion(String clientId, String jiacn) {
+		return withItems(matVoteQuestionDao.selectScheduledQuestion(clientId, jiacn));
+	}
+
+	private MatVoteQuestionVO withItems(MatVoteQuestionEntity question) {
 		MatVoteQuestionVO questionVO = MatVoteQuestionVOMapper.INSTANCE.toVO(question);
 		if (question != null) {
 			List<MatVoteItemEntity> voteItemList = matVoteItemDao.selectByQuestionId(question.getId());

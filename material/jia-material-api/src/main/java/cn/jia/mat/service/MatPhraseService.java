@@ -8,6 +8,8 @@ import cn.jia.mat.entity.MatPhraseVoteEntity;
 public interface MatPhraseService extends IBaseService<MatPhraseEntity> {
 	MatPhraseEntity findRandom(MatPhraseEntity example);
 
+    MatPhraseEntity findScheduledRandom(String clientId);
+
 	void vote(MatPhraseVoteEntity vote);
 
 	void read(Long id);

@@ -21,6 +21,14 @@ import java.util.List;
 public class MatVoteQuestionDaoImpl extends BaseDaoImpl<MatVoteQuestionMapper, MatVoteQuestionEntity>
         implements MatVoteQuestionDao {
 
+    @jakarta.inject.Inject
+    private cn.jia.core.security.FixedTenantAdmissionPolicy processScope;
+
+    @Override
+    public MatVoteQuestionEntity selectScheduledQuestion(String clientId, String jiacn) {
+        return baseMapper.selectScheduledQuestion(processScope.tenantForClient(clientId), clientId, jiacn);
+    }
+
     @Override
     public List<MatVoteQuestionEntity> selectByVoteId(Long voteId) {
         return baseMapper.selectList(Wrappers.lambdaQuery(MatVoteQuestionEntity.class)

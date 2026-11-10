@@ -14,4 +14,7 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 public interface MatPhraseMapper extends BaseMapper<MatPhraseEntity> {
 
     MatPhraseEntity selectRandom(MatPhraseEntity record);
+
+    MatPhraseEntity selectScheduledRandom(@org.apache.ibatis.annotations.Param("tenantId") String tenantId,
+            @org.apache.ibatis.annotations.Param("clientId") String clientId);
 }

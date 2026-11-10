@@ -8,6 +8,7 @@ dependencies {
     api project(':kefu:jia-kefu-api')
     api project(':material:jia-material-api')
     implementation project(':common:jia-common-service')
+    implementation project(':task:jia-task-api')
     implementation project(':wx:jia-wx-mapper')
     implementation(libs.weixin.java.mp)
     implementation(libs.weixin.java.pay)
@@ -30,6 +31,11 @@ def scheduledNoticeSourceSet = sourceSets.create('scheduledNoticeRegression') {
     java.include 'cn/jia/wx/schedule/WxScheduledNoticeStoreMySqlTest.java'
     java.include 'cn/jia/wx/schedule/WxSubscriptionScopeMySqlTest.java'
     java.include 'cn/jia/wx/schedule/WxRecipientScopeMySqlTest.java'
+    java.include 'cn/jia/wx/schedule/WxMaterialScopeMySqlTest.java'
+    java.include 'cn/jia/wx/schedule/WxScheduleTest.java'
+    java.include 'cn/jia/wx/schedule/WxNoticeDispatchTest.java'
+    java.include 'cn/jia/wx/dailyvote/WxDailyVoteKeysTest.java'
+    java.include 'cn/jia/wx/api/WxMpControllerDailyVoteTest.java'
     java.include 'cn/jia/agent/skill/SkillManagementMySqlFixture.java'
     compileClasspath += sourceSets.main.output
     runtimeClasspath += output + compileClasspath
@@ -42,6 +48,7 @@ configurations.named(scheduledNoticeSourceSet.runtimeOnlyConfigurationName) {
 }
 dependencies {
     add(scheduledNoticeSourceSet.implementationConfigurationName, project(':kefu:jia-kefu-mapper'))
+    add(scheduledNoticeSourceSet.implementationConfigurationName, project(':material:jia-material-mapper'))
 }
 tasks.register('scheduledNoticeRegression', Test) {
     group = 'verification'

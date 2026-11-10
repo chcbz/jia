@@ -27,6 +27,10 @@ public final class WxDailyVoteKeys {
         return digest("wx-daily-vote-user-v1", appid, jiacn);
     }
 
+    public static String answerPointer(String appid, String jiacn) {
+        return "wx:daily-vote:answer:" + userKey(appid, jiacn);
+    }
+
     public static String requestFingerprint(String appid, String userKey, long questionId, String answer) {
         return digest("wx-daily-vote-answer-v1", appid, userKey, String.valueOf(questionId), answer);
     }

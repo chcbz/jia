@@ -17,6 +17,14 @@ import jakarta.inject.Named;
 @Named
 public class MatPhraseDaoImpl extends BaseDaoImpl<MatPhraseMapper, MatPhraseEntity> implements MatPhraseDao {
 
+    @jakarta.inject.Inject
+    private cn.jia.core.security.FixedTenantAdmissionPolicy processScope;
+
+    @Override
+    public MatPhraseEntity selectScheduledRandom(String clientId) {
+        return baseMapper.selectScheduledRandom(processScope.tenantForClient(clientId), clientId);
+    }
+
     @Override
     public MatPhraseEntity selectRandom(MatPhraseEntity record) {
         return baseMapper.selectRandom(record);

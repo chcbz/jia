@@ -20,4 +20,6 @@ public interface MatVoteQuestionDao extends IBaseDao<MatVoteQuestionEntity> {
     int deleteByVoteId(Long voteId);
 
     MatVoteQuestionEntity selectNoTick(String jiacn);
+
+    MatVoteQuestionEntity selectScheduledQuestion(String clientId, String jiacn);
 }

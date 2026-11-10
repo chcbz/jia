@@ -14,4 +14,8 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 public interface MatVoteQuestionMapper extends BaseMapper<MatVoteQuestionEntity> {
 
     MatVoteQuestionEntity selectNoTick(String jiacn);
+
+    MatVoteQuestionEntity selectScheduledQuestion(@org.apache.ibatis.annotations.Param("tenantId") String tenantId,
+            @org.apache.ibatis.annotations.Param("clientId") String clientId,
+            @org.apache.ibatis.annotations.Param("jiacn") String jiacn);
 }

@@ -70,6 +70,11 @@ public class MatPhraseServiceImpl extends BaseServiceImpl<MatPhraseDao, MatPhras
     }
 
     @Override
+    public MatPhraseEntity findScheduledRandom(String clientId) {
+        return matPhraseDao.selectScheduledRandom(clientId);
+    }
+
+    @Override
     public MatPhraseEntity findRandom(MatPhraseEntity example) {
         return matPhraseDao.selectRandom(example);
     }

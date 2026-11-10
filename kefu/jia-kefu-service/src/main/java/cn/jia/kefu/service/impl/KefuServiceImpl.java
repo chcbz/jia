@@ -109,11 +109,11 @@ public class KefuServiceImpl implements KefuService {
 	public cn.jia.kefu.entity.WxNoticeSendResult sendScheduledWxTemplate(
 			String clientId, String typeCode, String jiacn, String... attr) throws Exception {
 		KefuMsgTypeEntity type = kefuMsgTypeDao.findScheduledMsgType(clientId, typeCode);
-		if (type == null) return new cn.jia.kefu.entity.WxNoticeSendResult(false, false);
+		if (type == null) return new cn.jia.kefu.entity.WxNoticeSendResult(false, false, null);
 		MpUserEntity user = mpUserService.findScheduledRecipient(clientId, jiacn);
-		if (user == null) return new cn.jia.kefu.entity.WxNoticeSendResult(false, false);
+		if (user == null) return new cn.jia.kefu.entity.WxNoticeSendResult(false, false, null);
 		boolean active = redisService.get(ACTIVE_MP_USER + user.getOpenId()) != null;
-		return new cn.jia.kefu.entity.WxNoticeSendResult(sendWxTemplate(type, user, jiacn, active, attr), active);
+		return new cn.jia.kefu.entity.WxNoticeSendResult(sendWxTemplate(type, user, jiacn, active, attr), active, user.getAppid());
 	}
 
 	private boolean sendWxTemplate(KefuMsgTypeEntity kefuMsgType, MpUserEntity mpUser,

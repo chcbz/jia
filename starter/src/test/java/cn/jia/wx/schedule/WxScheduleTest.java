@@ -38,10 +38,10 @@ public class WxScheduleTest extends BaseDbUnitTest {
 
     @Test
     @Sql(scripts = "classpath:testObject/wx/wx_schedule_init.sql", executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
-    void sendVote() {
-        wxSchedule.sendVote();
-        redisTemplate.opsForValue().set("active_mp_user_oH2zD1PUPvspicVak69uB4wDaFLg", "Y", Duration.ofDays(2));
-        wxSchedule.sendVote();
+    void registerDailyNoticeCron() {
+        // Bootstrap registers durable work; tests must not directly send real subscriber messages.
+        wxSchedule.onApplicationEvent(null);
+        wxSchedule.onApplicationEvent(null);
     }
 
     @Test

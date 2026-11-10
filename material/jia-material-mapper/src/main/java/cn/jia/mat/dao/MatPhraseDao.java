@@ -14,4 +14,6 @@ import cn.jia.mat.entity.MatPhraseEntity;
 public interface MatPhraseDao extends IBaseDao<MatPhraseEntity> {
 
     MatPhraseEntity selectRandom(MatPhraseEntity record);
+
+    MatPhraseEntity selectScheduledRandom(String clientId);
 }
