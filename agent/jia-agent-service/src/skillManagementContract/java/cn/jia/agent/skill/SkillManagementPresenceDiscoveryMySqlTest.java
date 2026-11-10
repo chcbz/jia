@@ -31,6 +31,8 @@ class SkillManagementPresenceDiscoveryMySqlTest extends SkillManagementMySqlFixt
                 if(start>=0) declarations.add(ddl.substring(start,ddl.indexOf(';',start)+1));
             }
             assertEquals(1,declarations.size());jdbc.execute(declarations.getFirst());
+            new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator(
+                    new org.springframework.core.io.ClassPathResource("db/agent-runtime-session-fence-v1.sql")).execute(ds);
             for (var row : List.of(new String[]{"local","blue","client"},new String[]{"foreign","red","client"},
                     new String[]{"other-client","blue","other"},new String[]{"case-alias","BLUE","client"}))
                 jdbc.update("INSERT INTO agent_runtime(agent_id,name,owner_jiacn,status,last_seen_at,tenant_id,client_id) VALUES (?,?,'owner','online',1,?,?)",
