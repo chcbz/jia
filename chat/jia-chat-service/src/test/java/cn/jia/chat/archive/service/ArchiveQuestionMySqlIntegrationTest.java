@@ -49,6 +49,7 @@ class ArchiveQuestionMySqlIntegrationTest extends SkillManagementMySqlFixture {
     private SpringArchiveTransactions transactions;
     private ArchiveManifest manifest;
     private byte[] body;
+    private final List<ArchiveQuestionWorker> workers = new ArrayList<>();
 
     @BeforeEach
     void setUp() {
@@ -74,6 +75,7 @@ class ArchiveQuestionMySqlIntegrationTest extends SkillManagementMySqlFixture {
     }
 
     @AfterEach void tearDown() {
+        workers.forEach(ArchiveQuestionWorker::stop);
         if (delivery != null) delivery.stop();
         if (jdbc != null) clean();
     }
@@ -199,6 +201,7 @@ class ArchiveQuestionMySqlIntegrationTest extends SkillManagementMySqlFixture {
 
         ArchiveQuestionWorker worker = new ArchiveQuestionWorker(store, transactions,
                 new ArchiveClerkFallbackProvider(), delivery, enabledPolicy(), Clock.fixed(NOW, ZoneOffset.UTC));
+        workers.add(worker);
         for (int index = 0; index < 10 && worker.runOnce(); index++) { }
         // A second configured process owns the other tenant; the first must not claim it.
         for (ArchiveOwnerScope owner : owners) if ("owner-b".equals(owner.tenantId()))
@@ -206,6 +209,7 @@ class ArchiveQuestionMySqlIntegrationTest extends SkillManagementMySqlFixture {
         var peerStore = new JdbcArchiveQuestionStore(jdbc, new FixedTenantAdmissionPolicy("owner-b", null));
         var peer = new ArchiveQuestionWorker(peerStore, transactions,
                 new ArchiveClerkFallbackProvider(), delivery, enabledPolicy(), Clock.fixed(NOW, ZoneOffset.UTC));
+        workers.add(peer);
         for (int index = 0; index < 10 && peer.runOnce(); index++) { }
         for (ArchiveOwnerScope owner : owners) assertEquals("SUCCEEDED", service.get(owner, id).status());
         assertEquals("SUCCEEDED", service.get(owners.getFirst(), raceId).status());

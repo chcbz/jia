@@ -64,7 +64,8 @@ class ArchivePersonalDataServiceTest {
         scope.setClientId("client-a");
         properties.setAllowedScopes(new ArrayList<>(List.of(scope)));
         var controller = new cn.jia.chat.archive.http.ArchivePersonalDataController(service,
-                cn.jia.chat.archive.config.ArchiveReaderAccessPolicy.from(properties));
+                cn.jia.chat.archive.config.ArchiveReaderAccessPolicy.from(properties),
+                new cn.jia.core.security.FixedTenantAdmissionPolicy(OWNER.tenantId(), null));
         var converters = new ArrayList<org.springframework.http.converter.HttpMessageConverter<?>>();
         converters.add(new org.springframework.http.converter.ByteArrayHttpMessageConverter());
         converters.add(new org.springframework.http.converter.json.JacksonJsonHttpMessageConverter());
