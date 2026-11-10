@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.TreeMap;
 
 /** Separate additive initializer; it never modifies the accepted W02 five-table catalog. */
@@ -416,7 +417,7 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
                                            String defaultValue, String extra) {
         String dataType = type.contains("(") ? type.substring(0, type.indexOf('(')) : type;
         return new ColumnDefinition(name, dataType, type, nullable, defaultValue,
-                dataType.equals("varchar") ? COLLATION : null, extra);
+                Set.of("varchar", "char", "longtext").contains(dataType) ? COLLATION : null, extra);
     }
 
     private static IndexDefinition index(String name, boolean unique, String columns) {

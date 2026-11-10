@@ -431,6 +431,7 @@ tasks.register('bf08FormalFlow', Test) {
 // and compile only the production-hosting contract here.
 def managedHostingRegressionSourceSet = sourceSets.create('managedHostingRegression') {
     java {
+        include 'cn/jia/agent/api/EconomyOperationWireTest.java'
         srcDir 'src/test/java'
         srcDir rootProject.file('economy/jia-economy-service/src/test/java')
         include 'cn/jia/economy/config/EconomyMySqlTestFixture.java'

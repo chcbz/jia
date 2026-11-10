@@ -156,7 +156,7 @@ class HostingRentHttpTest {
 
     private HostingRentApplicationService.QuoteView quote() {
         return new HostingRentApplicationService.QuoteView("hrq-test", "INITIAL", "wuyong", AGENT, null, null,
-                "agent-hosting-preview", "1", "WEN", "1000000000", "2592000", "1800000300000");
+                "agent-hosting-preview", "1", "WEN", "1000000000", "2592000", "1800000300000", "1000000000", "0", "0");
     }
     private HostingRentApplicationService.MutationView receipt() {
         return new HostingRentApplicationService.MutationView(AGENT, "hri-test", "hrl-test", "hrq-test", "etx-test",

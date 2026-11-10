@@ -16,8 +16,8 @@ final class EconomyOperationWire {
         return parsed;
     }
     @JsonInclude(JsonInclude.Include.ALWAYS)
-    record QuoteView(String quoteId, String purpose, String personaCode, String agentId, String leaseId, String expectedLeaseVersion, String planId, String planVersion, String currency, String amountWen, String periodSeconds, Long expiresAt) { }
-    static QuoteView from(HostingRentApplicationService.QuoteView v) { return v == null ? null : new QuoteView(v.quoteId(), v.purpose(), v.personaCode(), v.agentId(), v.leaseId(), v.expectedLeaseVersion(), v.planId(), v.planVersion(), v.currency(), v.amountWen(), v.periodSeconds(), epoch(v.expiresAt())); }
+    record QuoteView(String quoteId, String purpose, String personaCode, String agentId, String leaseId, String expectedLeaseVersion, String planId, String planVersion, String currency, String amountWen, String periodSeconds, Long expiresAt, String recurringAmountWen, String initialSkillCount, String initialSkillAmountWen) { }
+    static QuoteView from(HostingRentApplicationService.QuoteView v) { return v == null ? null : new QuoteView(v.quoteId(), v.purpose(), v.personaCode(), v.agentId(), v.leaseId(), v.expectedLeaseVersion(), v.planId(), v.planVersion(), v.currency(), v.amountWen(), v.periodSeconds(), epoch(v.expiresAt()), v.recurringAmountWen(), v.initialSkillCount(), v.initialSkillAmountWen()); }
     @JsonInclude(JsonInclude.Include.ALWAYS)
     record ReprovisionView(String requestId, String agentId, String leaseId, String operation, String status, String currency, String amountWen, String leaseVersion, Long paidThrough, Long occurredAt) { }
     static ReprovisionView from(HostingRentApplicationService.ReprovisionView v) { return v == null ? null : new ReprovisionView(v.requestId(), v.agentId(), v.leaseId(), v.operation(), v.status(), v.currency(), v.amountWen(), v.leaseVersion(), epoch(v.paidThrough()), epoch(v.occurredAt())); }

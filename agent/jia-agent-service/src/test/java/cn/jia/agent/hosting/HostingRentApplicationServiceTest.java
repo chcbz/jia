@@ -67,8 +67,8 @@ class HostingRentApplicationServiceTest {
         });
         when(provider.inventory(anyString(), anyString(), anyString(), anyString())).thenAnswer(call -> {
             assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
-            return provider.available() ? new ManagedHostingProvisioner.SkillInventory(
-                    EMPTY_INVENTORY.hostId(), EMPTY_INVENTORY.inventorySha256(), List.of(), EMPTY_INVENTORY.snapshotJson()) : null;
+            return new ManagedHostingProvisioner.SkillInventory(
+                    EMPTY_INVENTORY.hostId(), EMPTY_INVENTORY.inventorySha256(), List.of(), EMPTY_INVENTORY.snapshotJson());
         });
         application = new HostingRentApplicationService(new AgentHostingRentProperties(true, "1", "1000000000", "2592000"),
                 new EconomyPreviewGate(new EconomyPreviewProperties(true, List.of(
@@ -396,7 +396,7 @@ class HostingRentApplicationServiceTest {
         releasedInvitation();
         when(rent.selectPlanForUpdate(anyString(), anyString(), anyString(), eq(1L))).thenReturn(
                 new EconomyHostingRentPlanEntity().setPlanId("plan").setPlanVersion(1L)
-                        .setAmountWen(500L).setPeriodSeconds(2592000L).setStatus("ACTIVE"));
+                        .setAmountWen(1000000000L).setPeriodSeconds(2592000L).setStatus("ACTIVE"));
         var skill = new ManagedHostingProvisioner.InstalledSkill("disabled", "NATIVE", "a".repeat(64), false, null);
         var observed = new ManagedHostingProvisioner.SkillInventory("fixture-host", "b".repeat(64), List.of(skill), "fixture-public-snapshot");
         when(provider.inventory(anyString(), anyString(), anyString(), eq(AGENT))).thenAnswer(call -> {
@@ -410,11 +410,11 @@ class HostingRentApplicationServiceTest {
             assertEquals(observed.inventorySha256(), command.initialSkills().inventorySha256());
             assertEquals(observed.snapshotJson(), command.initialSkills().snapshotJson());
             assertEquals(observed.hostId(), command.initialSkills().hostId());
-            return new HostingRentQuoteReceipt("quote", command.purpose(), "plan", 1L, 550L,
-                    2592000L, "wuyong", AGENT, null, null, 1800000000000L, 500L, command.initialSkills());
+            return new HostingRentQuoteReceipt("quote", command.purpose(), "plan", 1L, 1000000050L,
+                    2592000L, "wuyong", AGENT, null, null, 1800000000000L, 1000000000L, command.initialSkills());
         });
         var view = application.quote(ACTOR, "wuyong", KEY, Map.of("purpose", "INITIAL"));
-        assertEquals("550", view.amountWen()); assertEquals("500", view.recurringAmountWen());
+        assertEquals("1000000050", view.amountWen()); assertEquals("1000000000", view.recurringAmountWen());
         assertEquals("1", view.initialSkillCount()); assertEquals("50", view.initialSkillAmountWen());
         assertEquals(0, count()); verify(ledger, never()).reserve(any());
     }
