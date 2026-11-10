@@ -53,6 +53,21 @@ public final class SkillManagementService {
         this.installations=installations;this.authentication=authentication;this.identities=identities;this.packages=packages;this.writer=writer;
         this.sessions=sessions;this.capabilities=capabilities;this.tx=new TransactionTemplate(manager);this.hosting=hosting;
     }
+    private SkillRelationshipAuthorizations relationshipAuthorizations;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setRelationshipAuthorizations(SkillRelationshipAuthorizations value) { relationshipAuthorizations=value; }
+    public SkillRelationshipAuthorizations.Relationship relationship(SkillCapabilityLookup.Scope scope) {
+        return relationshipAuthorizations==null?null:relationshipAuthorizations.read(scope);
+    }
+    private static boolean retained(SkillInstallationAuthorizationEntity auth,SkillRelationshipAuthorizations.Relationship relationship) {
+        return relationship!=null&&relationship.covers(auth);
+    }
+    private static String runtimeInstallation(SkillInstallationAuthorizationEntity auth,SkillRelationshipAuthorizations.Relationship relationship) {
+        return retained(auth,relationship)?relationship.runtimeInstallationId():auth.getRuntimeInstallationId();
+    }
+    private static String runtimeHost(SkillInstallationAuthorizationEntity auth,SkillRelationshipAuthorizations.Relationship relationship) {
+        return retained(auth,relationship)?relationship.runtimeHostId():auth.getRuntimeHostId();
+    }
     private org.springframework.beans.factory.ObjectProvider<cn.jia.agent.position.PositionSkillService> positionProvider;
     @org.springframework.beans.factory.annotation.Autowired
     public void setPositionProvider(org.springframework.beans.factory.ObjectProvider<cn.jia.agent.position.PositionSkillService> value) {positionProvider=value;}
@@ -82,6 +97,10 @@ public final class SkillManagementService {
         }));
     }
     private boolean currentPositionSource(SkillCapabilityLookup.Scope scope,SkillInstallationAuthorizationEntity auth) {
+        return currentPositionSource(scope,auth,relationship(scope));
+    }
+    private boolean currentPositionSource(SkillCapabilityLookup.Scope scope,SkillInstallationAuthorizationEntity auth,SkillRelationshipAuthorizations.Relationship relationship) {
+        if(retained(auth,relationship))return true;
         var c=db.findChange(scope.tenantId(),scope.clientId(),auth.getChangeId());if(!positionChange(c))return true;
         var runtime=runtimes.findInScope(scope.tenantId(),scope.clientId(),scope.agentId());if(runtime==null)return false;
         var state=positions().currentState(new PositionAuthority.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()));
@@ -319,12 +338,13 @@ public final class SkillManagementService {
         if(requested==null)return null;
         var auth=db.findAuthorization(a.tenantId(),a.clientId(),(String)requested);
         require(auth!=null,409,"SKILL_STATE_CONFLICT");
+        var relationship=relationship(new SkillCapabilityLookup.Scope(a.tenantId(),a.clientId(),a.ownerJiacn(),state.getAgentId()));
         var entitlement=db.entitlement(a.tenantId(),a.clientId(),auth.getEntitlementId());
-        require(entitlement!=null&&"ACTIVE".equals(entitlement.getStatus())&&state.getAgentId().equals(entitlement.getTargetAgentId())
+        require(entitlement!=null&&(retained(auth,relationship)||"ACTIVE".equals(entitlement.getStatus()))&&state.getAgentId().equals(entitlement.getTargetAgentId())
                 &&validInstallation(new SkillCapabilityLookup.Scope(a.tenantId(),a.clientId(),a.ownerJiacn(),state.getAgentId()),auth,
-                    app.installation(a.tenantId(),a.clientId(),auth.getInstallationId()),entitlement),409,"SKILL_STATE_CONFLICT");
+                    app.installation(a.tenantId(),a.clientId(),auth.getInstallationId()),entitlement,relationship),409,"SKILL_STATE_CONFLICT");
         var runtime=runtimes.findInScope(a.tenantId(),a.clientId(),state.getAgentId());
-        require(runtime!=null&&auth.getRuntimeInstallationId().equals(runtime.getRuntimeInstallationId())&&auth.getRuntimeHostId().equals(runtime.getRuntimeHostId()),409,"SKILL_RUNTIME_MAPPING_REQUIRED");
+        require(runtime!=null&&runtimeInstallation(auth,relationship).equals(runtime.getRuntimeInstallationId())&&runtimeHost(auth,relationship).equals(runtime.getRuntimeHostId()),409,"SKILL_RUNTIME_MAPPING_REQUIRED");
         return auth;
     }
     private void intent(HostingRentHttp.Actor a,SkillManagedStateEntity state,Map<String,Object> data) {
@@ -719,10 +739,11 @@ public final class SkillManagementService {
                 // Do not advertise installations left behind by a different provider/binding.
                 if(!candidate.target().isMine()&&!providerMatches){result.put(agent,List.of());continue;}
                 var rows=new ArrayList<RecommendationSkill>();
+                var relationship=relationship(new SkillCapabilityLookup.Scope(a.tenantId(),a.clientId(),providerOwner,agent));
                 for(var state:states) {
                     if(!candidate.target().isMine()&&!Boolean.TRUE.equals(state.getDesiredEnabled()))continue;
                     var auth=authorizations.get(state.getActiveInstallationId());if(auth==null)continue;
-                    var status=runtime(a,agent,state,auth,observed,observed!=null);
+                    var status=runtime(a,agent,state,auth,observed,observed!=null,relationship);
                     var pkg=ref(auth);String versionId=text(pkg,"productVersionId");
                     var installedVersion=approved.computeIfAbsent(versionId,id->Optional.ofNullable(
                             market.selectApprovedProductVersion(a.tenantId(),a.clientId(),id))).orElse(null);
@@ -749,11 +770,12 @@ public final class SkillManagementService {
         }
         return queryOwned(a,agent,()->{
             var states=new HashMap<String,SkillManagedStateEntity>();for(var s:db.states(a.tenantId(),a.clientId(),agent))states.put(s.getSkillKey(),s);
-            var records=db.changes(a.tenantId(),a.clientId(),agent);var keys=new TreeSet<String>(UTF8);keys.addAll(candidates.keySet());keys.addAll(states.keySet());
+            var records=db.changes(a.tenantId(),a.clientId(),agent).stream().filter(c->a.ownerJiacn().equals(c.getOwnerJiacn())).toList();var keys=new TreeSet<String>(UTF8);keys.addAll(candidates.keySet());keys.addAll(states.keySet());
             // Preserve legacy installed evidence as an explicit unknown row; never infer successful SM-C1 activation.
             for(var e:market.selectEntitlementsByAgent(a.tenantId(),a.clientId(),agent))keys.add(e.getSkillKey());
             var positionSkills=marketplace.positionSkills(a);
             var rows=new ArrayList<Map<String,Object>>();boolean connected=online(a,agent);var catalog=catalog(a,agent);
+            var relationship=relationship(new SkillCapabilityLookup.Scope(a.tenantId(),a.clientId(),a.ownerJiacn(),agent));
             var binding=runtimes.findInScope(a.tenantId(),a.clientId(),agent);boolean mapped=binding!=null&&binding.getRuntimeInstallationId()!=null&&binding.getRuntimeHostId()!=null;
             for(String skill:keys) {
                 var s=states.get(skill);var candidate=candidates.get(skill);var product=products.get(skill);
@@ -767,7 +789,7 @@ public final class SkillManagementService {
                     String policy=db.upgradePolicy(a.tenantId(),a.clientId(),text(ref(auth),"productVersionId"),text(candidate.target(),"productVersionId"));
                     eligibility=policy==null?"POLICY_UNSET":"NOT_ALLOWED".equals(policy)?"NOT_ALLOWED":policy;
                 }
-                var runtime=runtime(a,agent,s,auth,catalog,connected);
+                var runtime=runtime(a,agent,s,auth,catalog,connected,relationship);
                 var allowed=new ArrayList<String>(List.of("VIEW"));var denied=new ArrayList<Map<String,Object>>();
                 boolean pending=s!=null&&s.getPendingChangeId()!=null;String blocked=pending?"SKILL_CHANGE_PENDING":null;
                 boolean historical=auth==null&&market.selectEntitlementsByAgent(a.tenantId(),a.clientId(),agent).stream()
@@ -802,19 +824,26 @@ public final class SkillManagementService {
         });
     }
     private Map<String,Object> runtime(HostingRentHttp.Actor a,String agent,SkillManagedStateEntity state,SkillInstallationAuthorizationEntity auth,SkillCapabilityLookup.View view,boolean connected) {
+        return runtime(a,agent,state,auth,view,connected,relationship(new SkillCapabilityLookup.Scope(a.tenantId(),a.clientId(),a.ownerJiacn(),agent)));
+    }
+    private Map<String,Object> runtime(HostingRentHttp.Actor a,String agent,SkillManagedStateEntity state,SkillInstallationAuthorizationEntity auth,SkillCapabilityLookup.View view,boolean connected,SkillRelationshipAuthorizations.Relationship relationship) {
         if(!connected)return map("state","OFFLINE","reasonCode","AGENT_OFFLINE","observedAt",null,"catalogRevision",null);
         if(auth==null||state==null||view==null)return map("state","UNKNOWN","reasonCode","CATALOG_UNCONFIRMED","observedAt",null,"catalogRevision",null);
         var found=view.catalog().skills().stream().filter(f->auth.getInstallationId().equals(f.skillInstallationId())).toList();
         if(found.size()!=1)return map("state","VERIFYING","reasonCode","CATALOG_UNCONFIRMED","observedAt",null,"catalogRevision",view.catalog().catalogRevision());
-        var fact=found.getFirst();boolean exact=exactCatalog(a,state,auth,view,fact);
+        var fact=found.getFirst();boolean exact=exactCatalog(a,state,auth,view,fact,relationship);
         return map("state",exact?(fact.readiness()==SkillCapabilityLookup.Readiness.UNAVAILABLE?"UNKNOWN":fact.readiness().name()):"VERSION_MISMATCH","reasonCode",exact?fact.reasonCode():"VERSION_MISMATCH",
                 "observedAt",fact.observedAt(),"catalogRevision",view.catalog().catalogRevision());
     }
     private boolean exactCatalog(HostingRentHttp.Actor a,SkillManagedStateEntity state,SkillInstallationAuthorizationEntity auth,
             SkillCapabilityLookup.View view,SkillCapabilityLookup.RuntimeSkill fact) {
+        return exactCatalog(a,state,auth,view,fact,relationship(new SkillCapabilityLookup.Scope(a.tenantId(),a.clientId(),a.ownerJiacn(),state.getAgentId())));
+    }
+    private boolean exactCatalog(HostingRentHttp.Actor a,SkillManagedStateEntity state,SkillInstallationAuthorizationEntity auth,
+            SkillCapabilityLookup.View view,SkillCapabilityLookup.RuntimeSkill fact,SkillRelationshipAuthorizations.Relationship relationship) {
         var pkg=ref(auth);
         return auth.getInstallationId().equals(fact.skillInstallationId())
-                &&auth.getRuntimeInstallationId().equals(view.fence().runtimeInstallationId())&&auth.getRuntimeHostId().equals(view.fence().hostId())
+                &&runtimeInstallation(auth,relationship).equals(view.fence().runtimeInstallationId())&&runtimeHost(auth,relationship).equals(view.fence().hostId())
                 &&Objects.equals(pkg.get("kind"),fact.kind())&&Objects.equals(pkg.get("productVersionId"),fact.productVersionId())&&Objects.equals(pkg.get("skillVersion"),fact.skillVersion())
                 &&Objects.equals(pkg.get("packageSha256"),fact.packageSha256())&&Objects.equals(pkg.get("manifestSha256"),fact.manifestSha256())
                 &&effectivePolicyRevision(a,state).equals(fact.policyRevision())&&Boolean.TRUE.equals(state.getDesiredEnabled())==fact.enabled();
@@ -1020,6 +1049,9 @@ public final class SkillManagementService {
     /** Called by the existing authenticated capability registration consumer, not a new wire endpoint. */
     public void capabilitiesChanged(AgentRuntimeAuthenticationService.Proof proof) {
         for(var hint:db.changes(proof.scope().tenantId(),proof.scope().clientId(),proof.scope().agentId())) {
+            // Retained packages are public; old relationship commands never become new-session callbacks.
+            if(!proof.scope().ownerJiacn().equals(hint.getOwnerJiacn())||!proof.installationId().equals(hint.getRuntimeInstallationId())
+                    ||!proof.hostId().equals(hint.getRuntimeHostId()))continue;
             var data=dto(hint);if(!Set.of("VERIFYING","SUCCEEDED").contains(text(data,"status"))||Boolean.TRUE.equals(data.get("runtimeSynced")))continue;
             var actor=new HostingRentHttp.Actor(hint.getActorId(),hint.getTenantId(),hint.getClientId(),hint.getOwnerJiacn());
             ownedChange(hint,()->authentication.withFence(proof,false,()->{
@@ -1089,6 +1121,14 @@ public final class SkillManagementService {
     /** One canonical authorization model. A one-time adoption is backed by the exact original
      * successful receipt and offline immutable-package evidence, not a replayed old message or
      * invented APPLIED result. No HTTP/WS migration decoder or startup data repair exists. */
+    private AuthorizationOrigin origin(SkillInstallationAuthorizationEntity auth,SkillRelationshipAuthorizations.Relationship relationship) {
+        if(retained(auth,relationship)) {
+            var original=origin(auth);
+            if(original==null||!original.skillKey().equals(relationship.skillKey(auth)))return null;
+            return new AuthorizationOrigin(relationship.actorId(),relationship.ownerJiacn(),original.agentId(),original.skillKey());
+        }
+        return origin(auth);
+    }
     private AuthorizationOrigin origin(SkillInstallationAuthorizationEntity auth) {
         var c=db.findChange(auth.getTenantId(),auth.getClientId(),auth.getChangeId());
         if(auth.getAdoptionEvidenceJson()==null)return c==null?null:new AuthorizationOrigin(c.getActorId(),c.getOwnerJiacn(),c.getAgentId(),c.getSkillKey());
@@ -1121,27 +1161,34 @@ public final class SkillManagementService {
     }
     public List<InstalledSkillDescriptorLookup.Descriptor> descriptors(SkillCapabilityLookup.Scope scope) {
         var rows=new ArrayList<InstalledSkillDescriptorLookup.Descriptor>();
-        for(var auth:db.authorizationsForAgent(scope.tenantId(),scope.clientId(),scope.agentId())) {
-            var context=origin(auth);
+        var authorizations=db.authorizationsForAgent(scope.tenantId(),scope.clientId(),scope.agentId());
+        if(authorizations.isEmpty())return rows;
+        var relationship=relationship(scope);
+        for(var auth:authorizations) {
+            var context=origin(auth,relationship);
             if(context==null||!scope.ownerJiacn().equals(context.ownerJiacn())||!scope.agentId().equals(context.agentId()))continue;
             var i=app.installation(scope.tenantId(),scope.clientId(),auth.getInstallationId());
             var e=db.readEntitlement(scope.tenantId(),scope.clientId(),auth.getEntitlementId());
-            if(!validInstallation(scope,auth,i,e))continue;
+            if(!validInstallation(scope,auth,i,e,relationship))continue;
             var target=ref(auth);var approved=market.selectApprovedProductVersion(scope.tenantId(),scope.clientId(),text(target,"productVersionId"));
             if(approved==null||!HexFormat.of().formatHex(approved.getPackageSha256()).equals(target.get("packageSha256")))continue;
-            if(i.getOrderId()!=null) {var o=trade.order(scope.tenantId(),scope.clientId(),i.getOrderId());if(o==null||!"ACTIVE".equals(o.getStatus()))continue;}
+            if(!retained(auth,relationship)&&i.getOrderId()!=null) {var o=trade.order(scope.tenantId(),scope.clientId(),i.getOrderId());if(o==null||!"ACTIVE".equals(o.getStatus()))continue;}
             var pkg=packages.getObject().describe(approved);var manifest=packages.getObject().manifest(pkg);
             if(manifest==null) {
                 if(!"INSTRUCTION".equals(target.get("kind"))||target.get("manifestSha256")!=null)continue;
             } else if(!"EXECUTABLE".equals(target.get("kind"))||!manifest.manifestSha256().equals(target.get("manifestSha256")))continue;
             rows.add(new InstalledSkillDescriptorLookup.Descriptor(context.skillKey(),text(target,"skillVersion"),auth.getInstallationId(),
-                    text(target,"packageSha256"),manifest==null?null:manifest.manifestSha256(),manifest==null?null:manifest.document().toString(),auth.getRuntimeInstallationId(),auth.getRuntimeHostId(),null));
+                    text(target,"packageSha256"),manifest==null?null:manifest.manifestSha256(),manifest==null?null:manifest.document().toString(),runtimeInstallation(auth,relationship),runtimeHost(auth,relationship),null));
         }
         return rows;
     }
     private boolean validInstallation(SkillCapabilityLookup.Scope scope,SkillInstallationAuthorizationEntity auth,SkillInstallationEntity i,SkillEntitlementEntity e) {
+        return validInstallation(scope,auth,i,e,relationship(scope));
+    }
+    private boolean validInstallation(SkillCapabilityLookup.Scope scope,SkillInstallationAuthorizationEntity auth,SkillInstallationEntity i,SkillEntitlementEntity e,SkillRelationshipAuthorizations.Relationship relationship) {
         var target=ref(auth);
-        if(i==null||e==null||!"SUCCEEDED".equals(i.getStatus())||!"ACTIVE".equals(e.getStatus())
+        if(retained(auth,relationship)&&(i==null||!relationship.skillKey(auth).equals(i.getSkillKey())))return false;
+        if(i==null||e==null||!"SUCCEEDED".equals(i.getStatus())||!retained(auth,relationship)&&!"ACTIVE".equals(e.getStatus())
                 ||!scope.agentId().equals(i.getTargetAgentId())||!scope.agentId().equals(e.getTargetAgentId())
                 ||!auth.getInstallationId().equals(e.getInstallationId())||!Objects.equals(e.getActivatedAt(),i.getInstalledAt())
                 ||!Objects.equals(e.getOrderId(),i.getOrderId())||!Objects.equals(e.getProductVersionId(),target.get("productVersionId"))
@@ -1160,7 +1207,7 @@ public final class SkillManagementService {
         if(binding==null||!scope.agentId().equals(binding.getCanonicalAgentId())||!auth.getRuntimeInstallationId().equals(binding.getRuntimeInstallationId())
                 ||!auth.getRuntimeHostId().equals(binding.getRuntimeHostId()))return false;
         if(auth.getAdoptionEvidenceJson()!=null) {
-            var context=origin(auth);
+            var context=origin(auth,relationship);
             return context!=null&&scope.ownerJiacn().equals(context.ownerJiacn())&&scope.agentId().equals(context.agentId())
                     &&i.getSkillKey().equals(context.skillKey());
         }
@@ -1170,56 +1217,61 @@ public final class SkillManagementService {
     /** W05 task qualification joins its caller's task/runtime transaction and locks this skill
      * through authorization commit. Older active entitlements cannot qualify a disabled skill. */
     public boolean qualifies(SkillCapabilityLookup.Scope scope,SkillInstallationAuthorizationEntity auth) {
+        return qualifies(scope,auth,relationship(scope));
+    }
+    public boolean qualifies(SkillCapabilityLookup.Scope scope,SkillInstallationAuthorizationEntity auth,SkillRelationshipAuthorizations.Relationship relationship) {
         require(TransactionSynchronizationManager.isActualTransactionActive(),503,"SKILL_STATE_UNAVAILABLE");
-        var context=origin(auth);
+        var context=origin(auth,relationship);
         if(context==null||!scope.agentId().equals(context.agentId())||!scope.ownerJiacn().equals(context.ownerJiacn()))return false;
         var state=db.lockState(scope.tenantId(),scope.clientId(),scope.agentId(),context.skillKey());
         if(state==null||!Boolean.TRUE.equals(state.getDesiredEnabled())||!Boolean.TRUE.equals(state.getAdmissionEnabled())||!auth.getInstallationId().equals(state.getActiveInstallationId()))return false;
-        if(!currentPositionSource(scope,auth))return false;
-        if(!validInstallation(scope,auth,app.installation(scope.tenantId(),scope.clientId(),auth.getInstallationId()),db.readEntitlement(scope.tenantId(),scope.clientId(),auth.getEntitlementId())))return false;
+        if(!currentPositionSource(scope,auth,relationship))return false;
+        if(!validInstallation(scope,auth,app.installation(scope.tenantId(),scope.clientId(),auth.getInstallationId()),db.readEntitlement(scope.tenantId(),scope.clientId(),auth.getEntitlementId()),relationship))return false;
         var a=new HostingRentHttp.Actor(context.actorId(),scope.tenantId(),scope.clientId(),scope.ownerJiacn());
-        return "READY".equals(runtime(a,scope.agentId(),state,auth,catalog(a,scope.agentId()),online(a,scope.agentId())).get("state"));
+        return "READY".equals(runtime(a,scope.agentId(),state,auth,catalog(a,scope.agentId()),online(a,scope.agentId()),relationship).get("state"));
     }
     /** Outer transaction precedes task/grant locks, then retains the per-skill root while task
      * grant + execution snapshot are committed. Existing task recovery deliberately does NOT use this. */
     public <T> T admit(SkillCapabilityLookup.Scope scope,String skill,String installationId,Supplier<T> taskAdmission) {
         var auth=db.findAuthorization(scope.tenantId(),scope.clientId(),installationId);
         require(auth!=null,409,"SKILL_STATE_CONFLICT");
-        var context=origin(auth);
+        var relationship=relationship(scope);var context=origin(auth,relationship);
         require(context!=null&&context.agentId().equals(scope.agentId())&&context.ownerJiacn().equals(scope.ownerJiacn())&&context.skillKey().equals(skill),403,"AGENT_FORBIDDEN");
         var a=new HostingRentHttp.Actor(context.actorId(),scope.tenantId(),scope.clientId(),scope.ownerJiacn());
         var change=db.findChange(scope.tenantId(),scope.clientId(),auth.getChangeId());
         java.util.function.Supplier<T> admission=()->{
             var state=state(a,scope.agentId(),skill);var e=db.entitlement(scope.tenantId(),scope.clientId(),auth.getEntitlementId());
+            var currentRelationship=relationship(scope);
             require(installationId.equals(state.getActiveInstallationId())&&Boolean.TRUE.equals(state.getDesiredEnabled())
-                    &&Boolean.TRUE.equals(state.getAdmissionEnabled())&&e!=null&&"ACTIVE".equals(e.getStatus()),409,"SKILL_STATE_CONFLICT");
-            var live=runtime(a,scope.agentId(),state,auth,catalog(a,scope.agentId()),true);require("READY".equals(live.get("state")),409,"SKILL_STATE_CONFLICT");
-            require(currentPositionSource(scope,auth),403,"AGENT_FORBIDDEN");return taskAdmission.get();
+                    &&Boolean.TRUE.equals(state.getAdmissionEnabled())&&e!=null&&(retained(auth,currentRelationship)||"ACTIVE".equals(e.getStatus())),409,"SKILL_STATE_CONFLICT");
+            var live=runtime(a,scope.agentId(),state,auth,catalog(a,scope.agentId()),true,currentRelationship);require("READY".equals(live.get("state")),409,"SKILL_STATE_CONFLICT");
+            require(currentPositionSource(scope,auth,currentRelationship),403,"AGENT_FORBIDDEN");return taskAdmission.get();
         };
-        return positionChange(change)?ownedChange(change,admission):owned(a,scope.agentId(),null,true,admission);
+        return !retained(auth,relationship)&&positionChange(change)?ownedChange(change,admission):owned(a,scope.agentId(),null,true,admission);
     }
     /** Native instruction admission is independent of legacy runner readiness, not of ownership or policy. */
     public <T> T admitNative(SkillCapabilityLookup.Scope scope,String skill,String installationId,Supplier<T> taskAdmission) {
         var auth=db.findAuthorization(scope.tenantId(),scope.clientId(),installationId);
         require(auth!=null,409,"SKILL_STATE_CONFLICT");
         if(!"INSTRUCTION".equals(ref(auth).get("kind")))return admit(scope,skill,installationId,taskAdmission);
-        var context=origin(auth);
+        var relationship=relationship(scope);var context=origin(auth,relationship);
         require(context!=null&&scope.agentId().equals(context.agentId())&&scope.ownerJiacn().equals(context.ownerJiacn())&&skill.equals(context.skillKey()),403,"AGENT_FORBIDDEN");
         var actor=new HostingRentHttp.Actor(context.actorId(),scope.tenantId(),scope.clientId(),scope.ownerJiacn());
         var change=db.findChange(scope.tenantId(),scope.clientId(),auth.getChangeId());
         Supplier<T> admission=()->{
             var state=state(actor,scope.agentId(),skill);
+            var currentRelationship=relationship(scope);
             require(state!=null&&installationId.equals(state.getActiveInstallationId())&&Boolean.TRUE.equals(state.getDesiredEnabled())
                     &&state.getPendingChangeId()==null
-                    &&validInstallation(scope,auth,app.installation(scope.tenantId(),scope.clientId(),installationId),db.readEntitlement(scope.tenantId(),scope.clientId(),auth.getEntitlementId())),409,"SKILL_STATE_CONFLICT");
-            require(currentPositionSource(scope,auth),403,"AGENT_FORBIDDEN");
+                    &&validInstallation(scope,auth,app.installation(scope.tenantId(),scope.clientId(),installationId),db.readEntitlement(scope.tenantId(),scope.clientId(),auth.getEntitlementId()),currentRelationship),409,"SKILL_STATE_CONFLICT");
+            require(currentPositionSource(scope,auth,currentRelationship),403,"AGENT_FORBIDDEN");
             var view=catalog(actor,scope.agentId());
             require(online(actor,scope.agentId())&&view!=null&&view.state()==SkillCapabilityLookup.State.AVAILABLE,409,"SKILL_STATE_CONFLICT");
             var facts=view.catalog().skills().stream().filter(f->installationId.equals(f.skillInstallationId())).toList();
-            require(facts.size()==1&&exactCatalog(actor,state,auth,view,facts.getFirst()),409,"SKILL_STATE_CONFLICT");
+            require(facts.size()==1&&exactCatalog(actor,state,auth,view,facts.getFirst(),currentRelationship),409,"SKILL_STATE_CONFLICT");
             return taskAdmission.get();
         };
-        return positionChange(change)?ownedChange(change,admission):owned(actor,scope.agentId(),null,true,admission);
+        return !retained(auth,relationship)&&positionChange(change)?ownedChange(change,admission):owned(actor,scope.agentId(),null,true,admission);
     }
     public Map<String,Object> nativeTaskBinding(String tenant,String client,String executionId,String grantId,long grantVersion,String agent,String installationId) {
         return taskBinding(tenant,client,executionId,grantId,grantVersion,agent,installationId,true);

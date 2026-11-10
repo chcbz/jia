@@ -7,6 +7,27 @@ public interface SkillManagementMapper {
     String S = "tenant_id=#{tenantId} AND client_id=#{clientId}";
     @Insert("INSERT INTO agent_skill_managed_state(tenant_id,client_id,agent_id,skill_key,skill_revision,active_installation_id,active_policy_revision,desired_enabled,admission_enabled,pending_change_id) VALUES(#{tenantId},#{clientId},#{agentId},#{skillKey},#{skillRevision},#{activeInstallationId},#{activePolicyRevision},#{desiredEnabled},#{admissionEnabled},#{pendingChangeId})")
     int insertState(SkillManagedStateEntity row);
+    /** Current relationship only. A frozen quote or reserved funds alone never grant skill use.
+     * Original INITIAL capture remains the source after ordinary rent renewals/reprovision. */
+    @Select("""
+            SELECT l.principal_id, r.owner_jiacn, r.binding_id, l.lease_id, i.intent_id,
+                   i.capture_transaction_id, r.runtime_installation_id, r.runtime_host_id, q.inventory_snapshot_json
+            FROM agent_runtime r
+            JOIN agent_persona_binding b ON b.tenant_id=r.tenant_id AND b.client_id=r.client_id AND b.id=r.binding_id
+                 AND b.agent_id=r.agent_id AND b.jiacn=r.owner_jiacn AND b.status=1
+            JOIN economy_hosting_lease l ON l.tenant_id=r.tenant_id AND l.client_id=r.client_id
+                 AND l.agent_id=r.agent_id AND l.binding_id=CAST(r.binding_id AS CHAR)
+                 AND l.live_slot=1 AND l.status IN ('ACTIVE','LOCKED','FINISHING')
+            JOIN economy_hosting_provisioning_intent i ON i.tenant_id=l.tenant_id AND i.client_id=l.client_id
+                 AND i.lease_id=l.lease_id AND i.quote_purpose='INITIAL' AND i.status='ACTIVE'
+                 AND i.settlement_kind='PAID' AND i.capture_transaction_id IS NOT NULL
+            JOIN economy_hosting_rent_quote q ON q.tenant_id=i.tenant_id AND q.client_id=i.client_id
+                 AND q.quote_id=i.quote_id
+            WHERE r.tenant_id=#{tenantId} AND r.client_id=#{clientId} AND r.agent_id=#{agentId}
+              AND BINARY r.owner_jiacn=BINARY #{ownerJiacn} AND r.runtime_installation_id IS NOT NULL AND r.runtime_host_id IS NOT NULL
+            """)
+    PaidSkillInventoryEntity paidInventory(@Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("agentId") String agentId, @Param("ownerJiacn") String ownerJiacn);
     @Select("SELECT * FROM agent_skill_managed_state WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND agent_id=#{agentId} AND skill_key=#{skillKey}")
     SkillManagedStateEntity findState(@Param("tenantId") String tenantId,@Param("clientId") String clientId,@Param("agentId") String agentId,@Param("skillKey") String skillKey);
     @Select("SELECT * FROM agent_skill_managed_state WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND agent_id=#{agentId} AND skill_key=#{skillKey} FOR UPDATE")

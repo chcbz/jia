@@ -42,14 +42,17 @@ public class InstalledSkillEntitlementLookup implements FundedBountySkillEntitle
         // The caller already holds task/binding/runtime roots; this joins the same REQUIRED transaction.
         if(marketplaceAvailable)versions.requireOwned(a,agentId,null,false);
         List<InstalledSkill> installed=new ArrayList<>();
-        if(marketplaceAvailable)for(var e:market.selectEntitlementsByAgent(a.tenantId(),a.clientId(),agentId)) {
-            if(!"ACTIVE".equals(e.getStatus())) continue;
+        var scope=new cn.jia.agent.service.SkillCapabilityLookup.Scope(a.tenantId(),a.clientId(),a.ownerJiacn(),agentId);
+        var entitlements=marketplaceAvailable?market.selectEntitlementsByAgent(a.tenantId(),a.clientId(),agentId):List.<cn.jia.agent.entity.skill.SkillEntitlementEntity>of();
+        var relationship=!entitlements.isEmpty()&&management!=null?management.relationship(scope):null;
+        for(var e:entitlements) {
             var auth=managed==null?null:managed.findAuthorization(a.tenantId(),a.clientId(),e.getInstallationId());
             if(auth!=null) {
-                if(management.qualifies(new cn.jia.agent.service.SkillCapabilityLookup.Scope(a.tenantId(),a.clientId(),a.ownerJiacn(),agentId),auth))
+                if(management.qualifies(scope,auth,relationship))
                     installed.add(new InstalledSkill(e.getSkillKey(),e.getSkillVersion()));
                 continue;
             }
+            if(!"ACTIVE".equals(e.getStatus())) continue;
             var i=application.installation(a.tenantId(),a.clientId(),e.getInstallationId());
             var o=trade.order(a.tenantId(),a.clientId(),e.getOrderId());
             if(i==null || o==null || !"SUCCEEDED".equals(i.getStatus()) || !"ACTIVE".equals(o.getStatus())
