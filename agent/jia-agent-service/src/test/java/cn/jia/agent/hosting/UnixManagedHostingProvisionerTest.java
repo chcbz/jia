@@ -37,6 +37,41 @@ class UnixManagedHostingProvisionerTest {
         when(credentials.available()).thenReturn(true);
         when(sessions.currentRegisteredProof("0", "fixture-client", "agt_fixture")).thenReturn(proof("fixture-owner", "fixture-host", "fixture-instance", 2));
     }
+    @Test void sharedCurrentFixtureDecodesExactAdmittedAssociation() throws Exception {
+        try (var input = getClass().getResourceAsStream("/hosting/hosting-current-v1.json")) {
+            assertNotNull(input);
+            var shared = JSON.readValue(input, new TypeReference<Map<String, Map<String, Object>>>() {});
+            assertEquals(UnixManagedHostingProvisioner.request(preparation(), "current", null), shared.get("request"));
+            assertNotNull(UnixManagedHostingProvisioner.decodeCurrent(preparation(), shared.get("response")));
+        }
+    }
+
+    @Test void currentLookupUsesReadOnlyExchangeAndPreservesOriginalRelationship() throws Exception {
+        var adapter = adapter();
+        var response = frame("reprovisionPrepareRequest");
+        response.put("method", "current"); response.put("outcome", "CURRENT");
+        response.put("installationId", candidate().installationId());
+        response.put("manifestSha256", candidate().manifestSha256());
+        response.put("provisionGeneration", 2L); response.put("hostId", candidate().hostId());
+        doReturn(response).when(adapter).exchange(anyMap());
+        var current = adapter.currentOperation(preparation());
+        assertNotNull(current);
+        assertEquals(preparation("reprovisionPrepareRequest"), current.preparation());
+        assertEquals(2, current.candidate().provisionGeneration());
+        verify(adapter).exchange(UnixManagedHostingProvisioner.request(preparation(), "current", null));
+        verify(credentials, never()).ensureInstallation(any(), any());
+        verifyNoInteractions(sessions);
+        for (String field : List.of("ownerJiacn", "bindingId", "leaseId", "initialIntentId", "installationId", "operationKind")) {
+            var changed = new LinkedHashMap<>(response); changed.put(field, "foreign");
+            assertNull(UnixManagedHostingProvisioner.decodeCurrent(preparation(), changed), field);
+        }
+        response.put("outcome", "UNKNOWN");
+        assertNull(adapter.currentOperation(preparation()));
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        try { assertThrows(IllegalStateException.class, () -> adapter.currentOperation(preparation())); }
+        finally { TransactionSynchronizationManager.setActualTransactionActive(false); }
+    }
+
     @SuppressWarnings("unchecked") private Map<String, Object> frame(String name) { return new LinkedHashMap<>((Map<String, Object>)fixture.get(name)); }
     private ManagedHostingProvisioner.Preparation preparation() { return preparation("prepareRequest"); }
     private ManagedHostingProvisioner.Preparation preparation(String name) {

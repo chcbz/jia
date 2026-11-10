@@ -1,0 +1,39 @@
+{
+  "request": {
+    "protocol": "runtime-hosting-v1",
+    "method": "current",
+    "tenantId": "0",
+    "clientId": "fixture-client",
+    "ownerJiacn": "fixture-owner",
+    "canonicalAgentId": "agt_fixture",
+    "bindingId": "16",
+    "leaseId": "hrl_fixture",
+    "initialIntentId": "hri_fixture",
+    "operationId": "hri_fixture",
+    "operationKind": "INITIAL",
+    "reservedAt": 1791594000000,
+    "requestedAt": 1791594000000,
+    "validUntil": null
+  },
+  "response": {
+    "protocol": "runtime-hosting-v1",
+    "method": "current",
+    "tenantId": "0",
+    "clientId": "fixture-client",
+    "ownerJiacn": "fixture-owner",
+    "canonicalAgentId": "agt_fixture",
+    "bindingId": "16",
+    "leaseId": "hrl_fixture",
+    "initialIntentId": "hri_fixture",
+    "operationId": "hrr_fixture",
+    "operationKind": "REPROVISION",
+    "reservedAt": 1791594000000,
+    "requestedAt": 1791594003000,
+    "validUntil": 1794186000000,
+    "outcome": "CURRENT",
+    "installationId": "rti_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "manifestSha256": "bea7b13b1e4440da851825135880d734c2ba9acc9c707fd9336c1c29eaaad07b",
+    "provisionGeneration": 2,
+    "hostId": "fixture-host"
+  }
+}

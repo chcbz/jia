@@ -20,6 +20,9 @@ public interface ManagedHostingProvisioner {
     record Candidate(String installationId, String manifestSha256, String enrollmentSecretSha256,
                      long enrollmentExpiresAt, long provisionGeneration, String hostId) { }
     Observation prepareAndObserve(Preparation preparation);
+    /** Read-only original relationship lookup. Null is unknown, never proof that cleanup/release is safe. */
+    CurrentOperation currentOperation(Preparation initial);
+    record CurrentOperation(Preparation preparation, Candidate candidate) { }
     /** Transaction-external, current relationship only. True proves process stop, NOT private cleanup or unbinding. */
     boolean quiesce(Preparation preparation, Candidate candidate, String handoverId);
     /** All original cost/management evidence accepted; does NOT prove private cleanup or release. */

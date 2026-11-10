@@ -81,6 +81,36 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
             return unknown(p);
         }
     }
+    @Override public CurrentOperation currentOperation(Preparation initial) {
+        outsideTransaction();
+        if (!validPreparation(initial) || !initial.intentId().equals(initial.operationId())
+                || !availableFor(initial.tenantId(), initial.clientId(), initial.ownerJiacn())) return null;
+        try { return decodeCurrent(initial, exchange(request(initial, "current", null))); }
+        catch (Exception uncertain) { return null; }
+    }
+    static CurrentOperation decodeCurrent(Preparation initial, Map<String, Object> response) {
+        if (!validPreparation(initial) || !initial.intentId().equals(initial.operationId()) || response == null) return null;
+        var expected = request(initial, "current", null);
+        var allowed = new java.util.HashSet<>(expected.keySet());
+        allowed.addAll(Set.of("outcome", "installationId", "manifestSha256", "provisionGeneration", "hostId"));
+        if (!response.keySet().equals(allowed) || !"CURRENT".equals(response.get("outcome"))
+                || !installation(response.get("installationId")) || !digest(response.get("manifestSha256"))
+                || integral(response.get("provisionGeneration")) <= 0 || !exact(response.get("hostId"), 100)) return null;
+        for (String field : Set.of("protocol", "method", "tenantId", "clientId", "ownerJiacn", "canonicalAgentId",
+                "bindingId", "leaseId", "initialIntentId", "reservedAt"))
+            if (!Objects.equals(expected.get(field), response.get(field))) return null;
+        if (!(response.get("operationId") instanceof String operationId)) return null;
+        Long validUntil = response.get("validUntil") == null ? null : integral(response.get("validUntil"));
+        var active = new Preparation(initial.tenantId(), initial.clientId(), initial.ownerJiacn(), initial.agentId(),
+                initial.intentId(), initial.leaseId(), initial.bindingId(), initial.reservedAt(), operationId,
+                integral(response.get("requestedAt")), validUntil);
+        if (!validPreparation(active) || !echoes(association(active), response)) return null;
+        long generation = integral(response.get("provisionGeneration"));
+        if (active.operationId().equals(active.intentId()) ? generation != 1 : generation <= 1) return null;
+        // Enrollment fields are deliberately absent: lookup must never authorize/reenroll an installation.
+        return new CurrentOperation(active, new Candidate((String) response.get("installationId"),
+                (String) response.get("manifestSha256"), null, 0, generation, (String) response.get("hostId")));
+    }
     @Override public boolean quiesce(Preparation p, Candidate candidate, String handoverId) {
         return handover(p, candidate, handoverId, "quiesce", "QUIESCED");
     }
@@ -136,11 +166,11 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
         return observation;
     }
     static Map<String, Object> request(Preparation p, String method, Candidate candidate) {
-        if (!validPreparation(p) || !Set.of("prepare", "ensure", "observe", "quiesce", "evidence", "cleanup").contains(method)
-                || !"prepare".equals(method) && candidate == null) throw new IllegalArgumentException("Invalid hosting control request");
+        if (!validPreparation(p) || !Set.of("prepare", "ensure", "observe", "current", "quiesce", "evidence", "cleanup").contains(method)
+                || !Set.of("prepare", "current").contains(method) && candidate == null) throw new IllegalArgumentException("Invalid hosting control request");
         Map<String, Object> request = association(p);
         request.put("protocol", PROTOCOL); request.put("method", method);
-        if (!"prepare".equals(method)) {
+        if (!Set.of("prepare", "current").contains(method)) {
             request.put("installationId", candidate.installationId()); request.put("manifestSha256", candidate.manifestSha256());
             request.put("provisionGeneration", candidate.provisionGeneration());
         }
