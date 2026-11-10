@@ -694,6 +694,21 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         assertTrue(service.settleStoppedChangeForHandover(handover,text(c,"skillChangeId")));assertEquals(100_000_000L,wallet());
         assertThrows(HostingRentApplicationException.class,()->service.quote(ACTOR,"new",quoteData(),false));
     }
+    @Test void handoverDiscoverySettlesOnlyOriginalPendingFeesAndStopsQueryingTerminalChanges() {
+        var c=install();report(c,"FAILED","DEPENDENCY_MISSING");var handover=stoppedHandover();
+        var p=handover.preparation();var candidate=handover.candidate();
+        assertEquals(1,db.handoverPendingPage(p.tenantId(),p.clientId(),p.agentId(),p.ownerJiacn(),candidate.installationId(),candidate.hostId(),0,"").size());
+        assertTrue(db.handoverPendingPage(p.tenantId(),p.clientId(),p.agentId(),"other-owner",candidate.installationId(),candidate.hostId(),0,"").isEmpty());
+        assertTrue(db.handoverPendingPage(p.tenantId(),p.clientId(),p.agentId(),p.ownerJiacn(),"other-installation",candidate.hostId(),0,"").isEmpty());
+        assertTrue(service.settleHandoverChanges(handover));assertEquals(100_000_000L,wallet());
+        assertTrue(db.handoverPendingPage(p.tenantId(),p.clientId(),p.agentId(),p.ownerJiacn(),candidate.installationId(),candidate.hostId(),0,"").isEmpty());
+        var before=businessSnapshot();assertTrue(service.settleHandoverChanges(handover));assertEquals(before,businessSnapshot());
+    }
+    @Test void handoverDiscoveryRetainsUnknownFeesAndDoesNotClaimFinancialReadiness() {
+        var c=install();report(c,"UNKNOWN","RECEIPT_UNKNOWN");var handover=stoppedHandover();var before=businessSnapshot();
+        assertFalse(service.settleHandoverChanges(handover));assertEquals(before,businessSnapshot());
+        assertThrows(IllegalStateException.class,()->tx.execute(t->service.settleHandoverChanges(handover)));
+    }
     @Test void stoppedRetryablePreparationRefundsOnceWithoutRewritingFailedInstallationOrEvidence() {
         var c=install();report(c,"FAILED","DEPENDENCY_MISSING");var handover=stoppedHandover();
         String id=text(c,"skillChangeId");

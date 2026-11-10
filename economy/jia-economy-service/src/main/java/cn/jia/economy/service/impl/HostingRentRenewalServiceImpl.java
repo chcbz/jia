@@ -57,6 +57,11 @@ public final class HostingRentRenewalServiceImpl implements HostingRentRenewalSe
                 && renewal.nowMillis() >= Math.addExact(lease.getLockedAt(), LOCK_RETENTION_MILLIS);
     }
 
+    @Override public cn.jia.economy.entity.EconomyHostingProvisioningIntentEntity initialHandoverIntent(EconomyScope scope,String leaseId) {
+        gate.requireMutationAllowed(scope.tenantId(),scope.clientId());
+        return leases.selectInitialIntent(scope.tenantId(),scope.clientId(),leaseId);
+    }
+
     @Override public HandoverSnapshot lockHandover(EconomyScope scope, String initialIntentId, String leaseId) {
         gate.requireMutationAllowed(scope.tenantId(), scope.clientId());
         if (!org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())

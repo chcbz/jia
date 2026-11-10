@@ -222,6 +222,22 @@ public final class SkillManagementService {
         return row;
     }
 
+    /** Financial readiness only, after original process stop. Does not prove evidence delivery or private cleanup.
+     * Discovery is scoped/keyset-paged; each settlement independently locks/rechecks its original business roots. */
+    public boolean settleHandoverChanges(cn.jia.agent.hosting.ManagedHostingProvisioner.CurrentOperation stopped) {
+        if(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())
+            throw new IllegalStateException("Handover skill discovery requires independent settlement transactions");
+        var p=stopped.preparation();var candidate=stopped.candidate();
+        long afterTime=0;String afterId="";boolean ready=true;
+        while(true) {
+            var page=db.handoverPendingPage(p.tenantId(),p.clientId(),p.agentId(),p.ownerJiacn(),
+                    candidate.installationId(),candidate.hostId(),afterTime,afterId);
+            for(var change:page) if(!settleStoppedChangeForHandover(stopped,change.getChangeId()))ready=false;
+            if(page.size()<100)return ready;
+            var last=page.getLast();afterTime=last.getCreatedAt();afterId=last.getChangeId();
+        }
+    }
+
     /** Internal handover phase. Settles proven failures or pristine native marketplace intents after actual stop.
      * Claimed/unknown work returns false and still needs original execution evidence; no public endpoint. */
     public boolean settleStoppedChangeForHandover(cn.jia.agent.hosting.ManagedHostingProvisioner.CurrentOperation stopped,String changeId) {

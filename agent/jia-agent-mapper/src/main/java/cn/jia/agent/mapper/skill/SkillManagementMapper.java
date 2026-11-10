@@ -31,6 +31,22 @@ public interface SkillManagementMapper {
     SkillInstallationAuthorizationEntity lockAuthorization(@Param("tenantId") String tenantId,@Param("clientId") String clientId,@Param("installationId") String installationId);
     @Insert("INSERT INTO agent_skill_change_command(tenant_id,client_id,command_id,change_id,request_id,message_id,data_json,state,prepared_sha256) VALUES(#{tenantId},#{clientId},#{commandId},#{changeId},#{requestId},#{messageId},#{dataJson},#{state},#{preparedSha256})")
     int insertCommand(SkillChangeCommandEntity row);
+    /** Original relation only, cursor aligned with idx_skill_changes. Not a global history scan. */
+    @Select("""
+            SELECT c.* FROM agent_skill_change c
+            LEFT JOIN agent_skill_change_command d ON d.tenant_id=c.tenant_id AND d.client_id=c.client_id AND d.command_id=c.command_id
+            WHERE c.tenant_id=#{tenantId} AND c.client_id=#{clientId} AND c.agent_id=#{agentId}
+              AND c.owner_jiacn=#{ownerJiacn} AND c.runtime_installation_id=#{installationId} AND c.runtime_host_id=#{hostId}
+              AND (c.created_at>#{afterTime} OR (c.created_at=#{afterTime} AND c.change_id>#{afterId}))
+              AND (JSON_UNQUOTE(JSON_EXTRACT(c.dto_json,'$.fundingStatus'))='HELD'
+                OR JSON_UNQUOTE(JSON_EXTRACT(c.dto_json,'$.status'))='FAILED_RETRYABLE'
+                OR (d.state IN ('PENDING','UNKNOWN') AND JSON_UNQUOTE(JSON_EXTRACT(d.data_json,'$.phase'))!='READ'))
+            ORDER BY c.created_at,c.change_id LIMIT 100
+            """)
+    List<SkillChangeEntity> handoverPendingPage(@Param("tenantId") String tenantId,@Param("clientId") String clientId,
+            @Param("agentId") String agentId,@Param("ownerJiacn") String ownerJiacn,
+            @Param("installationId") String installationId,@Param("hostId") String hostId,
+            @Param("afterTime") long afterTime,@Param("afterId") String afterId);
     @Select("SELECT * FROM agent_skill_change_command WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND command_id=#{commandId}")
     SkillChangeCommandEntity findCommand(@Param("tenantId") String tenantId,@Param("clientId") String clientId,@Param("commandId") String commandId);
     @Select("SELECT * FROM agent_skill_change_command WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND command_id=#{commandId} FOR UPDATE")
