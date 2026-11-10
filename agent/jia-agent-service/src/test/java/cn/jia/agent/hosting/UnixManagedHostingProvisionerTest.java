@@ -244,9 +244,16 @@ class UnixManagedHostingProvisionerTest {
             assertEquals(ManagedHostingProvisioner.Outcome.UNKNOWN, real.prepareAndObserve(free).outcome());
             assertFalse(real.quiesce(initial, original, "stale-handover"));
             var current = candidates.get(free.operationId()); assertNotNull(current);
+            assertFalse(real.flushEvidence(free, current, "finish-real")); // no durable stop yet
             assertTrue(real.quiesce(free, current, "finish-real"));
             assertTrue(real.quiesce(free, current, "finish-real"));
             assertFalse(real.quiesce(free, current, "different-handover"));
+            assertFalse(real.flushEvidence(initial, original, "finish-real"));
+            assertFalse(real.flushEvidence(free, current, "different-handover"));
+            assertFalse(real.flushEvidence(free, current, "finish-real")); // pending is not success
+            assertTrue(real.flushEvidence(free, current, "finish-real"));
+            assertTrue(real.flushEvidence(free, current, "finish-real")); // same durable receipt
+
             assertEquals(ManagedHostingProvisioner.Outcome.UNKNOWN, real.prepareAndObserve(free).outcome());
         } catch (Exception | AssertionError failure) {
             originalFailure = failure; throw failure;
