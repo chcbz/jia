@@ -36,7 +36,6 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -74,7 +73,6 @@ class AgentTaskEventReplayServiceImplTest {
     private MutableDurableStore store;
     private ThreadPoolExecutor worker;
     private ExecutorService delivery;
-    private ScheduledThreadPoolExecutor timer;
     private AgentTaskEventReplayServiceImpl service;
 
     @BeforeEach
@@ -85,10 +83,9 @@ class AgentTaskEventReplayServiceImplTest {
         bindStore();
         worker = workerExecutor(2, 8);
         delivery = deliveryExecutor(12);
-        timer = timerExecutor();
         service = new AgentTaskEventReplayServiceImpl(
-                eventDao, broker, worker, delivery, timer,
-                policy(Duration.ofHours(1)), resourceLimits(16, 8, 12));
+                eventDao, broker, worker, delivery,
+                policy(), resourceLimits(16, 8, 12));
     }
 
     @AfterEach
@@ -99,7 +96,6 @@ class AgentTaskEventReplayServiceImplTest {
         if (broker != null) {
             broker.close();
         }
-        shutdown(timer);
         shutdown(worker);
         shutdown(delivery);
     }
@@ -282,7 +278,7 @@ class AgentTaskEventReplayServiceImplTest {
 
     @Test
     void periodicDurableCheckRecoversDroppedWakeupAndBrokerClosedCrossInstanceWrite() {
-        replaceService(policy(Duration.ofMillis(40)));
+        replaceService(policy());
         store.setCurrent(0L);
         List<Long> received = new CopyOnWriteArrayList<>();
         CountDownLatch completed = new CountDownLatch(1);
@@ -297,12 +293,14 @@ class AgentTaskEventReplayServiceImplTest {
         broker.dropNextWakeup();
         store.append(1L);
         broker.publish(BROKER_SCOPE, 1L);
+        recover();
         awaitCondition(() -> received.equals(List.of(1L))
                 && service.scheduledWorkerTaskCount() == 0);
 
         int readsBeforeClosedBrokerWrite = store.currentCalls.get();
         broker.close();
         store.append(2L); // Simulates another process: no local wakeup can exist.
+        recover();
         await(completed);
 
         assertEquals(List.of(1L, 2L), received);
@@ -401,7 +399,7 @@ class AgentTaskEventReplayServiceImplTest {
         StepVerifier.create(service.replay(SCOPE, 0L), 1L)
                 .assertNext(signal -> assertDurable(signal, 1L))
                 .then(() -> awaitCondition(() -> service.activeSubscriptionCount() == 0
-                        && service.activeTimerCount() == 0
+                        && service.recoverySubscriptionCount() == 0
                         && broker.trackedLeaseCount() == 0
                         && service.deliveryPermitCount() == 1))
                 .thenRequest(1L)
@@ -419,7 +417,7 @@ class AgentTaskEventReplayServiceImplTest {
 
         StepVerifier.create(service.replay(SCOPE, 1L), 0L)
                 .then(() -> awaitCondition(() -> service.activeSubscriptionCount() == 0
-                        && service.activeTimerCount() == 0
+                        && service.recoverySubscriptionCount() == 0
                         && broker.trackedLeaseCount() == 0
                         && service.inFlightCatchUpCount() == 0
                         && service.deliveryPermitCount() == 1))
@@ -436,7 +434,6 @@ class AgentTaskEventReplayServiceImplTest {
     @Test
     void productionServiceCloseAbortsZeroDemandResyncAndTerminatesDeliveryExecutor() {
         service.close();
-        shutdown(timer);
         shutdown(worker);
         shutdown(delivery);
         service = new AgentTaskEventReplayServiceImpl(eventDao, broker);
@@ -444,7 +441,7 @@ class AgentTaskEventReplayServiceImplTest {
         DemandControlledSubscriber subscriber = new DemandControlledSubscriber();
         service.replay(SCOPE, 1L).subscribe(subscriber);
         awaitCondition(() -> service.activeSubscriptionCount() == 0
-                && service.activeTimerCount() == 0
+                && service.recoverySubscriptionCount() == 0
                 && broker.trackedLeaseCount() == 0
                 && service.inFlightCatchUpCount() == 0
                 && service.deliveryPermitCount() == 1);
@@ -467,13 +464,13 @@ class AgentTaskEventReplayServiceImplTest {
         for (int iteration = 0; iteration < 24; iteration++) {
             if (iteration != 0) {
                 replaceResources(
-                        policy(Duration.ofHours(1)), resourceLimits(4, 2, 4), 2, 4, 4);
+                        policy(), resourceLimits(4, 2, 4), 2, 4, 4);
             }
             store.setCurrent(0L);
             DemandControlledSubscriber subscriber = new DemandControlledSubscriber();
             service.replay(SCOPE, 1L).subscribe(subscriber);
             awaitCondition(() -> service.activeSubscriptionCount() == 0
-                    && service.activeTimerCount() == 0
+                    && service.recoverySubscriptionCount() == 0
                     && broker.trackedLeaseCount() == 0
                     && service.inFlightCatchUpCount() == 0
                     && service.deliveryPermitCount() == 1);
@@ -512,7 +509,7 @@ class AgentTaskEventReplayServiceImplTest {
     @Test
     void replayBudgetExhaustionIsTerminalAfterBoundedPrefix() {
         replaceService(new AgentTaskEventReplayServiceImpl.ReplayPolicy(
-                2, 2, 4, 4, Duration.ofHours(1)));
+                2, 2, 4, 4));
         store.appendRange(1L, 3L);
 
         StepVerifier.create(service.replay(SCOPE, 0L))
@@ -544,7 +541,7 @@ class AgentTaskEventReplayServiceImplTest {
 
     @Test
     void concurrentHintsWhileDaoIsBlockedUseOneWorkerAndNoPerHintQueueing() {
-        replaceService(policy(Duration.ofMillis(10)));
+        replaceService(policy());
         CountDownLatch currentEntered = new CountDownLatch(1);
         CountDownLatch releaseCurrent = new CountDownLatch(1);
         store.append(1L);
@@ -578,7 +575,7 @@ class AgentTaskEventReplayServiceImplTest {
 
     @Test
     void saturatedWorkerDropsSchedulingTriggerAndPeriodicRetryRecoversOffCallerThreads() {
-        replaceService(policy(Duration.ofMillis(20)));
+        replaceService(policy());
         CountDownLatch blockersStarted = new CountDownLatch(2);
         CountDownLatch releaseBlockers = new CountDownLatch(1);
         for (int i = 0; i < 10; i++) {
@@ -607,6 +604,8 @@ class AgentTaskEventReplayServiceImplTest {
         assertEquals(1, broker.trackedLeaseCount());
 
         releaseBlockers.countDown();
+        awaitCondition(() -> worker.getActiveCount() == 0 && worker.getQueue().isEmpty());
+        recover();
         await(completed);
         assertEquals(List.of(1L), received);
         assertTrue(callbackThread.get().startsWith("c03-replay-delivery-"), callbackThread.get());
@@ -698,7 +697,7 @@ class AgentTaskEventReplayServiceImplTest {
             assertTrue(!cancel.isAlive(), "cancel must not wait for a blocking callback");
             await(callbackInterrupted);
             assertEquals(0, service.activeSubscriptionCount());
-            assertEquals(0, service.activeTimerCount());
+            assertEquals(0, service.recoverySubscriptionCount());
             assertEquals(0, broker.trackedLeaseCount());
 
             assertEquals(1, service.deliveryPermitCount());
@@ -714,7 +713,7 @@ class AgentTaskEventReplayServiceImplTest {
 
     @Test
     void blockedCancelledDeliveriesNeverOccupyCatchUpWorkersOrStarveFifthReplay() {
-        replaceResources(policy(Duration.ofHours(1)), resourceLimits(4, 4, 6), 4, 8, 6);
+        replaceResources(policy(), resourceLimits(4, 4, 6), 4, 8, 6);
         store.append(1L);
         CountDownLatch callbacksEntered = new CountDownLatch(4);
         CountDownLatch releaseCallbacks = new CountDownLatch(1);
@@ -733,9 +732,8 @@ class AgentTaskEventReplayServiceImplTest {
 
         blockedSubscribers.forEach(BaseSubscriber::cancel);
         awaitCondition(() -> service.activeSubscriptionCount() == 0
-                && service.activeTimerCount() == 0
-                && broker.trackedLeaseCount() == 0
-                && service.pendingTimerTaskCount() == 0);
+                && service.recoverySubscriptionCount() == 0
+                && broker.trackedLeaseCount() == 0);
         assertEquals(4, service.deliveryPermitCount());
         assertEquals(0, service.inFlightCatchUpCount());
 
@@ -754,7 +752,7 @@ class AgentTaskEventReplayServiceImplTest {
 
     @Test
     void repeatedBlockedCancelIsBoundedAndFurtherSubscriptionFailsBeforeAllocation() {
-        replaceResources(policy(Duration.ofHours(1)), resourceLimits(2, 1, 3), 4, 8, 3);
+        replaceResources(policy(), resourceLimits(2, 1, 3), 4, 8, 3);
         store.append(1L);
         CountDownLatch callbacksEntered = new CountDownLatch(3);
         CountDownLatch releaseCallbacks = new CountDownLatch(1);
@@ -769,9 +767,8 @@ class AgentTaskEventReplayServiceImplTest {
                     && service.inFlightDeliveryCount() == expectedDeliveries);
             subscriber.cancel();
             awaitCondition(() -> service.activeSubscriptionCount() == 0
-                    && service.activeTimerCount() == 0
-                    && broker.trackedLeaseCount() == 0
-                    && service.pendingTimerTaskCount() == 0);
+                    && service.recoverySubscriptionCount() == 0
+                    && broker.trackedLeaseCount() == 0);
         }
         await(callbacksEntered);
         assertEquals(3, service.deliveryPermitCount());
@@ -786,9 +783,9 @@ class AgentTaskEventReplayServiceImplTest {
                 .verify(VERIFY_TIMEOUT);
 
         assertEquals(0, service.activeSubscriptionCount());
-        assertEquals(0, service.activeTimerCount());
+        assertEquals(0, service.recoverySubscriptionCount());
         assertEquals(0, broker.trackedLeaseCount());
-        assertEquals(0, service.pendingTimerTaskCount());
+
         assertEquals(3, service.deliveryPermitCount());
         assertEquals(poolSizeAtCapacity, ((ThreadPoolExecutor) delivery).getPoolSize());
         assertEquals(pendingDeliveriesAtCapacity, service.pendingDeliveryTaskCount());
@@ -801,15 +798,14 @@ class AgentTaskEventReplayServiceImplTest {
     }
 
     @Test
-    void activeSubscriptionCapFailsBeforeBrokerTimerOrWorkerAndTimerQueueConverges() {
-        replaceResources(policy(Duration.ofHours(1)), resourceLimits(2, 2, 4), 2, 4, 4);
+    void activeSubscriptionCapFailsBeforeBrokerRecoveryOrWorkerAndRecoveryGroupConverges() {
+        replaceResources(policy(), resourceLimits(2, 2, 4), 2, 4, 4);
         store.setCurrent(0L);
         Disposable first = service.replay(SCOPE, 0L).subscribe();
         Disposable second = service.replay(SCOPE, 0L).subscribe();
         awaitCondition(() -> service.activeSubscriptionCount() == 2
-                && service.activeTimerCount() == 1
+                && service.recoverySubscriptionCount() == 2
                 && broker.trackedLeaseCount() == 2
-                && service.pendingTimerTaskCount() == 1
                 && service.scheduledWorkerTaskCount() == 0);
         int durableReadsAtCapacity = store.currentCalls.get();
 
@@ -818,16 +814,15 @@ class AgentTaskEventReplayServiceImplTest {
                 .verify(VERIFY_TIMEOUT);
 
         assertEquals(2, service.activeSubscriptionCount());
-        assertEquals(1, service.activeTimerCount());
+        assertEquals(2, service.recoverySubscriptionCount());
         assertEquals(2, broker.trackedLeaseCount());
-        assertEquals(1, service.pendingTimerTaskCount());
+
         assertEquals(durableReadsAtCapacity, store.currentCalls.get());
         first.dispose();
         second.dispose();
         awaitCondition(() -> service.activeSubscriptionCount() == 0
-                && service.activeTimerCount() == 0
+                && service.recoverySubscriptionCount() == 0
                 && broker.trackedLeaseCount() == 0
-                && service.pendingTimerTaskCount() == 0
                 && service.deliveryPermitCount() == 0);
     }
 
@@ -835,7 +830,7 @@ class AgentTaskEventReplayServiceImplTest {
     void fullSignalQueueStopsDurableReadsAndCleansLogicalResourcesBeforeCallbackReturns() {
         replaceResources(
                 new AgentTaskEventReplayServiceImpl.ReplayPolicy(
-                        1, 20, 20, 10, Duration.ofMillis(20)),
+                        1, 20, 20, 10),
                 resourceLimits(1, 1, 2), 2, 4, 2);
         store.appendRange(1L, 5L);
         CountDownLatch callbackEntered = new CountDownLatch(1);
@@ -886,11 +881,10 @@ class AgentTaskEventReplayServiceImplTest {
         service.replay(SCOPE, 0L).subscribe(subscriber);
         await(callbackEntered);
         awaitCondition(() -> service.activeSubscriptionCount() == 0
-                && service.activeTimerCount() == 0
+                && service.recoverySubscriptionCount() == 0
                 && broker.trackedLeaseCount() == 0
                 && service.inFlightCatchUpCount() == 0
-                && service.scheduledWorkerTaskCount() == 0
-                && service.pendingTimerTaskCount() == 0);
+                && service.scheduledWorkerTaskCount() == 0);
         int readsAfterOverflow = store.pageCalls.get();
         try {
             Thread.sleep(100L);
@@ -911,7 +905,7 @@ class AgentTaskEventReplayServiceImplTest {
     }
 
     @Test
-    void cancellationInterruptsInFlightDaoAndReleasesBrokerTimerAndWorker() {
+    void cancellationInterruptsInFlightDaoAndReleasesBrokerRecoveryAndWorker() {
         CountDownLatch currentEntered = new CountDownLatch(1);
         CountDownLatch interrupted = new CountDownLatch(1);
         store.currentSupplier = () -> {
@@ -929,7 +923,7 @@ class AgentTaskEventReplayServiceImplTest {
         Disposable replay = service.replay(SCOPE, 0L).subscribe();
         await(currentEntered);
         assertEquals(1, broker.trackedLeaseCount());
-        assertEquals(1, service.activeTimerCount());
+        assertTrue(service.recoverySubscriptionCount() > 0);
         assertEquals(1, service.inFlightCatchUpCount());
 
         replay.dispose();
@@ -979,7 +973,6 @@ class AgentTaskEventReplayServiceImplTest {
     void productionStartCloseRaceHasNoHungSubscriptionAcrossFiveThousandStarts()
             throws Exception {
         service.close();
-        shutdown(timer);
         shutdown(worker);
         shutdown(delivery);
         ExecutorService starters = new ThreadPoolExecutor(
@@ -1061,7 +1054,7 @@ class AgentTaskEventReplayServiceImplTest {
                     terminal.countDown();
                 });
         awaitCondition(() -> broker.trackedLeaseCount() == 1
-                && service.activeTimerCount() == 1);
+                && service.recoverySubscriptionCount() > 0);
 
         service.close();
         await(terminal);
@@ -1080,7 +1073,7 @@ class AgentTaskEventReplayServiceImplTest {
         for (int iteration = 0; iteration < 12; iteration++) {
             if (iteration != 0) {
                 replaceResources(
-                        policy(Duration.ofHours(1)), resourceLimits(4, 2, 4), 2, 4, 4);
+                        policy(), resourceLimits(4, 2, 4), 2, 4, 4);
             }
             store.setCurrent(0L);
             AtomicInteger completions = new AtomicInteger();
@@ -1090,7 +1083,7 @@ class AgentTaskEventReplayServiceImplTest {
                     ignored -> errors.incrementAndGet(),
                     completions::incrementAndGet);
             awaitCondition(() -> broker.trackedLeaseCount() == 1
-                    && service.activeTimerCount() == 1);
+                    && service.recoverySubscriptionCount() > 0);
             CountDownLatch start = new CountDownLatch(1);
             Thread closer = new Thread(() -> {
                 await(start);
@@ -1195,7 +1188,7 @@ class AgentTaskEventReplayServiceImplTest {
 
         service.close();
         assertEquals(0, service.activeSubscriptionCount());
-        assertEquals(0, service.activeTimerCount());
+        assertEquals(0, service.recoverySubscriptionCount());
         assertEquals(0, broker.trackedLeaseCount());
         releaseFirstCallback.countDown();
         await(terminal);
@@ -1239,7 +1232,7 @@ class AgentTaskEventReplayServiceImplTest {
         assertTrue(closeMillis < TimeUnit.SECONDS.toMillis(2),
                 "service close must remain bounded, took " + closeMillis + "ms");
         assertEquals(0, service.activeSubscriptionCount());
-        assertEquals(0, service.activeTimerCount());
+        assertEquals(0, service.recoverySubscriptionCount());
         assertEquals(0, broker.trackedLeaseCount());
         assertEquals(0, service.inFlightCatchUpCount());
         assertEquals(1, service.deliveryPermitCount());
@@ -1296,21 +1289,22 @@ class AgentTaskEventReplayServiceImplTest {
     }
 
     @Test
-    void idleSubscribersShareOneTimerAndOneMetadataQueryWithoutReplayingEveryConnection() {
+    void idleSubscribersShareOneRecoveryPassWithoutReplayingEveryConnection() {
         List<Disposable> subscriptions = new ArrayList<>();
         for (int i = 0; i < 6; i++) subscriptions.add(service.replay(SCOPE, 0L).subscribe());
         awaitCondition(() -> service.activeSubscriptionCount() == 6 && store.currentCalls.get() == 6
                 && service.scheduledWorkerTaskCount() == 0);
-        assertEquals(1, service.activeTimerCount());assertEquals(1, service.pendingTimerTaskCount());
+        assertEquals(6, service.recoverySubscriptionCount());
         int before = store.currentCalls.get();
         for (int i = 0; i < 20; i++) service.recoverSubscribedScopes();
         assertEquals(before + 20, store.currentCalls.get());
         assertEquals(0, store.pageCalls.get());assertEquals(0, service.scheduledWorkerTaskCount());
         verify(eventDao, org.mockito.Mockito.times(20)).findCurrentVersions("0", List.of(
                 new AgentTaskEventDao.ReplayScope(SCOPE.clientId(), SCOPE.ownerJiacn(), SCOPE.taskId())));
-        subscriptions.getFirst().dispose();assertEquals(1, service.activeTimerCount());
+        subscriptions.getFirst().dispose();assertEquals(5, service.recoverySubscriptionCount());
         subscriptions.forEach(Disposable::dispose);awaitCleaned();
-        before = store.currentCalls.get();service.recoverSubscribedScopes();assertEquals(before, store.currentCalls.get());
+        before = store.currentCalls.get();recover();assertEquals(before, store.currentCalls.get());
+        assertEquals(0, worker.getQueue().size());
     }
 
     @Test
@@ -1337,7 +1331,7 @@ class AgentTaskEventReplayServiceImplTest {
 
     @Test
     void slowCompensationIsSingleFlightAndLastCancellationInterruptsIt() {
-        replaceService(policy(Duration.ofMillis(20)));
+        replaceService(policy());
         CountDownLatch entered = new CountDownLatch(1), interrupted = new CountDownLatch(1);
         when(eventDao.findCurrentVersions(anyString(), anyList())).thenAnswer(call -> {
             entered.countDown();
@@ -1346,10 +1340,9 @@ class AgentTaskEventReplayServiceImplTest {
             return List.of();
         });
         var replay = service.replay(SCOPE, 0L).subscribe();
+        recover();
         await(entered);
-        CountDownLatch timerTurns = new CountDownLatch(3);
-        var turns = timer.scheduleAtFixedRate(timerTurns::countDown, 0, 20, TimeUnit.MILLISECONDS);
-        await(timerTurns);turns.cancel(false);
+        for (int i = 0; i < 3; i++) recover();
         verify(eventDao, org.mockito.Mockito.times(1)).findCurrentVersions(anyString(), anyList());
         replay.dispose();await(interrupted);awaitCleaned();
     }
@@ -1398,14 +1391,12 @@ class AgentTaskEventReplayServiceImplTest {
             int catchUpQueueCapacity,
             int deliverySlots) {
         service.close();
-        shutdown(timer);
         shutdown(worker);
         shutdown(delivery);
         worker = workerExecutor(catchUpThreads, catchUpQueueCapacity);
         delivery = deliveryExecutor(deliverySlots);
-        timer = timerExecutor();
         service = new AgentTaskEventReplayServiceImpl(
-                eventDao, broker, worker, delivery, timer,
+                eventDao, broker, worker, delivery,
                 replacementPolicy, replacementLimits);
     }
 
@@ -1475,36 +1466,32 @@ class AgentTaskEventReplayServiceImplTest {
 
     private BlockingAcceptingExecutor replaceWithBlockingAcceptingDelivery() {
         service.close();
-        shutdown(timer);
         shutdown(worker);
         shutdown(delivery);
         worker = workerExecutor(2, 8);
         delivery = new BlockingAcceptingExecutor();
-        timer = timerExecutor();
         service = new AgentTaskEventReplayServiceImpl(
-                eventDao, broker, worker, delivery, timer,
-                policy(Duration.ofHours(1)), resourceLimits(4, 2, 4));
+                eventDao, broker, worker, delivery,
+                policy(), resourceLimits(4, 2, 4));
         return (BlockingAcceptingExecutor) delivery;
     }
 
     private BlockingRejectingExecutor replaceWithRejectingDelivery() {
         service.close();
-        shutdown(timer);
         shutdown(worker);
         shutdown(delivery);
         worker = workerExecutor(2, 8);
         delivery = new BlockingRejectingExecutor();
-        timer = timerExecutor();
         service = new AgentTaskEventReplayServiceImpl(
-                eventDao, broker, worker, delivery, timer,
-                policy(Duration.ofHours(1)), resourceLimits(4, 2, 4));
+                eventDao, broker, worker, delivery,
+                policy(), resourceLimits(4, 2, 4));
         return (BlockingRejectingExecutor) delivery;
     }
 
     private void assertNoReplayAllocation() {
         assertEquals(0, broker.trackedLeaseCount());
         assertEquals(0, service.activeSubscriptionCount());
-        assertEquals(0, service.activeTimerCount());
+        assertEquals(0, service.recoverySubscriptionCount());
         assertEquals(0, service.deliveryPermitCount());
         assertEquals(0, service.scheduledWorkerTaskCount());
         assertEquals(0, service.inFlightCatchUpCount());
@@ -1514,12 +1501,18 @@ class AgentTaskEventReplayServiceImplTest {
     private void replaceService(AgentTaskEventReplayServiceImpl.ReplayPolicy replacementPolicy) {
         service.close();
         service = new AgentTaskEventReplayServiceImpl(
-                eventDao, broker, worker, delivery, timer,
+                eventDao, broker, worker, delivery,
                 replacementPolicy, resourceLimits(16, 8, 12));
     }
 
-    private static AgentTaskEventReplayServiceImpl.ReplayPolicy policy(Duration interval) {
-        return new AgentTaskEventReplayServiceImpl.ReplayPolicy(2, 20, 20, 10, interval);
+    private void recover() {
+        new AgentTaskEventReplayRecovery(service, mock(cn.jia.task.scheduling.CronScheduleService.class),
+                new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null), "test-node", "0/5 * * * * *")
+                .executeScheduled(null);
+    }
+
+    private static AgentTaskEventReplayServiceImpl.ReplayPolicy policy() {
+        return new AgentTaskEventReplayServiceImpl.ReplayPolicy(2, 20, 20, 10);
     }
 
     private static AgentTaskEventReplayServiceImpl.ReplayResourceLimits resourceLimits(
@@ -1560,7 +1553,7 @@ class AgentTaskEventReplayServiceImplTest {
 
     private void awaitCleaned() {
         awaitCondition(() -> service.activeSubscriptionCount() == 0
-                && service.activeTimerCount() == 0
+                && service.recoverySubscriptionCount() == 0
                 && service.scheduledWorkerTaskCount() == 0
                 && service.inFlightCatchUpCount() == 0
                 && service.inFlightDeliveryCount() == 0
@@ -1600,13 +1593,6 @@ class AgentTaskEventReplayServiceImplTest {
                 namedFactory("c03-replay-delivery"),
                 new ThreadPoolExecutor.AbortPolicy());
         executor.allowCoreThreadTimeOut(true);
-        return executor;
-    }
-
-    private static ScheduledThreadPoolExecutor timerExecutor() {
-        ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(
-                1, namedFactory("c03-replay-timer"));
-        executor.setRemoveOnCancelPolicy(true);
         return executor;
     }
 

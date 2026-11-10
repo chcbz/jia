@@ -19,7 +19,6 @@ import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -33,9 +32,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -50,7 +46,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public class AgentTaskEventReplayServiceImpl
         implements AgentTaskEventReplayService, AutoCloseable {
     static final ReplayPolicy DEFAULT_POLICY = new ReplayPolicy(
-            256, 4096, 32, 8, Duration.ofSeconds(5));
+            256, 4096, 32, 8);
     static final ReplayResourceLimits DEFAULT_RESOURCE_LIMITS =
             new ReplayResourceLimits(256, 32, 64);
     private static final int CATCH_UP_THREADS = 4;
@@ -62,7 +58,6 @@ public class AgentTaskEventReplayServiceImpl
     private final AgentTaskEventBroker broker;
     private final ExecutorService catchUpExecutor;
     private final ExecutorService deliveryExecutor;
-    private final ScheduledExecutorService timerExecutor;
     private final ReplayPolicy policy;
     private final ReplayResourceLimits resourceLimits;
     private final boolean ownsExecutors;
@@ -71,14 +66,11 @@ public class AgentTaskEventReplayServiceImpl
     private final Set<SubscriptionState> deliveryReservations = ConcurrentHashMap.newKeySet();
     private final Set<SubscriptionState> recoverySubscriptions = ConcurrentHashMap.newKeySet();
     // Protected by lifecycleLock. No task/event history or authorization is cached here.
-    private ScheduledFuture<?> recoveryTimer;
-    private long recoveryEpoch;
     private final AtomicReference<FutureTask<Void>> recoveryScan = new AtomicReference<>();
     private final Semaphore activeSubscriptionPermits;
     private final Semaphore deliveryPermits;
     private final AtomicInteger scheduledWorkerTasks = new AtomicInteger();
     private final AtomicInteger inFlightCatchUps = new AtomicInteger();
-    private final AtomicInteger activeTimers = new AtomicInteger();
     private final AtomicInteger inFlightDeliveries = new AtomicInteger();
 
     @Inject
@@ -88,7 +80,6 @@ public class AgentTaskEventReplayServiceImpl
         this(eventDao, broker,
                 createCatchUpExecutor(),
                 createDeliveryExecutor(DEFAULT_RESOURCE_LIMITS.maxDeliverySlots()),
-                createTimerExecutor(),
                 DEFAULT_POLICY,
                 DEFAULT_RESOURCE_LIMITS,
                 true);
@@ -99,10 +90,9 @@ public class AgentTaskEventReplayServiceImpl
             AgentTaskEventBroker broker,
             ExecutorService catchUpExecutor,
             ExecutorService deliveryExecutor,
-            ScheduledExecutorService timerExecutor,
             ReplayPolicy policy,
             ReplayResourceLimits resourceLimits) {
-        this(eventDao, broker, catchUpExecutor, deliveryExecutor, timerExecutor,
+        this(eventDao, broker, catchUpExecutor, deliveryExecutor,
                 policy, resourceLimits, false);
     }
 
@@ -111,7 +101,6 @@ public class AgentTaskEventReplayServiceImpl
             AgentTaskEventBroker broker,
             ExecutorService catchUpExecutor,
             ExecutorService deliveryExecutor,
-            ScheduledExecutorService timerExecutor,
             ReplayPolicy policy,
             ReplayResourceLimits resourceLimits,
             boolean ownsExecutors) {
@@ -121,7 +110,6 @@ public class AgentTaskEventReplayServiceImpl
                 catchUpExecutor, "catchUpExecutor is required");
         this.deliveryExecutor = Objects.requireNonNull(
                 deliveryExecutor, "deliveryExecutor is required");
-        this.timerExecutor = Objects.requireNonNull(timerExecutor, "timerExecutor is required");
         this.policy = Objects.requireNonNull(policy, "replay policy is required");
         this.resourceLimits = Objects.requireNonNull(
                 resourceLimits, "resourceLimits is required");
@@ -157,10 +145,8 @@ public class AgentTaskEventReplayServiceImpl
         }
         subscriptions.forEach(SubscriptionState::serviceClosed);
         if (ownsExecutors) {
-            timerExecutor.shutdownNow();
             catchUpExecutor.shutdownNow();
             deliveryExecutor.shutdown();
-            awaitTermination(timerExecutor);
             awaitTermination(catchUpExecutor);
             awaitTermination(deliveryExecutor);
         }
@@ -183,19 +169,12 @@ public class AgentTaskEventReplayServiceImpl
         return inFlightCatchUps.get();
     }
 
-    int activeTimerCount() {
-        return activeTimers.get();
+    int recoverySubscriptionCount() {
+        return recoverySubscriptions.size();
     }
 
     int inFlightDeliveryCount() {
         return inFlightDeliveries.get();
-    }
-
-    int pendingTimerTaskCount() {
-        if (timerExecutor instanceof ScheduledThreadPoolExecutor scheduled) {
-            return scheduled.getQueue().size();
-        }
-        return -1;
     }
 
     int pendingDeliveryTaskCount() {
@@ -213,16 +192,6 @@ public class AgentTaskEventReplayServiceImpl
         synchronized (lifecycleLock) {
             if (closed.get() || state.logicalStopped.get()) return;
             recoverySubscriptions.add(state);
-            if (recoveryTimer != null) return;
-            long epoch = ++recoveryEpoch;
-            try {
-                recoveryTimer = timerExecutor.scheduleAtFixedRate(() -> scheduleRecovery(epoch),
-                        policy.periodicCheck().toMillis(), policy.periodicCheck().toMillis(), TimeUnit.MILLISECONDS);
-                activeTimers.incrementAndGet();
-            } catch (RuntimeException failure) {
-                recoverySubscriptions.remove(state);
-                throw failure;
-            }
         }
     }
 
@@ -230,20 +199,14 @@ public class AgentTaskEventReplayServiceImpl
         synchronized (lifecycleLock) {
             recoverySubscriptions.remove(state);
             if (!recoverySubscriptions.isEmpty()) return;
-            recoveryEpoch++;
-            if (recoveryTimer != null) {
-                recoveryTimer.cancel(false);
-                recoveryTimer = null;
-                activeTimers.decrementAndGet();
-            }
             var scan = recoveryScan.getAndSet(null);
             if (scan != null) scan.cancel(true);
         }
     }
 
-    private void scheduleRecovery(long epoch) {
+    void scheduleRecovery() {
         synchronized (lifecycleLock) {
-            if (closed.get() || epoch != recoveryEpoch || recoverySubscriptions.isEmpty()
+            if (closed.get() || recoverySubscriptions.isEmpty()
                     || recoveryScan.get() != null) return;
             FutureTask<Void> scan = new FutureTask<>(() -> { recoverSubscribedScopes(); return null; }) {
                 @Override protected void done() {
@@ -376,13 +339,7 @@ public class AgentTaskEventReplayServiceImpl
                 return;
             }
 
-            try {
-                registerRecovery(this);
-            } catch (RuntimeException timerFailure) {
-                terminalResync(ResyncReason.DURABLE_STATE_UNPROVABLE,
-                        terminalCurrentVersion(), true);
-                return;
-            }
+            registerRecovery(this);
 
             triggerCatchUp();
         }
@@ -972,19 +929,13 @@ public class AgentTaskEventReplayServiceImpl
             int pageSize,
             int maxEvents,
             int maxPages,
-            int maxHighWaterReads,
-            Duration periodicCheck) {
+            int maxHighWaterReads) {
         ReplayPolicy {
             if (pageSize <= 0 || pageSize > AgentTaskEventDao.MAX_REPLAY_PAGE_SIZE) {
                 throw new IllegalArgumentException("pageSize is outside the DAO limit");
             }
             if (maxEvents <= 0 || maxPages <= 0 || maxHighWaterReads <= 0) {
                 throw new IllegalArgumentException("replay budgets must be positive");
-            }
-            periodicCheck = Objects.requireNonNull(periodicCheck, "periodicCheck is required");
-            if (periodicCheck.isZero() || periodicCheck.isNegative()
-                    || periodicCheck.toMillis() <= 0) {
-                throw new IllegalArgumentException("periodicCheck must be at least one millisecond");
             }
         }
     }
@@ -1040,15 +991,6 @@ public class AgentTaskEventReplayServiceImpl
                 daemonThreadFactory("agent-task-replay-delivery"),
                 new ThreadPoolExecutor.AbortPolicy());
         executor.allowCoreThreadTimeOut(true);
-        return executor;
-    }
-
-    private static ScheduledExecutorService createTimerExecutor() {
-        ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(
-                1, daemonThreadFactory("agent-task-replay-timer"));
-        executor.setRemoveOnCancelPolicy(true);
-        executor.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
-        executor.setContinueExistingPeriodicTasksAfterShutdownPolicy(false);
         return executor;
     }
 

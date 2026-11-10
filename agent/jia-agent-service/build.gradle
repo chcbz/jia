@@ -152,6 +152,7 @@ def v1131AcceptanceSourceSet = sourceSets.create('v1131Acceptance') {
         include 'cn/jia/agent/service/impl/AgentTaskArtifactOutcomeServiceImplTest.java'
         include 'cn/jia/agent/service/impl/AgentTaskFormalDeliveryDecisionServiceImplTest.java'
         include 'cn/jia/agent/service/impl/AgentTaskEventReplayServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskEventReplayRecoveryTest.java'
         include 'cn/jia/agent/service/AgentTaskEventBrokerTest.java'
         include 'cn/jia/agent/service/AgentTaskEventAfterCommitPublisherTest.java'
         include 'cn/jia/agent/conversation/ConversationDeliverableReadAdapterTest.java'
@@ -528,6 +529,7 @@ def mmdU1BootstrapOutboxSourceSet = sourceSets.create('mmdU1BootstrapOutbox') {
         include 'cn/jia/agent/service/impl/PersonalWorkspaceExecutionServiceImplTest.java'
         // The existing unfiltered recovery slice also covers SSE compensation and its DAO.
         include 'cn/jia/agent/service/impl/AgentTaskEventReplayServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskEventReplayRecoveryTest.java'
         srcDir '../jia-agent-mapper/src/test/java'
         include 'cn/jia/agent/dao/AgentTaskEventReplayDaoTest.java'
         include 'cn/jia/agent/service/impl/NativeConversationWorkDiscoveryTest.java'
