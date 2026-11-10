@@ -455,7 +455,7 @@ class HostingRentRenewalMySqlTest {
         assertEquals(1000, balance()); assertEquals(0, charges());
     }
 
-    /** Real reservation + durable provisioning key share the caller transaction, not an after-commit callback. */
+    /** First invoice includes one-off fees; automatic renewal reads only frozen recurring rent. */
     @Test void firstInvoiceOneOffChargeIsNeverCarriedIntoAutomaticRenewal() throws Exception {
         new cn.jia.economy.config.EconomyHostingRentSchemaInitializer(jdbc).afterPropertiesSet();
         var ledger = new HostingRentLedgerServiceImpl(leases, accounts, posting, manager);
@@ -473,14 +473,14 @@ class HostingRentRenewalMySqlTest {
         ledger.confirmProvisioningSucceeded(new HostingRentOutcomeCommand(scope, initial.principal(), reserved.intentId(), 1, "first-fee-ready"));
         ledger.capture(new HostingRentSettlementCommand(scope, initial.principal(),
                 "00000000-0000-0000-0000-000000000202", new byte[32], reserved.intentId(), 2));
-        assertEquals(500L, lease(reserved.leaseId()).getAmountWen());
+        assertEquals(500L, leases.selectLatestLease("tenant", "client", frozen.getAgentId()).getAmountWen());
         // Move only the synthetic lease's timeline to the next due period, never alter quote history.
         long due = now() - 1000;
         jdbc.update("UPDATE economy_hosting_lease SET paid_from=?,paid_through=? WHERE lease_id=?", due - PERIOD, due, reserved.leaseId());
         credit(200, "00000000-0000-0000-0000-000000000203");
         trigger(); trigger();
         assertEquals(1, charges()); assertEquals(50, balance());
-        assertEquals(500L, lease(reserved.leaseId()).getAmountWen());
+        assertEquals(500L, leases.selectLatestLease("tenant", "client", frozen.getAgentId()).getAmountWen());
         assertEquals(650L, jdbc.queryForObject("SELECT amount_wen FROM economy_hosting_provisioning_intent WHERE intent_id=?", Long.class, reserved.intentId()));
         assertEquals(0L, jdbc.queryForObject("SELECT SUM(signed_amount_wen) FROM economy_entry", Long.class));
     }
