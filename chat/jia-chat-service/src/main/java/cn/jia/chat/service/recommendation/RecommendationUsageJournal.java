@@ -7,7 +7,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -80,7 +79,6 @@ public final class RecommendationUsageJournal {
         }
     }
 
-    @Scheduled(fixedDelayString = "${jia.chat.recommendation.usage-recovery-delay-ms:60000}")
     public void recover() {
         if (directory == null || !Files.isDirectory(directory)) return;
         try (var files = Files.newDirectoryStream(directory, "*.json")) {

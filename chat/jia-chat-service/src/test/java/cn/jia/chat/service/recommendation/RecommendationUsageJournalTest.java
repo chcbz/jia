@@ -55,6 +55,23 @@ class RecommendationUsageJournalTest {
         reset(costs); journal("tenant").recover();
         verify(costs).record(receipt); assertTrue(files().isEmpty());
     }
+    @Test void scheduledRecoveryAfterRestartDeliversOriginalDiskReceiptWithoutForegroundSqlSignal() throws Exception {
+        var journal = journal("tenant"); journal.prepare(); var receipt = observation("offline-start");
+        when(costs.record(any())).thenThrow(new IllegalStateException("database offline"));
+        journal.record(receipt);
+        assertEquals(1, files().size());
+        reset(costs);
+        var schedules = mock(cn.jia.task.scheduling.CronScheduleService.class);
+        var restarted = new RecommendationUsageRecovery(journal("tenant"), schedules,
+                new FixedTenantAdmissionPolicy("tenant", "client"), "node-a", "0 * * * * *");
+        restarted.onApplicationEvent(null);
+        var registered = ArgumentCaptor.forClass(cn.jia.task.scheduling.CronSchedule.class);
+        verify(schedules).register(registered.capture());
+        restarted.executeScheduled(new cn.jia.task.scheduling.ScheduledInvocation(
+                "tenant", registered.getValue().occurrence(60000), 1));
+        verify(costs).record(receipt);
+        assertTrue(files().isEmpty());
+    }
     @Test void unknownCommitAcknowledgementReplaysExactlyTheSameReceipt() throws Exception {
         var journal = journal("tenant"); journal.prepare(); var receipt = observation("a");
         when(costs.record(any())).thenThrow(new IllegalStateException("committed but connection lost"))
