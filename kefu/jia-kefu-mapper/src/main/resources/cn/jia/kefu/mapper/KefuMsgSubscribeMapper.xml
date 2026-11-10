@@ -9,4 +9,23 @@
         id, client_id, type_code, jiacn, status, wx_rx_flag, sms_rx_flag
     </sql>
 
+    <!-- Background discovery is not covered by the task-table tenant interceptor. -->
+    <sql id="ScheduledRecipientScope">
+        tenant_id = CAST(#{tenantId} AS BINARY)
+        <if test="clientId != null">AND client_id = CAST(#{clientId} AS BINARY)</if>
+        AND type_code = CAST(#{typeCode} AS BINARY)
+        AND status = 1 AND wx_rx_flag = 1
+        AND client_id IS NOT NULL AND client_id != ''
+        AND jiacn IS NOT NULL AND jiacn != ''
+    </sql>
+    <select id="selectScheduledRecipients" resultType="cn.jia.kefu.entity.KefuMsgSubscribeEntity">
+        SELECT tenant_id, <include refid="Base_Column_List"/> FROM kefu_msg_subscribe
+        WHERE <include refid="ScheduledRecipientScope"/> AND id > #{afterId}
+        ORDER BY id LIMIT #{limit}
+    </select>
+    <select id="selectScheduledRecipient" resultType="cn.jia.kefu.entity.KefuMsgSubscribeEntity">
+        SELECT tenant_id, <include refid="Base_Column_List"/> FROM kefu_msg_subscribe
+        WHERE <include refid="ScheduledRecipientScope"/> AND id = #{id}
+          AND jiacn = CAST(#{jiacn} AS BINARY)
+    </select>
 </mapper>

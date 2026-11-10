@@ -21,3 +21,33 @@ dependencies {
 
 version = '1.1.2-SNAPSHOT'
 description = 'jia-wx-service'
+
+// Unified scheduling contracts use the shared private MySQL fixture, not agent business services.
+def scheduledNoticeSourceSet = sourceSets.create('scheduledNoticeRegression') {
+    java.srcDir 'src/test/java'
+    java.srcDir '../../agent/jia-agent-service/src/skillManagementContract/java'
+    java.include 'cn/jia/wx/schedule/WxScheduledNoticeKeyTest.java'
+    java.include 'cn/jia/wx/schedule/WxScheduledNoticeStoreMySqlTest.java'
+    java.include 'cn/jia/wx/schedule/WxSubscriptionScopeMySqlTest.java'
+    java.include 'cn/jia/agent/skill/SkillManagementMySqlFixture.java'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(scheduledNoticeSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(scheduledNoticeSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+dependencies {
+    add(scheduledNoticeSourceSet.implementationConfigurationName, project(':kefu:jia-kefu-mapper'))
+}
+tasks.register('scheduledNoticeRegression', Test) {
+    group = 'verification'
+    description = 'Durable WeChat notice receipts and exact scoped subscription discovery (no external sends).'
+    dependsOn tasks.named(scheduledNoticeSourceSet.classesTaskName)
+    testClassesDirs = scheduledNoticeSourceSet.output.classesDirs
+    classpath = scheduledNoticeSourceSet.runtimeClasspath
+    useJUnitPlatform()
+    maxParallelForks = 1
+}
