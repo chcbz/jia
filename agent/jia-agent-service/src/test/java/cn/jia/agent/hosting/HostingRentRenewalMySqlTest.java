@@ -462,7 +462,7 @@ class HostingRentRenewalMySqlTest {
         var initial = initialProvisionCommand(ledger);
         var frozen = leases.selectQuoteForUpdate("tenant", "client", initial.quoteId());
         assertEquals(500L, frozen.getRecurringAmountWen());
-        // Separate immutable invoice fixture: full inventory pricing is tested at its own boundary.
+        // Separate immutable invoice fixture: full inventory pricing is outside this test's boundary.
         frozen.setId(null).setQuoteId("hrq-with-first-skill-fee").setAmountWen(650L)
                 .setIdempotencyKey("00000000-0000-0000-0000-000000000201".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         assertEquals(1, leases.insertQuote(frozen));
