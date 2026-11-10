@@ -327,4 +327,35 @@ class UnixManagedHostingProvisionerTest {
             }
         }
     }
+    @Test void quiesceUsesSharedPublicFixtureAndRequiresExactStopEvidence() throws Exception {
+        Map<String, Object> frozen;
+        try (var input = getClass().getResourceAsStream("/hosting/hosting-quiesce-v1.json")) {
+            assertNotNull(input); frozen = JSON.readValue(input.readAllBytes(), new TypeReference<Map<String, Object>>() {});
+        }
+        @SuppressWarnings("unchecked") var publicRequest = (Map<String, Object>) frozen.get("request");
+        var request = UnixManagedHostingProvisioner.quiesceRequest(preparation(), candidate(), "finish-fixture-lease");
+        assertEquals(publicRequest.get("data"), UnixManagedHostingProvisioner.hostingData(request));
+        @SuppressWarnings("unchecked") var reply = (Map<String, Object>) frozen.get("reply");
+        var envelope = cn.jia.core.entity.ProtocolMessage.event("finish-fixture-request", "hosting.quiesce", "finish-fixture-message", publicRequest.get("data"));
+        var response = UnixManagedHostingProvisioner.hostingResponse(envelope, reply);
+        assertTrue(UnixManagedHostingProvisioner.decodeQuiesced(request, candidate(), response));
+        for (var field : List.of("handoverId", "bindingId", "ownerJiacn", "leaseId", "installationId", "hostId", "outcome")) {
+            var changed = new LinkedHashMap<>(response); changed.put(field, "wrong");
+            assertFalse(UnixManagedHostingProvisioner.decodeQuiesced(request, candidate(), changed), field);
+        }
+    }
+    @Test void quiesceIsExternalNoReenrollmentAndLostReplyDoesNotProveStop() throws Exception {
+        var adapter = adapter();
+        doAnswer(call -> { var response = new LinkedHashMap<String,Object>(call.getArgument(0));
+            response.put("hostId", candidate().hostId()); response.put("outcome", "QUIESCED"); return response;
+        }).when(adapter).exchange(anyMap());
+        assertTrue(adapter.quiesce(preparation(), candidate(), "finish-fixture-lease"));
+        verifyNoInteractions(sessions); verify(credentials, never()).ensureInstallation(any(), any());
+        doThrow(new java.net.SocketTimeoutException("lost reply")).when(adapter).exchange(anyMap());
+        assertFalse(adapter.quiesce(preparation(), candidate(), "finish-fixture-lease"));
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        try { assertThrows(IllegalStateException.class, () -> adapter.quiesce(preparation(), candidate(), "finish-fixture-lease")); }
+        finally { TransactionSynchronizationManager.clear(); }
+    }
+
 }

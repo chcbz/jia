@@ -81,6 +81,31 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
             return unknown(p);
         }
     }
+    @Override public boolean quiesce(Preparation p, Candidate candidate, String handoverId) {
+        outsideTransaction();
+        if (!validPreparation(p) || candidate == null || !exact(handoverId, 100)
+                || !availableFor(p.tenantId(), p.clientId(), p.ownerJiacn())) return false;
+        try {
+            var request = quiesceRequest(p, candidate, handoverId);
+            return decodeQuiesced(request, candidate, exchange(request));
+        } catch (Exception uncertain) {
+            // Retry only the same handover id. A lost response cannot authorize cleanup/reinvitation.
+            return false;
+        }
+    }
+    static Map<String, Object> quiesceRequest(Preparation p, Candidate candidate, String handoverId) {
+        if (!exact(handoverId, 100)) throw new IllegalArgumentException("Invalid handover id");
+        var request = request(p, "quiesce", candidate);
+        request.put("handoverId", handoverId);
+        return request;
+    }
+    static boolean decodeQuiesced(Map<String, Object> request, Candidate candidate, Map<String, Object> response) {
+        if (response == null) return false;
+        var allowed = new java.util.HashSet<>(request.keySet());
+        allowed.addAll(Set.of("outcome", "hostId"));
+        return response.keySet().equals(allowed) && echoes(request, response)
+                && candidate.hostId().equals(response.get("hostId")) && "QUIESCED".equals(response.get("outcome"));
+    }
     private static boolean recoveryRequired(Map<String, Object> response) {
         return response != null && "RECOVERY_REQUIRED".equals(response.get("outcome"));
     }
@@ -96,7 +121,7 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
         return observation;
     }
     static Map<String, Object> request(Preparation p, String method, Candidate candidate) {
-        if (!validPreparation(p) || !Set.of("prepare", "ensure", "observe").contains(method)
+        if (!validPreparation(p) || !Set.of("prepare", "ensure", "observe", "quiesce").contains(method)
                 || !"prepare".equals(method) && candidate == null) throw new IllegalArgumentException("Invalid hosting control request");
         Map<String, Object> request = association(p);
         request.put("protocol", PROTOCOL); request.put("method", method);
