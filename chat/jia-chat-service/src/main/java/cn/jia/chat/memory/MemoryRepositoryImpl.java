@@ -32,6 +32,9 @@ import java.util.stream.Collectors;
 public class MemoryRepositoryImpl implements MemoryRepository {
 
     @Autowired
+    private cn.jia.core.security.FixedTenantAdmissionPolicy processScope;
+
+    @Autowired
     private ElasticsearchClient elasticsearchClient;
     
     @Autowired
@@ -57,7 +60,7 @@ public class MemoryRepositoryImpl implements MemoryRepository {
         if (document == null) {
             return;
         }
-        requireOwner(document.getJiacn());
+        requireScope(document.getClientId(), document.getJiacn());
         // Public write paths always generate their own vector, ignoring any caller-supplied vector.
         document.setEmbedding(generateEmbeddingArray(document.getContent()));
         savePrepared(document);
@@ -66,7 +69,7 @@ public class MemoryRepositoryImpl implements MemoryRepository {
     @Override
     public void savePrepared(MemoryDocument document) {
         Objects.requireNonNull(document, "document");
-        requireOwner(document.getJiacn());
+        requireScope(document.getClientId(), document.getJiacn());
         if (!StringUtils.hasText(document.getContent())) {
             throw new IllegalArgumentException("Memory content must not be blank");
         }
@@ -104,9 +107,9 @@ public class MemoryRepositoryImpl implements MemoryRepository {
     }
 
     @Override
-    public List<MemoryDocument> searchWithConversationBoost(String jiacn, String userMessage,
+    public List<MemoryDocument> searchWithConversationBoost(String clientId, String jiacn, String userMessage,
             String currentConversationId, int topK, double similarityThreshold) {
-        requireOwner(jiacn);
+        var scope = ownerFilter(clientId, jiacn);
         try {
             LocalDate currentDay = LocalDate.now();
             long currentDayStart = currentDay.toEpochDay() * 24 * 60 * 60 * 1000L;
@@ -121,7 +124,7 @@ public class MemoryRepositoryImpl implements MemoryRepository {
                 .index(indexName)
                 .size(topK)
                 .knn(k -> k
-                    .filter(f -> f.term(t -> t.field("jiacn").value(jiacn)))
+                    .filter(scope)
                     .field("embedding")
                     .queryVector(toFloatList(queryVector))
                     .k(topK)
@@ -134,7 +137,7 @@ public class MemoryRepositoryImpl implements MemoryRepository {
             List<MemoryDocument> results = new ArrayList<>();
             for (Hit<Map> hit : response.hits().hits()) {
                 Map<String, Object> source = hit.source();
-                if (source != null && jiacn.equals(source.get("jiacn"))) {
+                if (source != null) {
                     MemoryDocument doc = convertFromMap(source);
                     doc.setId(hit.id());
                     doc.setScore(hit.score());
@@ -173,15 +176,15 @@ public class MemoryRepositoryImpl implements MemoryRepository {
     }
 
     @Override
-    public List<MemoryDocument> search(String jiacn, float[] queryVector, int topK) {
-        requireOwner(jiacn);
+    public List<MemoryDocument> search(String clientId, String jiacn, float[] queryVector, int topK) {
+        var scope = ownerFilter(clientId, jiacn);
         validateEmbedding(queryVector);
         try {
             SearchRequest searchRequest = SearchRequest.of(builder -> builder
                 .index(indexName)
                 .size(topK)
                 .knn(k -> k
-                    .filter(f -> f.term(t -> t.field("jiacn").value(jiacn)))
+                    .filter(scope)
                     .field("embedding")
                     .queryVector(toFloatList(queryVector))
                     .k(topK)
@@ -192,7 +195,7 @@ public class MemoryRepositoryImpl implements MemoryRepository {
             SearchResponse<Map> response = elasticsearchClient.search(searchRequest, Map.class);
 
             return response.hits().hits().stream()
-                .filter(hit -> hit.source() != null && jiacn.equals(hit.source().get("jiacn")))
+                .filter(hit -> hit.source() != null)
                 .map(hit -> {
                     MemoryDocument doc = convertFromMap(hit.source());
                     doc.setId(hit.id());
@@ -207,22 +210,22 @@ public class MemoryRepositoryImpl implements MemoryRepository {
     }
 
     @Override
-    public List<String> findConversationSummariesByJiacn(String jiacn, long sinceTime) {
-        return findSummariesByTypeAndJiacn(jiacn, "conversation", sinceTime);
+    public List<String> findConversationSummariesByJiacn(String clientId, String jiacn, long sinceTime) {
+        return findSummariesByTypeAndJiacn(clientId, jiacn, "conversation", sinceTime);
     }
 
     @Override
-    public List<String> findDailySummariesByJiacn(String jiacn, long sinceTime) {
-        return findSummariesByTypeAndJiacn(jiacn, "daily_summary", sinceTime);
+    public List<String> findDailySummariesByJiacn(String clientId, String jiacn, long sinceTime) {
+        return findSummariesByTypeAndJiacn(clientId, jiacn, "daily_summary", sinceTime);
     }
 
     @Override
-    public List<String> findWeeklySummariesByJiacn(String jiacn, long sinceTime) {
-        return findSummariesByTypeAndJiacn(jiacn, "weekly_summary", sinceTime);
+    public List<String> findWeeklySummariesByJiacn(String clientId, String jiacn, long sinceTime) {
+        return findSummariesByTypeAndJiacn(clientId, jiacn, "weekly_summary", sinceTime);
     }
 
-    private List<String> findSummariesByTypeAndJiacn(String jiacn, String summaryType, long sinceTime) {
-        requireOwner(jiacn);
+    private List<String> findSummariesByTypeAndJiacn(String clientId, String jiacn, String summaryType, long sinceTime) {
+        var scope = ownerFilter(clientId, jiacn);
         try {
             SearchRequest searchRequest = SearchRequest.of(builder -> builder
                 .index(indexName)
@@ -230,7 +233,7 @@ public class MemoryRepositoryImpl implements MemoryRepository {
                 .sort(s -> s.field(f -> f.field("timestamp").order(co.elastic.clients.elasticsearch._types.SortOrder.Desc)))
                 .query(q -> q
                     .bool(b -> b
-                        .must(m -> m.term(t -> t.field("jiacn").value(jiacn)))
+                        .filter(scope)
                         .must(m -> m.term(t -> t.field("summary_type").value(summaryType)))
                         .must(m -> m.range(r -> r.number(n -> n.field("timestamp").gte((double) sinceTime))))
                     )
@@ -241,7 +244,6 @@ public class MemoryRepositoryImpl implements MemoryRepository {
 
             return response.hits().hits().stream()
                 .filter(hit -> hit.source() != null
-                        && jiacn.equals(hit.source().get("jiacn"))
                         && summaryType.equals(hit.source().get("summary_type")))
                 .filter(hit -> !"conversation".equals(summaryType)
                         || !taskThreadMemoryGuard.isProtectedConversation(
@@ -262,6 +264,7 @@ public class MemoryRepositoryImpl implements MemoryRepository {
                 .index(indexName)
                 .query(q -> q
                     .bool(b -> b
+                        .filter(maintenanceFilter())
                         .must(m -> m.range(r -> r.number(n -> n.field("timestamp").lt((double) beforeTime))))
                         .must(m -> m.term(t -> t.field("summary_type").value("conversation")))
                     )
@@ -286,7 +289,7 @@ public class MemoryRepositoryImpl implements MemoryRepository {
                     .terms(t -> t.field("timestamp").size(10000))
                 )
                 .query(q -> q
-                    .term(t -> t.field("summary_type").value(summaryType))
+                    .bool(b -> b.filter(maintenanceFilter()).must(m -> m.term(t -> t.field("summary_type").value(summaryType))))
                 )
             );
 
@@ -298,14 +301,14 @@ public class MemoryRepositoryImpl implements MemoryRepository {
     }
 
     @Override
-    public long countByJiacn(String jiacn) {
-        requireOwner(jiacn);
+    public long countByJiacn(String clientId, String jiacn) {
+        var scope = ownerFilter(clientId, jiacn);
         try {
             SearchRequest searchRequest = SearchRequest.of(builder -> builder
                 .index(indexName)
                 .size(0)
                 .query(q -> q
-                    .term(t -> t.field("jiacn").value(jiacn))
+                    .bool(b -> b.filter(scope))
                 )
             );
 
@@ -336,10 +339,26 @@ public class MemoryRepositoryImpl implements MemoryRepository {
         return embedding;
     }
 
-    private void requireOwner(String jiacn) {
-        if (!StringUtils.hasText(jiacn)) {
-            throw new IllegalArgumentException("Memory owner is required");
-        }
+    private String requireScope(String clientId, String jiacn) {
+        if (!StringUtils.hasText(jiacn)) throw new IllegalArgumentException("Memory owner is required");
+        return processScope.tenantForClient(clientId);
+    }
+
+    private co.elastic.clients.elasticsearch._types.query_dsl.Query ownerFilter(String clientId, String jiacn) {
+        String tenantId = requireScope(clientId, jiacn);
+        return co.elastic.clients.elasticsearch._types.query_dsl.Query.of(q -> q.bool(b -> b
+                .filter(f -> f.term(t -> t.field("tenant_id").value(tenantId)))
+                .filter(f -> f.term(t -> t.field("client_id").value(clientId)))
+                .filter(f -> f.term(t -> t.field("jiacn").value(jiacn)))));
+    }
+
+    private co.elastic.clients.elasticsearch._types.query_dsl.Query maintenanceFilter() {
+        return co.elastic.clients.elasticsearch._types.query_dsl.Query.of(q -> q.bool(b -> {
+            b.filter(f -> f.term(t -> t.field("tenant_id").value(processScope.businessTenantId())));
+            if (processScope.clientId() != null)
+                b.filter(f -> f.term(t -> t.field("client_id").value(processScope.clientId())));
+            return b;
+        }));
     }
 
     private void validateEmbedding(float[] embedding) {
@@ -376,6 +395,8 @@ public class MemoryRepositoryImpl implements MemoryRepository {
 
     private Map<String, Object> convertToMap(MemoryDocument doc) {
         Map<String, Object> map = new HashMap<>();
+        map.put("tenant_id", processScope.businessTenantId());
+        map.put("client_id", doc.getClientId());
         if (doc.getId() != null) map.put("id", doc.getId());
         if (doc.getJiacn() != null) map.put("jiacn", doc.getJiacn());
         if (doc.getConversationId() != null) map.put("conversation_id", doc.getConversationId());
@@ -396,6 +417,7 @@ public class MemoryRepositoryImpl implements MemoryRepository {
     @SuppressWarnings("unchecked")
     private MemoryDocument convertFromMap(Map<String, Object> map) {
         MemoryDocument doc = new MemoryDocument();
+        doc.setClientId((String) map.get("client_id"));
         if (map.containsKey("id")) doc.setId(String.valueOf(map.get("id")));
         if (map.containsKey("jiacn")) doc.setJiacn(String.valueOf(map.get("jiacn")));
         if (map.containsKey("conversation_id")) doc.setConversationId(String.valueOf(map.get("conversation_id")));

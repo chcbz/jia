@@ -45,6 +45,12 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
     private static final String SUMMARY_TYPE_CONVERSATION = "conversation";
 
     @Autowired
+    private cn.jia.core.security.FixedTenantAdmissionPolicy processScope;
+
+    @Value("${chat.memory.job.zone:Asia/Shanghai}")
+    private String zone;
+
+    @Autowired
     private ChatMessageDao chatMessageDao;
 
     @Autowired
@@ -100,7 +106,7 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
             }
             // Parent is the trusted source of identity, never the first message in an unscoped read.
             ChatConversationEntity parent = chatConversationDao.selectById(numericId);
-            if (parent == null || parent.getDeletedAt() != null || !"0".equals(parent.getTenantId())) {
+            if (parent == null || parent.getDeletedAt() != null || !processScope.businessTenantId().equals(parent.getTenantId())) {
                 return;
             }
             syncOwnedSnapshot(parent.getJiacn(), parent.getClientId(), conversationId);
@@ -116,8 +122,9 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
     }
 
     private void syncOwnedSnapshot(String owner, String client, String conversationId) {
-        ChatConversationEntity parent = chatConversationDao.findScopedById(owner, client, conversationId);
-        if (parent == null || parent.getDeletedAt() != null || !"0".equals(parent.getTenantId())
+        String tenant = processScope.tenantForClient(client);
+        ChatConversationEntity parent = chatConversationDao.findScopedById(tenant, owner, client, conversationId);
+        if (parent == null || parent.getDeletedAt() != null || !processScope.businessTenantId().equals(parent.getTenantId())
                 || !Objects.equals(owner, parent.getJiacn()) || !Objects.equals(client, parent.getClientId())
                 || !StringUtils.hasText(owner) || !StringUtils.hasText(client)) {
             throw new IllegalStateException("Memory source conversation is not live or owned");
@@ -125,11 +132,11 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
         if (taskThreadMemoryGuard.isProtectedConversation(conversationId)) {
             throw new IllegalStateException("Task threads are excluded from account memory");
         }
-        List<ChatMessageEntity> messages = chatConversationService.findOwnedMessages(owner, client, conversationId);
+        List<ChatMessageEntity> messages = chatConversationService.findOwnedMessages(tenant, owner, client, conversationId);
         for (ChatMessageEntity message : messages) {
             if (message == null || message.getId() == null || message.getId() <= 0
                     || !owner.equals(message.getJiacn()) || !client.equals(message.getClientId())
-                    || !"0".equals(message.getTenantId()) || !conversationId.equals(message.getConversationId())) {
+                    || !processScope.businessTenantId().equals(message.getTenantId()) || !conversationId.equals(message.getConversationId())) {
                 throw new IllegalStateException("Memory message snapshot identity mismatch");
             }
         }
@@ -144,10 +151,11 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
         }
         MemoryDocument document = new MemoryDocument();
         // One account/client/conversation snapshot overwrites itself on retry after an ES/DB partial failure.
-        String snapshotKey = owner + "\0" + client + "\0" + conversationId + "\0"
+        String snapshotKey = tenant + "\0" + owner + "\0" + client + "\0" + conversationId + "\0"
                 + snapshot.stream().map(m -> Long.toString(m.getId())).sorted().toList();
         document.setId("conversation-" + UUID.nameUUIDFromBytes(snapshotKey.getBytes(StandardCharsets.UTF_8)));
         document.setJiacn(owner);
+        document.setClientId(client);
         document.setConversationId(conversationId);
         document.setContent(summaryGenerator.summarizeConversation(snapshot));
         document.setSummaryType(SUMMARY_TYPE_CONVERSATION);
@@ -155,14 +163,14 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
         // Both model calls happen outside the database lock/transaction.
         document.setEmbedding(memoryRepository.generateEmbedding(document.getContent()));
         new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
-            ChatConversationEntity locked = chatConversationDao.lockScopedById(owner, client, conversationId);
+            ChatConversationEntity locked = chatConversationDao.lockScopedById(tenant, owner, client, conversationId);
             if (locked == null || locked.getDeletedAt() != null
                     || !Objects.equals(parent.getLifecycleGeneration(), locked.getLifecycleGeneration())
                     || taskThreadMemoryGuard.isProtectedConversation(conversationId)) {
                 throw new IllegalStateException("Memory source changed during summarization");
             }
             memoryRepository.savePrepared(document);
-            int updated = chatMessageDao.markMemorySnapshotSynced(owner, client, conversationId, pendingIds);
+            int updated = chatMessageDao.markMemorySnapshotSynced(tenant, owner, client, conversationId, pendingIds);
             if (updated != pendingIds.size()) {
                 throw new IllegalStateException("Memory snapshot status update was incomplete");
             }
@@ -212,16 +220,18 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
         try {
             long windowMillis = dailyWindowDays * 24 * 60 * 60 * 1000L;
             long sinceTime = DateUtil.nowTime() - windowMillis;
-            List<String> activeJiacns = chatMessageDao.findActiveJiacns(sinceTime);
+            var activeOwners = chatMessageDao.findActiveMemoryOwners(sinceTime);
 
-            LocalDate today = LocalDate.now();
+            LocalDate today = LocalDate.now(java.time.ZoneId.of(zone));
             String dateStr = today.toString();
 
             boolean failed = false;
-            for (String jiacn : activeJiacns) {
+            for (var owner : activeOwners) {
+                String jiacn = owner.jiacn();
+                String client = owner.clientId();
                 try {
                     // 获取该用户近窗口期的会话摘要
-                    List<String> conversationSummaries = memoryRepository.findConversationSummariesByJiacn(jiacn, sinceTime);
+                    List<String> conversationSummaries = memoryRepository.findConversationSummariesByJiacn(client, jiacn, sinceTime);
 
                     if (conversationSummaries != null && !conversationSummaries.isEmpty()) {
                         // 生成日汇总
@@ -230,8 +240,9 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
                         // 写入向量库
                         MemoryDocument document = new MemoryDocument();
                         document.setId("daily-" + UUID.nameUUIDFromBytes(
-                                (jiacn + "\0" + dateStr).getBytes(StandardCharsets.UTF_8)));
+                                (processScope.businessTenantId() + "\0" + client + "\0" + jiacn + "\0" + dateStr).getBytes(StandardCharsets.UTF_8)));
                         document.setJiacn(jiacn);
+                        document.setClientId(client);
                         document.setContent(dailySummary);
                         document.setSummaryType("daily_summary");
                         document.setTimestamp(DateUtil.nowTime());
@@ -252,7 +263,7 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
             if (failed) {
                 throw new IllegalStateException("daily memory summary failed for some owners");
             }
-            log.info("Generate daily summary completed. Processed {} users", activeJiacns.size());
+            log.info("Generate daily summary completed. Processed {} users", activeOwners.size());
         } catch (Exception e) {
             throw new IllegalStateException("Failed to generate daily summary", e);
         }
@@ -266,17 +277,19 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
             long lookbackMillis = weeklyLookbackDays * 24 * 60 * 60 * 1000L;
             long sinceTime = DateUtil.nowTime() - lookbackMillis;
 
-            LocalDate today = LocalDate.now();
+            LocalDate today = LocalDate.now(java.time.ZoneId.of(zone));
             LocalDate weekStart = today.minusWeeks(1);
             String weekStartStr = weekStart.toString();
 
-            List<String> activeJiacns = chatMessageDao.findActiveJiacns(sinceTime);
+            var activeOwners = chatMessageDao.findActiveMemoryOwners(sinceTime);
 
             boolean failed = false;
-            for (String jiacn : activeJiacns) {
+            for (var owner : activeOwners) {
+                String jiacn = owner.jiacn();
+                String client = owner.clientId();
                 try {
                     // 获取该用户近窗口期的日汇总
-                    List<String> dailySummaries = memoryRepository.findDailySummariesByJiacn(jiacn, sinceTime);
+                    List<String> dailySummaries = memoryRepository.findDailySummariesByJiacn(client, jiacn, sinceTime);
 
                     if (dailySummaries != null && !dailySummaries.isEmpty()) {
                         // 生成周汇总
@@ -285,8 +298,9 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
                         // 写入向量库
                         MemoryDocument document = new MemoryDocument();
                         document.setId("weekly-" + UUID.nameUUIDFromBytes(
-                                (jiacn + "\0" + weekStartStr).getBytes(StandardCharsets.UTF_8)));
+                                (processScope.businessTenantId() + "\0" + client + "\0" + jiacn + "\0" + weekStartStr).getBytes(StandardCharsets.UTF_8)));
                         document.setJiacn(jiacn);
+                        document.setClientId(client);
                         document.setContent(weeklySummary);
                         document.setSummaryType("weekly_summary");
                         document.setTimestamp(DateUtil.nowTime());
@@ -320,17 +334,19 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
             long lookbackMillis = monthlyLookbackDays * 24 * 60 * 60 * 1000L;
             long sinceTime = DateUtil.nowTime() - lookbackMillis;
 
-            LocalDate today = LocalDate.now();
+            LocalDate today = LocalDate.now(java.time.ZoneId.of(zone));
             LocalDate monthStart = today.withDayOfMonth(1);
             String monthStr = monthStart.toString().substring(0, 7);
 
-            List<String> activeJiacns = chatMessageDao.findActiveJiacns(sinceTime);
+            var activeOwners = chatMessageDao.findActiveMemoryOwners(sinceTime);
 
             boolean failed = false;
-            for (String jiacn : activeJiacns) {
+            for (var owner : activeOwners) {
+                String jiacn = owner.jiacn();
+                String client = owner.clientId();
                 try {
                     // 获取该用户近窗口期的周汇总
-                    List<String> weeklySummaries = memoryRepository.findWeeklySummariesByJiacn(jiacn, sinceTime);
+                    List<String> weeklySummaries = memoryRepository.findWeeklySummariesByJiacn(client, jiacn, sinceTime);
 
                     if (weeklySummaries != null && !weeklySummaries.isEmpty()) {
                         // 生成月汇总
@@ -339,8 +355,9 @@ public class LongTermMemoryServiceImpl implements LongTermMemoryService {
                         // 写入向量库
                         MemoryDocument document = new MemoryDocument();
                         document.setId("monthly-" + UUID.nameUUIDFromBytes(
-                                (jiacn + "\0" + monthStr).getBytes(StandardCharsets.UTF_8)));
+                                (processScope.businessTenantId() + "\0" + client + "\0" + jiacn + "\0" + monthStr).getBytes(StandardCharsets.UTF_8)));
                         document.setJiacn(jiacn);
+                        document.setClientId(client);
                         document.setContent(monthlySummary);
                         document.setSummaryType("monthly_summary");
                         document.setTimestamp(DateUtil.nowTime());

@@ -10,16 +10,26 @@ import jakarta.inject.Named;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 /** Chat message DAO implementation. */
 @Named
 @Slf4j
 public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessageEntity>
         implements ChatMessageDao {
-    private static final String SINGLE_TENANT = "0";
+    @org.springframework.beans.factory.annotation.Autowired
+    private cn.jia.core.security.FixedTenantAdmissionPolicy processScope;
+
+    private LambdaQueryWrapper<ChatMessageEntity> maintenanceQuery() {
+        var query = new LambdaQueryWrapper<ChatMessageEntity>();
+        query.eq(ChatMessageEntity::getTenantId, processScope.businessTenantId())
+                .apply("CAST(tenant_id AS BINARY) = CAST({0} AS BINARY)", processScope.businessTenantId());
+        if (processScope.clientId() != null) {
+            query.eq(ChatMessageEntity::getClientId, processScope.clientId())
+                    .apply("CAST(client_id AS BINARY) = CAST({0} AS BINARY)", processScope.clientId());
+        }
+        return query;
+    }
 
     @Override
     public int insertScoped(String tenantId, String clientId, ChatMessageEntity message) {
@@ -125,9 +135,8 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
     @Override
     public List<ChatMessageEntity> findByConversationIdForMaintenance(String conversationId) {
         requireIdentity(conversationId, "conversationId");
-        LambdaQueryWrapper<ChatMessageEntity> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(ChatMessageEntity::getTenantId, SINGLE_TENANT)
-                .eq(ChatMessageEntity::getConversationId, conversationId)
+        LambdaQueryWrapper<ChatMessageEntity> wrapper = maintenanceQuery();
+        wrapper.eq(ChatMessageEntity::getConversationId, conversationId)
                 .orderByAsc(ChatMessageEntity::getCreateTime);
         return baseMapper.selectList(wrapper);
     }
@@ -138,7 +147,7 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
         if (afterId < 0 || !"PENDING".equals(syncStatus)) {
             throw new IllegalArgumentException("Invalid memory scan cursor/status");
         }
-        return baseMapper.findPendingMemoryConversations(syncStatus, limit, afterId);
+        return baseMapper.findPendingMemoryConversations(processScope.businessTenantId(), processScope.clientId(), syncStatus, limit, afterId);
     }
 
     @Override
@@ -155,9 +164,8 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
 
     @Override
     public void updateSyncStatusByConversationId(String conversationId, String syncStatus) {
-        LambdaQueryWrapper<ChatMessageEntity> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(ChatMessageEntity::getTenantId, SINGLE_TENANT)
-                .eq(ChatMessageEntity::getConversationId, conversationId);
+        LambdaQueryWrapper<ChatMessageEntity> wrapper = maintenanceQuery();
+        wrapper.eq(ChatMessageEntity::getConversationId, conversationId);
         List<ChatMessageEntity> list = baseMapper.selectList(wrapper);
         if (list != null && !list.isEmpty()) {
             list.forEach(entity -> entity.setSyncStatus(syncStatus));
@@ -167,9 +175,8 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
 
     @Override
     public List<Long> findExpiredMessageIds(long beforeTime, int limit) {
-        LambdaQueryWrapper<ChatMessageEntity> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(ChatMessageEntity::getTenantId, SINGLE_TENANT)
-                .lt(ChatMessageEntity::getCreateTime, beforeTime)
+        LambdaQueryWrapper<ChatMessageEntity> wrapper = maintenanceQuery();
+        wrapper.lt(ChatMessageEntity::getCreateTime, beforeTime)
                 .select(ChatMessageEntity::getId)
                 .orderByAsc(ChatMessageEntity::getId)
                 .last("LIMIT " + limit);
@@ -180,22 +187,8 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
     }
 
     @Override
-    public List<String> findActiveJiacns(long sinceTime) {
-        LambdaQueryWrapper<ChatMessageEntity> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(ChatMessageEntity::getTenantId, SINGLE_TENANT)
-                .gt(ChatMessageEntity::getCreateTime, sinceTime)
-                .select(ChatMessageEntity::getJiacn);
-        List<ChatMessageEntity> list = baseMapper.selectList(wrapper);
-        if (list == null || list.isEmpty()) {
-            return Collections.emptyList();
-        }
-        Set<String> jiacnSet = new HashSet<>();
-        for (ChatMessageEntity entity : list) {
-            if (entity.getJiacn() != null) {
-                jiacnSet.add(entity.getJiacn());
-            }
-        }
-        return List.copyOf(jiacnSet);
+    public List<cn.jia.chat.memory.MemoryOwner> findActiveMemoryOwners(long sinceTime) {
+        return baseMapper.findActiveMemoryOwners(processScope.businessTenantId(), processScope.clientId(), sinceTime);
     }
 
     /**

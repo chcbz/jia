@@ -42,6 +42,8 @@ class LongTermMemoryTaskThreadIsolationTest extends BaseMockTest {
 
     @BeforeEach void setup() {
         service = new LongTermMemoryServiceImpl();
+        ReflectionTestUtils.setField(service, "processScope", new cn.jia.core.security.FixedTenantAdmissionPolicy("tenant-a", null));
+        ReflectionTestUtils.setField(service, "zone", "Asia/Shanghai");
         ReflectionTestUtils.setField(service, "chatMessageDao", messageDao);
         ReflectionTestUtils.setField(service, "chatConversationDao", parentDao);
         ReflectionTestUtils.setField(service, "chatConversationService", conversationService);
@@ -56,21 +58,21 @@ class LongTermMemoryTaskThreadIsolationTest extends BaseMockTest {
     ChatConversationEntity parent() {
         ChatConversationEntity p = new ChatConversationEntity().setId(88L).setJiacn("owner-a")
                 .setLifecycleGeneration(0L);
-        p.setClientId("client-a"); p.setTenantId("0");
+        p.setClientId("client-a"); p.setTenantId("tenant-a");
         return p;
     }
 
     ChatMessageEntity message(long id, String type) {
         ChatMessageEntity m = new ChatMessageEntity().setId(id).setConversationId("88")
                 .setJiacn("owner-a").setContent("owned").setMessageType(type).setSyncStatus("PENDING");
-        m.setClientId("client-a"); m.setTenantId("0");
+        m.setClientId("client-a"); m.setTenantId("tenant-a");
         return m;
     }
 
     void source(List<ChatMessageEntity> messages) {
         when(locks.lock("chat:memory:conversation:88")).thenReturn(new ILock("conversation-lock", locks));
-        when(parentDao.findScopedById("owner-a", "client-a", "88")).thenReturn(parent());
-        when(conversationService.findOwnedMessages("owner-a", "client-a", "88")).thenReturn(messages);
+        when(parentDao.findScopedById("tenant-a", "owner-a", "client-a", "88")).thenReturn(parent());
+        when(conversationService.findOwnedMessages("tenant-a", "owner-a", "client-a", "88")).thenReturn(messages);
     }
 
     TransactionStatus commitReady() {
@@ -78,7 +80,7 @@ class LongTermMemoryTaskThreadIsolationTest extends BaseMockTest {
         when(memoryRepository.generateEmbedding("summary")).thenReturn(new float[]{1, 0, 0});
         TransactionStatus status = mock(TransactionStatus.class);
         when(transactions.getTransaction(any(TransactionDefinition.class))).thenReturn(status);
-        when(parentDao.lockScopedById("owner-a", "client-a", "88")).thenReturn(parent());
+        when(parentDao.lockScopedById("tenant-a", "owner-a", "client-a", "88")).thenReturn(parent());
         return status;
     }
 
@@ -95,16 +97,19 @@ class LongTermMemoryTaskThreadIsolationTest extends BaseMockTest {
         ChatMessageEntity user = message(1, "USER");
         source(List.of(user, message(2, "SYSTEM")));
         TransactionStatus status = commitReady();
-        when(messageDao.markMemorySnapshotSynced("owner-a", "client-a", "88", List.of(1L))).thenReturn(1);
+        when(messageDao.markMemorySnapshotSynced("tenant-a", "owner-a", "client-a", "88", List.of(1L))).thenReturn(1);
         service.syncOwnedConversation("owner-a", "client-a", "88");
         verify(summaryGenerator).summarizeConversation(List.of(user));
-        verify(messageDao).markMemorySnapshotSynced("owner-a", "client-a", "88", List.of(1L));
+        var saved = ArgumentCaptor.forClass(MemoryDocument.class);
+        verify(memoryRepository).savePrepared(saved.capture());
+        assertEquals("client-a", saved.getValue().getClientId());
+        verify(messageDao).markMemorySnapshotSynced("tenant-a", "owner-a", "client-a", "88", List.of(1L));
         verify(messageDao, never()).updateSyncStatusByConversationId(any(), any());
         verify(messageDao, never()).findByConversationIdForMaintenance(any());
         verify(transactions).commit(status);
         var order = inOrder(memoryRepository, parentDao);
         order.verify(memoryRepository).generateEmbedding("summary");
-        order.verify(parentDao).lockScopedById("owner-a", "client-a", "88");
+        order.verify(parentDao).lockScopedById("tenant-a", "owner-a", "client-a", "88");
         order.verify(memoryRepository).savePrepared(any());
         verify(locks).unLock("conversation-lock");
     }
@@ -112,7 +117,7 @@ class LongTermMemoryTaskThreadIsolationTest extends BaseMockTest {
     @Test void retryAfterDatabaseFailureUsesSameDocumentId() {
         source(List.of(message(1, "USER")));
         TransactionStatus status = commitReady();
-        when(messageDao.markMemorySnapshotSynced("owner-a", "client-a", "88", List.of(1L)))
+        when(messageDao.markMemorySnapshotSynced("tenant-a", "owner-a", "client-a", "88", List.of(1L)))
                 .thenThrow(new IllegalStateException("database unavailable")).thenReturn(1);
         assertThrows(IllegalStateException.class, () -> service.syncOwnedConversation("owner-a", "client-a", "88"));
         service.syncOwnedConversation("owner-a", "client-a", "88");
@@ -127,10 +132,10 @@ class LongTermMemoryTaskThreadIsolationTest extends BaseMockTest {
     @Test void deletionDuringModelCallPreventsIndexWrite() {
         source(List.of(message(1, "USER")));
         TransactionStatus status = commitReady();
-        when(parentDao.lockScopedById("owner-a", "client-a", "88")).thenReturn(null);
+        when(parentDao.lockScopedById("tenant-a", "owner-a", "client-a", "88")).thenReturn(null);
         assertThrows(IllegalStateException.class, () -> service.syncOwnedConversation("owner-a", "client-a", "88"));
         verify(memoryRepository, never()).savePrepared(any());
-        verify(messageDao, never()).markMemorySnapshotSynced(any(), any(), any(), anyList());
+        verify(messageDao, never()).markMemorySnapshotSynced(any(), any(), any(), any(), anyList());
         verify(transactions).rollback(status);
     }
 
@@ -193,4 +198,33 @@ class LongTermMemoryTaskThreadIsolationTest extends BaseMockTest {
         assertTrue(handler.execute(new cn.jia.task.job.JobContext()).startsWith("SKIPPED:"));
         verify(sync).syncPendingConversations();
     }
+    @Test void periodicSummariesKeepClientPairsAndDistinctDocumentIds() {
+        var owners = List.of(new cn.jia.chat.memory.MemoryOwner("client-a", "owner-a"),
+                new cn.jia.chat.memory.MemoryOwner("client-b", "owner-a"));
+        when(messageDao.findActiveMemoryOwners(anyLong())).thenReturn(owners);
+        when(memoryRepository.findConversationSummariesByJiacn(anyString(), eq("owner-a"), anyLong())).thenReturn(List.of("conversation"));
+        when(memoryRepository.findDailySummariesByJiacn(anyString(), eq("owner-a"), anyLong())).thenReturn(List.of("daily"));
+        when(memoryRepository.findWeeklySummariesByJiacn(anyString(), eq("owner-a"), anyLong())).thenReturn(List.of("weekly"));
+        when(summaryGenerator.generateDailySummary(anyList(), eq("owner-a"), anyString())).thenReturn("daily result");
+        when(summaryGenerator.generateWeeklySummary(anyList(), eq("owner-a"), anyString())).thenReturn("weekly result");
+        when(summaryGenerator.generateMonthlySummary(anyList(), eq("owner-a"), anyString())).thenReturn("monthly result");
+        service.generateDailySummary(); service.generateWeeklySummary(); service.generateMonthlySummary();
+        var documents = ArgumentCaptor.forClass(MemoryDocument.class);
+        verify(memoryRepository, times(6)).save(documents.capture());
+        assertEquals(6, documents.getAllValues().stream().map(MemoryDocument::getId).distinct().count());
+        for (String client : List.of("client-a", "client-b")) {
+            verify(memoryRepository).findConversationSummariesByJiacn(eq(client), eq("owner-a"), anyLong());
+            verify(memoryRepository).findDailySummariesByJiacn(eq(client), eq("owner-a"), anyLong());
+            verify(memoryRepository).findWeeklySummariesByJiacn(eq(client), eq("owner-a"), anyLong());
+            assertEquals(3, documents.getAllValues().stream().filter(d -> client.equals(d.getClientId())).count());
+        }
+    }
+
+    @Test void wrongConfiguredClientFailsBeforeSourceOrPaidWork() {
+        ReflectionTestUtils.setField(service, "processScope", new cn.jia.core.security.FixedTenantAdmissionPolicy("tenant-a", "only-client"));
+        when(locks.lock("chat:memory:conversation:88")).thenReturn(new ILock("conversation-lock", locks));
+        assertThrows(IllegalArgumentException.class, () -> service.syncOwnedConversation("owner-a", "client-a", "88"));
+        verifyNoInteractions(parentDao, conversationService, summaryGenerator, memoryRepository);
+    }
+
 }

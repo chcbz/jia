@@ -42,23 +42,46 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
               AND OCTET_LENGTH(m.tenant_id) = OCTET_LENGTH(c.tenant_id)
             """;
 
-    /** Only live, exactly owned user/assistant messages can enter automatic memory. */
-    @Select("""
-            SELECT CAST(c.id AS CHAR) FROM chat_conversation c
+    String MEMORY_PROCESS_SCOPE = """
+              AND c.tenant_id = #{tenantId}
+              AND CAST(c.tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              <if test="clientId != null">
+              AND c.client_id = #{clientId}
+              AND CAST(c.client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              </if>
+            """;
+
+    String MEMORY_SOURCE_JOIN = """
+            FROM chat_conversation c
             JOIN chat_message m ON m.conversation_id = CAST(c.id AS CHAR)
               AND CAST(m.conversation_id AS BINARY) = CAST(CAST(c.id AS CHAR) AS BINARY)
-              AND OCTET_LENGTH(m.conversation_id) = OCTET_LENGTH(CAST(c.id AS CHAR))
-            WHERE c.deleted_at IS NULL AND c.tenant_id = '0'
-              AND CAST(c.tenant_id AS BINARY) = CAST('0' AS BINARY)
-              AND OCTET_LENGTH(c.tenant_id) = OCTET_LENGTH('0')
-              AND c.id > #{afterId}
-              AND m.sync_status = #{syncStatus}
+            WHERE c.deleted_at IS NULL
               AND m.message_type IN ('USER', 'ASSISTANT')
-            """ + EXACT_MESSAGE_OWNER_SCOPE + """
+            """ + EXACT_MESSAGE_OWNER_SCOPE + MEMORY_PROCESS_SCOPE;
+
+    /** Process partition precedes cursor, grouping and LIMIT. */
+    @Select("<script>SELECT CAST(c.id AS CHAR) " + MEMORY_SOURCE_JOIN + """
+              AND c.id &gt; #{afterId} AND m.sync_status = #{syncStatus}
             GROUP BY c.id ORDER BY c.id ASC LIMIT #{limit}
+            </script>
             """)
-    List<String> findPendingMemoryConversations(@Param("syncStatus") String syncStatus,
+    List<String> findPendingMemoryConversations(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("syncStatus") String syncStatus,
             @Param("limit") int limit, @Param("afterId") long afterId);
+
+    /** Do not collapse the same account in different clients or infer ownership from message data. */
+    @Select("<script>SELECT DISTINCT c.client_id COLLATE utf8mb4_0900_bin AS client_id, "
+            + "c.jiacn COLLATE utf8mb4_0900_bin AS jiacn " + MEMORY_SOURCE_JOIN + """
+              AND m.create_time &gt; #{sinceTime}
+              AND (m.sync_status IS NULL OR m.sync_status != 'EXCLUDED')
+            </script>
+            """)
+    @org.apache.ibatis.annotations.ConstructorArgs({
+        @org.apache.ibatis.annotations.Arg(column="client_id", javaType=String.class),
+        @org.apache.ibatis.annotations.Arg(column="jiacn", javaType=String.class)
+    })
+    List<cn.jia.chat.memory.MemoryOwner> findActiveMemoryOwners(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("sinceTime") long sinceTime);
 
     /** Called with the live parent locked; never marks messages appended after the snapshot. */
     @Update("""

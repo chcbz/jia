@@ -927,14 +927,15 @@ public class ChatController {
         if (request == null || StringUtil.isBlank(request.getKeyword())) {
             return JsonResult.success(List.of());
         }
-        String jiacn = Optional.ofNullable(EsContextHolder.getContext().getJiacn()).orElse("Anonymous");
+        String jiacn = requireIdentityPart(EsContextHolder.getContext().getJiacn());
+        String clientId = requireIdentityPart(EsContextHolder.getContext().getClientId());
         int topK = Optional.ofNullable(request.getTopK()).filter(value -> value > 0).orElse(8);
         double threshold = Optional.ofNullable(request.getSimilarityThreshold()).orElse(0.2D);
         List<MemoryDocument> documents;
         try {
             documents = taskThreadMemoryGuard.excludeProtected(
                     memoryRepository.searchWithConversationBoost(
-                            jiacn,
+                            clientId, jiacn,
                             request.getKeyword(),
                             request.getConversationId(),
                             topK,
@@ -956,7 +957,8 @@ public class ChatController {
         if (request == null || StringUtil.isBlank(request.getContent())) {
             return JsonResult.failure("LIBRARY_DOCUMENT_EMPTY", "library document content is required");
         }
-        String jiacn = Optional.ofNullable(EsContextHolder.getContext().getJiacn()).orElse("Anonymous");
+        String jiacn = requireIdentityPart(EsContextHolder.getContext().getJiacn());
+        String clientId = requireIdentityPart(EsContextHolder.getContext().getClientId());
         String title = Optional.ofNullable(request.getTitle()).orElse("").trim();
         String content = StringUtil.isBlank(title)
                 ? request.getContent()
@@ -964,6 +966,7 @@ public class ChatController {
 
         MemoryDocument document = new MemoryDocument();
         document.setJiacn(jiacn);
+        document.setClientId(clientId);
         document.setConversationId(request.getConversationId());
         document.setContent(content);
         document.setSummaryType(Optional.ofNullable(request.getSourceType())

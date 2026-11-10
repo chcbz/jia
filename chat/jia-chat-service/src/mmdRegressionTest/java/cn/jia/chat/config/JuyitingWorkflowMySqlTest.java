@@ -287,9 +287,9 @@ class JuyitingWorkflowMySqlTest {
         var mapper = new org.mybatis.spring.SqlSessionTemplate(
                 new org.apache.ibatis.session.SqlSessionFactoryBuilder().build(config))
                 .getMapper(cn.jia.chat.mapper.ChatMessageMapper.class);
-        assertEquals(List.of("88"), mapper.findPendingMemoryConversations("PENDING", 1, 0));
-        assertEquals(List.of("99"), mapper.findPendingMemoryConversations("PENDING", 10, 88));
-        assertEquals(List.of(), mapper.findPendingMemoryConversations("PENDING", 10, 99));
+        assertEquals(List.of("88"), mapper.findPendingMemoryConversations("0", null, "PENDING", 1, 0));
+        assertEquals(List.of("99"), mapper.findPendingMemoryConversations("0", null, "PENDING", 10, 88));
+        assertEquals(List.of(), mapper.findPendingMemoryConversations("0", null, "PENDING", 10, 99));
         assertEquals(0, mapper.markMemorySnapshotSynced("0", "owner", "client", "102", 102, List.of(9L)));
         assertEquals("PENDING", jdbc.queryForObject("SELECT sync_status FROM chat_message WHERE id=9", String.class));
         // The newly appended id=2 and poisoned rows are deliberately absent from the captured snapshot.

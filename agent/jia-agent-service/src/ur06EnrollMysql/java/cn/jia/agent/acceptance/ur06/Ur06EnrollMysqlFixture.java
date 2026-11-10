@@ -797,6 +797,9 @@ public final class Ur06EnrollMysqlFixture {
         @Bean AgentTaskNoteMapper agentTaskNoteMapper(SqlSessionTemplate session) { return session.getMapper(AgentTaskNoteMapper.class); }
         @Bean DialogueTemplateMapper dialogueTemplateMapper(SqlSessionTemplate session) { return session.getMapper(DialogueTemplateMapper.class); }
         @Bean ChatMessageMapper chatMessageMapper(SqlSessionTemplate session) { return session.getMapper(ChatMessageMapper.class); }
+        @Bean cn.jia.core.security.FixedTenantAdmissionPolicy memoryProcessScope() {
+            return new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null);
+        }
         @Bean ChatMessageDao chatMessages() { return new ChatMessageDaoImpl(); }
         @Bean AgentRuntimeV1InstallationDao installations() { return new AgentRuntimeV1InstallationDaoImpl(); }
         @Bean AgentRuntimeDao runtimes() { return new AgentRuntimeDaoImpl(); }

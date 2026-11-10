@@ -39,7 +39,7 @@ public interface MemoryRepository {
      * @param similarityThreshold 相似度阈值，低于此值的结果会被过滤
      * @return 记忆文档列表
      */
-    List<MemoryDocument> searchWithConversationBoost(String jiacn, String userMessage, String currentConversationId, int topK, double similarityThreshold);
+    List<MemoryDocument> searchWithConversationBoost(String clientId, String jiacn, String userMessage, String currentConversationId, int topK, double similarityThreshold);
 
     /**
      * 搜索记忆 (简单向量检索)
@@ -49,7 +49,7 @@ public interface MemoryRepository {
      * @param topK 返回数量
      * @return 记忆文档列表
      */
-    List<MemoryDocument> search(String jiacn, float[] queryVector, int topK);
+    List<MemoryDocument> search(String clientId, String jiacn, float[] queryVector, int topK);
 
     /**
      * 根据用户查询会话摘要
@@ -58,7 +58,7 @@ public interface MemoryRepository {
      * @param sinceTime 起始时间
      * @return 摘要内容列表
      */
-    List<String> findConversationSummariesByJiacn(String jiacn, long sinceTime);
+    List<String> findConversationSummariesByJiacn(String clientId, String jiacn, long sinceTime);
 
     /**
      * 根据用户查询日汇总
@@ -67,7 +67,7 @@ public interface MemoryRepository {
      * @param sinceTime 起始时间
      * @return 摘要内容列表
      */
-    List<String> findDailySummariesByJiacn(String jiacn, long sinceTime);
+    List<String> findDailySummariesByJiacn(String clientId, String jiacn, long sinceTime);
 
     /**
      * 根据用户查询周汇总
@@ -76,7 +76,7 @@ public interface MemoryRepository {
      * @param sinceTime 起始时间
      * @return 摘要内容列表
      */
-    List<String> findWeeklySummariesByJiacn(String jiacn, long sinceTime);
+    List<String> findWeeklySummariesByJiacn(String clientId, String jiacn, long sinceTime);
 
     /**
      * 删除过期文档
@@ -99,7 +99,7 @@ public interface MemoryRepository {
      * @param jiacn 用户标识
      * @return 文档数量
      */
-    long countByJiacn(String jiacn);
+    long countByJiacn(String clientId, String jiacn);
 
     /**
      * 生成文本嵌入向量

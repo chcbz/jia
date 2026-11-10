@@ -75,7 +75,10 @@ public class LongTermMemoryAdvisor implements BaseAdvisor {
         }
 
         String conversationId = getConversationId(request.context(), "default");
-        String jiacn = String.valueOf(request.context().getOrDefault("jiacn", "anonymous"));
+        Object owner = request.context().get("jiacn");
+        Object client = request.context().get("clientId");
+        if (!(owner instanceof String jiacn) || !(client instanceof String clientId)
+                || jiacn.isBlank() || clientId.isBlank()) return request;
 
         try {
             // 获取用户消息
@@ -85,7 +88,7 @@ public class LongTermMemoryAdvisor implements BaseAdvisor {
             // 检索记忆（带会话权重）
             List<MemoryDocument> memories = taskThreadMemoryGuard.excludeProtected(
                     memoryRepository.searchWithConversationBoost(
-                            jiacn, userMessage, conversationId, memoryTopK, similarityThreshold));
+                            clientId, jiacn, userMessage, conversationId, memoryTopK, similarityThreshold));
 
             if (memories == null || memories.isEmpty()) {
                 return request;

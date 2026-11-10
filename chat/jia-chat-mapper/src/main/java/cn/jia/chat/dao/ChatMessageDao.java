@@ -60,5 +60,5 @@ public interface ChatMessageDao extends IBaseDao<ChatMessageEntity> {
 
     List<Long> findExpiredMessageIds(long beforeTime, int limit);
 
-    List<String> findActiveJiacns(long sinceTime);
+    List<cn.jia.chat.memory.MemoryOwner> findActiveMemoryOwners(long sinceTime);
 }

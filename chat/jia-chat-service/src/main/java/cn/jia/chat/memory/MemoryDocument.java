@@ -25,6 +25,9 @@ public class MemoryDocument {
      */
     private String jiacn;
 
+    /** Authenticated client partition, never inferred from old documents. */
+    private String clientId;
+
     /**
      * 会话ID (会话级摘要时使用)
      */

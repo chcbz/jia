@@ -1,0 +1,6 @@
+{
+  "properties": {
+    "tenant_id": {"type": "keyword"},
+    "client_id": {"type": "keyword"}
+  }
+}

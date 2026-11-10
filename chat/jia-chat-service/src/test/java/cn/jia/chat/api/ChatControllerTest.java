@@ -553,10 +553,10 @@ class ChatControllerTest extends BaseMockTest {
     @Test
     void searchLibraryReturnsExplicitFailureWhenMemorySearchFails() throws Exception {
         EsContext context = new EsContext();
-        context.setTenantId("0"); context.setJiacn("tester");
+        context.setTenantId("0"); context.setJiacn("tester"); context.setClientId("web-client");
         EsContextHolder.setContext(context);
 
-        when(memoryRepository.searchWithConversationBoost(anyString(), anyString(), any(), anyInt(), anyDouble()))
+        when(memoryRepository.searchWithConversationBoost(eq("web-client"), eq("tester"), anyString(), any(), anyInt(), anyDouble()))
                 .thenThrow(new IllegalStateException("memory index unavailable"));
 
         ChatController controller = newController();
@@ -570,7 +570,7 @@ class ChatControllerTest extends BaseMockTest {
     @Test
     void seedLibraryDocumentStoresProjectMemory() throws Exception {
         EsContext context = new EsContext();
-        context.setTenantId("0"); context.setJiacn("tester");
+        context.setTenantId("0"); context.setJiacn("tester"); context.setClientId("web-client");
         EsContextHolder.setContext(context);
 
         ChatController controller = newController();
@@ -587,12 +587,24 @@ class ChatControllerTest extends BaseMockTest {
         verify(memoryRepository).save(documentCaptor.capture());
         MemoryDocument document = documentCaptor.getValue();
         assertEquals("tester", document.getJiacn());
+        assertEquals("web-client", document.getClientId());
         assertEquals("project", document.getSummaryType());
         assertEquals("local-startup", document.getTopic());
         assertEquals(List.of("project", "juyiting", "public-beta"), document.getCategories());
         assertTrue(document.getContent().contains("聚义厅本地启动说明"));
         assertTrue(document.getContent().contains("cyf0519"));
         assertEquals("E0", result.getCode());
+    }
+
+    @Test
+    void libraryWithoutClientCannotReadOrWritePrivateMemory() throws Exception {
+        EsContext context = new EsContext(); context.setJiacn("tester");
+        EsContextHolder.setContext(context);
+        var controller = newController();
+        assertThrows(java.lang.reflect.InvocationTargetException.class, () -> invokeSearchLibrary(controller, "query"));
+        assertThrows(java.lang.reflect.InvocationTargetException.class,
+                () -> invokeSeedLibraryDocument(controller, "title", "content", "topic", List.of()));
+        org.mockito.Mockito.verifyNoInteractions(memoryRepository);
     }
 
     private JsonResult<?> invokeSearchLibrary(ChatController controller, String keyword) throws Exception {
