@@ -40,7 +40,7 @@ class MemoryRepositoryElasticsearchTest {
                 assertNotNull(addition);
                 assertTrue(client.indices().putMapping(b -> b.index(index).withJson(addition)).acknowledged());
             }
-            var properties = client.indices().getMapping(b -> b.index(index)).result().get(index).mappings().properties();
+            var properties = client.indices().getMapping(b -> b.index(index)).get(index).mappings().properties();
             assertTrue(properties.get("tenant_id").isKeyword());
             assertTrue(properties.get("client_id").isKeyword());
             assertEquals(1024, properties.get("embedding").denseVector().dims());
