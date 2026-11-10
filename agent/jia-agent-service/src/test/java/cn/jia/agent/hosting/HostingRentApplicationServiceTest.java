@@ -113,7 +113,8 @@ class HostingRentApplicationServiceTest {
     @Test void reInvitationQuoteUsesRetainedAgentWithoutNewBindingOrFunds() {
         releasedInvitation();
         when(rent.selectPlanForUpdate(anyString(),anyString(),anyString(),eq(1L))).thenReturn(
-                new EconomyHostingRentPlanEntity().setPlanId("plan").setPlanVersion(1L));
+                new EconomyHostingRentPlanEntity().setPlanId("plan").setPlanVersion(1L)
+                        .setAmountWen(1000000000L).setPeriodSeconds(2592000L).setStatus("ACTIVE"));
         when(ledger.quote(any())).thenAnswer(call -> {
             HostingRentQuoteCommand command = call.getArgument(0); assertEquals(AGENT, command.agentId());
             return new HostingRentQuoteReceipt("quote",HostingRentQuotePurpose.INITIAL,"plan",1L,500L,
@@ -138,7 +139,8 @@ class HostingRentApplicationServiceTest {
     @Test void incompleteHandoverRefusesQuoteAndReserveWithoutFunds() {
         releasedInvitation();
         when(rent.selectPlanForUpdate(anyString(),anyString(),anyString(),eq(1L))).thenReturn(
-                new EconomyHostingRentPlanEntity().setPlanId("plan").setPlanVersion(1L));
+                new EconomyHostingRentPlanEntity().setPlanId("plan").setPlanVersion(1L)
+                        .setAmountWen(1000000000L).setPeriodSeconds(2592000L).setStatus("ACTIVE"));
         when(renewal.completedHandover(ACTOR.scope(),AGENT,"original-installation")).thenReturn(false);
         assertEquals("HOSTING_RENT_HANDOVER_PENDING", assertThrows(HostingRentApplicationException.class,
                 () -> application.quote(ACTOR,"wuyong",KEY,Map.of("purpose","INITIAL"))).code());
