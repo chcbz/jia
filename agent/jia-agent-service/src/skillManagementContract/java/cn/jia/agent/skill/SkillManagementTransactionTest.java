@@ -50,6 +50,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
     protected AgentRuntimeAuthenticationService authentication;
     protected AgentRuntimeEntity runtime;
     private AgentIdentityService identityLocks;
+    private HostingRentOwnerResolver ownerResolver;
     private AgentRuntimeDao runtimeLocks;
     protected AgentManagedSessionLookup sessions;
     protected SkillCapabilityLookup capabilities;
@@ -86,7 +87,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         var gate=new EconomyPreviewGate(new EconomyPreviewProperties(true,List.of(new EconomyPreviewProperties.AllowedScope("0",ACTOR.clientId()))));
         var posting=new EconomyPostingServiceImpl(ledger,manager,gate);
         trade=new SkillTradeServiceImpl(sql.getMapper(SkillTradeMapper.class),ledger,posting,gate);
-        var agents=mock(AgentService.class);var owner=mock(HostingRentOwnerResolver.class);var runtimes=mock(AgentRuntimeDao.class);runtimeLocks=runtimes;identityLocks=mock(AgentIdentityService.class);
+        var agents=mock(AgentService.class);var owner=mock(HostingRentOwnerResolver.class);ownerResolver=owner;var runtimes=mock(AgentRuntimeDao.class);runtimeLocks=runtimes;identityLocks=mock(AgentIdentityService.class);
         runtime=new AgentRuntimeEntity().setAgentId(AGENT).setOwnerJiacn(ACTOR.ownerJiacn()).setBindingId(7L).setTokenHash("registered").setStatus("online")
                 .setRuntimeInstallationId("rti_"+"a".repeat(32)).setRuntimeHostId("host-1").setRuntimeInstanceId("runtime-1").setRuntimeSessionGeneration(1L);
         runtime.setTenantId("0");runtime.setClientId(ACTOR.clientId());
@@ -626,6 +627,114 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         assertEquals("RESULT",cmd.getState());assertEquals("SUCCEEDED",current(disable).get("status"));
         assertEquals(false,db.lockState("0",ACTOR.clientId(),AGENT,"repo-test").getAdmissionEnabled());
         assertEquals(99_999_950L,wallet());
+    }
+
+    private ManagedHostingProvisioner.CurrentOperation stoppedHandover() {
+        when(rentalMapper.selectLatestLeaseForUpdate("0",ACTOR.clientId(),AGENT)).thenReturn(new EconomyHostingLeaseEntity()
+                .setStatus("FINISHING").setLeaseId("lease").setBindingId("7").setAgentId(AGENT).setHandoverId("lease").setExecutorStoppedAt(1L));
+        var p=new ManagedHostingProvisioner.Preparation("0",ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT,"intent","lease","7",1);
+        return new ManagedHostingProvisioner.CurrentOperation(p,new ManagedHostingProvisioner.Candidate(runtime.getRuntimeInstallationId(),"manifest",null,0,1,"host-1"));
+    }
+    @Test void neverDispatchedPreparationRefundsOnceWithoutInventingRuntimeResult() {
+        var c=install();var handover=stoppedHandover();String id=text(c,"skillChangeId");
+        assertTrue(service.cancelUndispatchedForHandover(handover,id));
+        var once=businessSnapshot();assertTrue(service.cancelUndispatchedForHandover(handover,id));assertEquals(once,businessSnapshot());
+        assertEquals(100_000_000L,wallet());assertEquals("FAILED_FINAL",current(c).get("status"));
+        assertEquals("REFUNDED",current(c).get("fundingStatus"));assertEquals(0,count("agent_skill_management_result"));
+        var cmd=db.findCommand("0",ACTOR.clientId(),text(command(c),"commandId"));
+        assertEquals("CANCELLED",cmd.getState());assertNull(cmd.getEvidenceJson());
+        assertEquals(1,count("agent_skill_change_command"));
+        assertThrows(SkillMarketplaceException.class,()->report(c,"PREPARED",null));
+        assertEquals(100_000_000L,wallet());assertEquals(0,count("agent_skill_management_result"));
+    }
+    @Test void preparedButNeverDispatchedActivationRefundsAndKeepsOriginalPrepareReceipt() {
+        var c=install();report(c,"PREPARED",null);var activation=current(c);var handover=stoppedHandover();
+        assertTrue(service.cancelUndispatchedForHandover(handover,text(c,"skillChangeId")));
+        assertEquals(100_000_000L,wallet());assertEquals(1,count("agent_skill_management_result"));
+        var cmd=db.findCommand("0",ACTOR.clientId(),text(command(activation),"commandId"));
+        assertEquals("CANCELLED",cmd.getState());assertNull(cmd.getEvidenceJson());
+        assertEquals(2,count("agent_skill_change_command"));assertEquals("REFUNDED",current(c).get("fundingStatus"));
+    }
+    @Test void claimedOriginalNeverRefundsMerelyBecauseCommandIsStillPending() {
+        var c=install();long now=System.currentTimeMillis();var hint=recoveryMapper.candidates("0",null,now,now-60000).getFirst();
+        tx.executeWithoutResult(t->{
+            var d=recoveryDao.lockDelivery("0",ACTOR.clientId(),hint.getId());
+            var o=recoveryDao.lockActiveOutboxes("0",ACTOR.clientId(),d.getId(),d.getActiveMessageId()).getFirst();
+            assertEquals(1,recoveryMapper.claimDelivery(d,"old-sender",now+60000,now));
+            assertEquals(1,recoveryMapper.claimOutbox(o,"old-sender",now+60000,now));
+        });
+        var handover=stoppedHandover();assertFalse(service.cancelUndispatchedForHandover(handover,text(c,"skillChangeId")));
+        assertEquals(99_999_950L,wallet());assertEquals("PENDING",jdbc.queryForObject("SELECT state FROM agent_skill_change_command",String.class));
+        // Losing the lease or restoring PENDING does not erase the durable claim version/count.
+        jdbc.update("UPDATE agent_command_delivery SET status='PENDING',lease_owner=NULL,lease_until=NULL");
+        jdbc.update("UPDATE agent_outbox_event SET status='PENDING',lease_owner=NULL,lease_until=NULL");
+        assertFalse(service.cancelUndispatchedForHandover(handover,text(c,"skillChangeId")));
+        assertEquals(99_999_950L,wallet());
+    }
+    @Test void staleRecoveryCandidateCannotDispatchAfterAtomicUndispatchedCancellation() {
+        var c=install();long now=System.currentTimeMillis();var stale=recoveryMapper.candidates("0",null,now,now-60000).getFirst();
+        var handover=stoppedHandover();assertTrue(service.cancelUndispatchedForHandover(handover,text(c,"skillChangeId")));
+        clearInvocations(sessions);recovery.recover(stale,now);
+        verify(sessions,never()).dispatch(anyString(),anyString(),anyString(),any(),any());
+        assertTrue(recoveryMapper.candidates("0",null,Long.MAX_VALUE-1,Long.MAX_VALUE-1).isEmpty());
+        assertTrue(service.cancelUndispatchedForHandover(handover,text(c,"skillChangeId")));assertEquals(100_000_000L,wallet());
+    }
+    @Test void cancellationRollbackPreservesFundsAndOriginalUnsentCommand() {
+        var c=install();var handover=stoppedHandover();var before=businessSnapshot();
+        assertThrows(IllegalStateException.class,()->tx.executeWithoutResult(t->{
+            assertTrue(service.cancelUndispatchedForHandover(handover,text(c,"skillChangeId")));
+            throw new IllegalStateException("later handover step failed");
+        }));
+        assertEquals(before,businessSnapshot());assertEquals(99_999_950L,wallet());
+        assertEquals("PENDING",jdbc.queryForObject("SELECT state FROM agent_skill_change_command",String.class));
+    }
+    @Test void internalUndispatchedSettlementDoesNotRequireOriginalUserToRemainLoggedIn() {
+        var c=install();var handover=stoppedHandover();
+        when(ownerResolver.requireOwner(any())).thenThrow(new HostingRentApplicationException(403,"HOSTING_RENT_OWNER_UNPROVEN"));
+        assertTrue(service.cancelUndispatchedForHandover(handover,text(c,"skillChangeId")));assertEquals(100_000_000L,wallet());
+        assertThrows(HostingRentApplicationException.class,()->service.quote(ACTOR,"new",quoteData(),false));
+    }
+    @Test void finishingWithoutStopOrDifferentBindingCannotCancelOriginalSkillFees() {
+        var c=install();var handover=stoppedHandover();rentalStatus("FINISHING");
+        assertThrows(SkillMarketplaceException.class,()->service.cancelUndispatchedForHandover(handover,text(c,"skillChangeId")));
+        stoppedHandover();runtime.setBindingId(8L);
+        assertThrows(SkillMarketplaceException.class,()->service.cancelUndispatchedForHandover(handover,text(c,"skillChangeId")));
+        assertEquals(99_999_950L,wallet());assertEquals("PENDING",jdbc.queryForObject("SELECT state FROM agent_skill_change_command",String.class));
+    }
+    @Test void neverDispatchedDisableTerminatesRepairWithoutRefundOrChangingPublicInstallation() {
+        var c=install();finishInstall(c);var disable=policyChange("DISABLE",current(c));var handover=stoppedHandover();
+        assertTrue(service.cancelUndispatchedForHandover(handover,text(disable,"skillChangeId")));
+        assertEquals("SUCCEEDED",current(disable).get("status"));assertEquals(99_999_950L,wallet());
+        assertEquals("ACTIVE",jdbc.queryForObject("SELECT status FROM economy_skill_order",String.class));
+        assertEquals("SUCCEEDED",jdbc.queryForObject("SELECT status FROM agent_skill_installation",String.class));
+        assertEquals(false,db.lockState("0",ACTOR.clientId(),AGENT,"repo-test").getAdmissionEnabled());
+        assertEquals("CANCELLED",db.findCommand("0",ACTOR.clientId(),text(command(disable),"commandId")).getState());
+    }
+    @Test void corruptPristineOutboxCannotBeUsedAsProofForARefund() {
+        var c=install();var handover=stoppedHandover();
+        jdbc.update("UPDATE agent_outbox_event SET wire_payload_hash=?",new byte[32]);
+        assertThrows(SkillMarketplaceException.class,()->service.cancelUndispatchedForHandover(handover,text(c,"skillChangeId")));
+        assertEquals(99_999_950L,wallet());assertEquals("PENDING",jdbc.queryForObject("SELECT state FROM agent_skill_change_command",String.class));
+        assertEquals(0,count("agent_skill_management_result"));
+    }
+
+    @Test void nativeMarketplaceWireCannotAcquireRabbitInboxAndBypassClaimProof() {
+        install();var properties=new cn.jia.agent.config.AgentRabbitSafetyProperties(
+                new cn.jia.agent.config.AgentRabbitSafetyProperties.CommandOutbox(true),
+                new cn.jia.agent.config.AgentRabbitSafetyProperties.RabbitTopology(true),
+                new cn.jia.agent.config.AgentRabbitSafetyProperties.RabbitPublish(false),
+                new cn.jia.agent.config.AgentRabbitSafetyProperties.RabbitConsume(true),
+                new cn.jia.agent.config.AgentRabbitSafetyProperties.RabbitDispatch(false),
+                new cn.jia.agent.config.AgentRabbitSafetyProperties.RabbitBroker("isolated.invalid",35672,"fixture","fixture","/fixture"));
+        var inboxDao=mock(AgentCommandInboxDao.class);
+        var inbox=new cn.jia.agent.service.impl.AgentCommandInboxServiceImpl(inboxDao,
+                new cn.jia.agent.config.AgentRabbitSafetyGate(properties),manager,"0");
+        var row=jdbc.queryForMap("SELECT message_id,event_id,command_id,delivery_id,wire_payload FROM agent_outbox_event");
+        var message=new AgentInboxMessage(AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,"0",ACTOR.clientId(),
+                (String)row.get("message_id"),(String)row.get("event_id"),(String)row.get("command_id"),
+                ((Number)row.get("delivery_id")).longValue(),(byte[])row.get("wire_payload"));
+        assertThrows(IllegalArgumentException.class,()->inbox.claim(message,"fixture",System.currentTimeMillis(),60000));
+        verifyNoInteractions(inboxDao);assertEquals(0,jdbc.queryForObject("SELECT attempt_count FROM agent_outbox_event",Integer.class));
     }
 
     @Test void arrearsAndFinalFinishingBothBlockNewPolicyChanges() {

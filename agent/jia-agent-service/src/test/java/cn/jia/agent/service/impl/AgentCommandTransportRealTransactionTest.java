@@ -176,6 +176,12 @@ class AgentCommandTransportRealTransactionTest {
         }
 
         @Override
+        public List<AgentOutboxEventEntity> lockActiveOutboxes(String tenantId,String clientId,long deliveryId,String messageId) {
+            return jdbc.query("SELECT * FROM agent_outbox_event WHERE tenant_id=? AND client_id=? AND delivery_id=? AND message_id=? ORDER BY id FOR UPDATE",
+                    org.springframework.jdbc.core.BeanPropertyRowMapper.newInstance(AgentOutboxEventEntity.class),tenantId,clientId,deliveryId,messageId);
+        }
+
+        @Override
         public int insertDelivery(AgentCommandDeliveryEntity d) {
             if (failure == Failure.DELIVERY) throw new IllegalStateException("forced delivery failure");
             KeyHolder keys = new GeneratedKeyHolder();

@@ -20,6 +20,27 @@ public final class SkillInstallCommandWriter {
     public SkillInstallCommandWriter(AgentCommandTransportDao commands) {
         this.commands=commands;
     }
+    /** Under original skill roots, lock the same delivery -> outbox roots as native recovery.
+     * Pristine inserted versions prove no claim was ever committed; PENDING alone proves nothing.
+     * Task/Rabbit and position commands are not this producer's proof domain. */
+    public boolean neverDispatched(SkillChangeEntity change,SkillChangeCommandEntity command) {
+        require(TransactionSynchronizationManager.isActualTransactionActive(),503,"SKILL_COMMAND_TRANSACTION_REQUIRED");
+        var d=commands.lockDelivery(change.getTenantId(),change.getClientId(),change.getOwnerJiacn(),command.getCommandId());
+        if(d==null || !Objects.equals(0L,d.getVersion()) || !"PENDING".equals(d.getStatus())
+                || !Objects.equals(1,d.getAttemptCount()) || d.getLeaseOwner()!=null || d.getLeaseUntil()!=null) return false;
+        var rows=commands.lockActiveOutboxes(change.getTenantId(),change.getClientId(),d.getId(),d.getActiveMessageId());
+        if(rows==null || rows.size()!=1)return false;
+        var o=rows.getFirst();
+        if(!Objects.equals(0L,o.getVersion()) || !Objects.equals(0,o.getAttemptCount()) || !"PENDING".equals(o.getStatus())
+                || o.getLeaseOwner()!=null || o.getLeaseUntil()!=null)return false;
+        // Reuse exact identity, payload hashes, original attempt, native destination and no-broker proof.
+        SkillInstallRecoveryService.validate(d,o);
+        require(change.getAgentId().equals(d.getTargetAgentId()) && change.getChangeId().equals(d.getTaskId())
+                && command.getMessageId().equals(d.getActiveMessageId())
+                && command.getDataJson().equals(SkillManagementCodec.json(SkillManagementCodec.read(d.getCommandPayload(),"CommandData"))),
+                409,"SKILL_DELIVERY_FENCED");
+        return true;
+    }
     public boolean allows(String tenant,String client) { return "0".equals(tenant); }
     public AgentCommandTransportWriteResult write(AgentCommandDraft draft) {
         require(TransactionSynchronizationManager.isActualTransactionActive(),503,"SKILL_COMMAND_TRANSACTION_REQUIRED");

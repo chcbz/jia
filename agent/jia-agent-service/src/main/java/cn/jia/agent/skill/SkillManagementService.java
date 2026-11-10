@@ -197,24 +197,66 @@ public final class SkillManagementService {
         enabled(a);path(agent);
         return tx.execute(s->{
             marketplace.actorLock(a);
-            var hint=runtimes.findInScope(a.tenantId(),a.clientId(),agent);
-            require(hint!=null&&a.ownerJiacn().equals(hint.getOwnerJiacn()),403,"AGENT_FORBIDDEN");
-            require(hint.getRuntimeInstallationId()!=null&&hint.getRuntimeHostId()!=null,409,"SKILL_RUNTIME_MAPPING_REQUIRED");
-            var installation=installations.lock(hint.getRuntimeInstallationId());
-            require(installation!=null&&"ACTIVE".equals(installation.getStatus())
-                    &&a.tenantId().equals(installation.getTenantId())&&a.clientId().equals(installation.getClientId())
-                    &&agent.equals(installation.getCanonicalAgentId()),409,"SKILL_RUNTIME_MAPPING_REQUIRED");
-            // requireVersion and fenced callbacks also acquire binding/identity locks.
-            identities.lockRegistrationIdentityInScope(a.tenantId(),a.clientId(),a.ownerJiacn(),agent);
-            var row=runtimes.lockInScope(a.tenantId(),a.clientId(),agent);
-            require(row!=null&&a.ownerJiacn().equals(row.getOwnerJiacn())
-                    &&hint.getRuntimeInstallationId().equals(row.getRuntimeInstallationId())
-                    &&hint.getRuntimeHostId().equals(row.getRuntimeHostId()),409,"SKILL_STATE_CONFLICT");
+            lockOriginalRuntime(a,agent);
             requireVersion(a,agent,expected);
             if(online) require(online(a,agent),409,"SKILL_AGENT_OFFLINE");
             return action.get();
         });
     }
+    /** Shared original runtime roots. Interactive ownership/version checks stay in owned();
+     * lifecycle settlement uses the stopped original binding instead of requiring a user login. */
+    private AgentRuntimeEntity lockOriginalRuntime(HostingRentHttp.Actor a,String agent) {
+        var hint=runtimes.findInScope(a.tenantId(),a.clientId(),agent);
+        require(hint!=null&&a.ownerJiacn().equals(hint.getOwnerJiacn()),403,"AGENT_FORBIDDEN");
+        require(hint.getRuntimeInstallationId()!=null&&hint.getRuntimeHostId()!=null,409,"SKILL_RUNTIME_MAPPING_REQUIRED");
+        var installation=installations.lock(hint.getRuntimeInstallationId());
+        require(installation!=null&&"ACTIVE".equals(installation.getStatus())
+                &&a.tenantId().equals(installation.getTenantId())&&a.clientId().equals(installation.getClientId())
+                &&agent.equals(installation.getCanonicalAgentId()),409,"SKILL_RUNTIME_MAPPING_REQUIRED");
+        // requireVersion and fenced callbacks also acquire binding/identity locks.
+        identities.lockRegistrationIdentityInScope(a.tenantId(),a.clientId(),a.ownerJiacn(),agent);
+        var row=runtimes.lockInScope(a.tenantId(),a.clientId(),agent);
+        require(row!=null&&a.ownerJiacn().equals(row.getOwnerJiacn())
+                &&hint.getRuntimeInstallationId().equals(row.getRuntimeInstallationId())
+                &&hint.getRuntimeHostId().equals(row.getRuntimeHostId()),409,"SKILL_STATE_CONFLICT");
+        return row;
+    }
+
+    /** Internal handover phase. Only pristine native marketplace intents may be cancelled without a Runtime result.
+     * Claimed/unknown work returns false and still needs original execution evidence; no public endpoint. */
+    public boolean cancelUndispatchedForHandover(cn.jia.agent.hosting.ManagedHostingProvisioner.CurrentOperation stopped,String changeId) {
+        var p=stopped.preparation();var candidate=stopped.candidate();
+        var hint=db.findChange(p.tenantId(),p.clientId(),changeId);
+        require(hint!=null && p.agentId().equals(hint.getAgentId()) && p.ownerJiacn().equals(hint.getOwnerJiacn())
+                && candidate.installationId().equals(hint.getRuntimeInstallationId())
+                && candidate.hostId().equals(hint.getRuntimeHostId()),409,"SKILL_DELIVERY_FENCED");
+        if(positionChange(hint))return false; // native position commands have a different dispatch authority
+        var a=new HostingRentHttp.Actor(hint.getActorId(),hint.getTenantId(),hint.getClientId(),hint.getOwnerJiacn());
+        enabled(a);
+        return Boolean.TRUE.equals(tx.execute(t->{
+            marketplace.actorLock(a);var row=lockOriginalRuntime(a,p.agentId());
+            require(Objects.equals(String.valueOf(row.getBindingId()),p.bindingId())
+                    && candidate.installationId().equals(row.getRuntimeInstallationId()) && candidate.hostId().equals(row.getRuntimeHostId())
+                    && hosting.stoppedRelationship(p),409,"SKILL_DELIVERY_FENCED");
+            var state=db.lockState(a.tenantId(),a.clientId(),p.agentId(),hint.getSkillKey());
+            require(state!=null,409,"SKILL_STATE_CONFLICT");
+            var c=db.lockChange(a.tenantId(),a.clientId(),changeId);var value=dto(c);
+            var cmd=db.lockCommand(a.tenantId(),a.clientId(),c.getCommandId());
+            if("CANCELLED".equals(cmd.getState()))return true;
+            if(!"PENDING".equals(cmd.getState()) || !state.getSkillRevision().toString().equals(value.get("skillRevision")))return false;
+            var data=decode(cmd.getDataJson(),"CommandData");
+            if("READ".equals(data.get("phase")) || !writer.getObject().neverDispatched(c,cmd))return false;
+            if("DISABLE".equals(value.get("action"))) {
+                // Logical admission was already disabled; cancel only the never-sent runtime repair.
+                value.put("runtimeSynced",false);value.put("reasonCode","ENTITLEMENT_TERMINATED");
+                state.setPendingChangeId(null);one(db.saveState(state,state.getSkillRevision()));save(c,value);
+                cmd.setState("CANCELLED");one(db.saveCommand(cmd));
+            } else failChange(a,state,c,value,cmd,null,"ENTITLEMENT_TERMINATED",false,
+                    Set.of("INSTALL","UPGRADE").contains(text(value,"action")));
+            return true;
+        }));
+    }
+
     private void requireVersion(HostingRentHttp.Actor a,String agent,Long expected) {
         try {versions.requireOwned(a,agent,expected,false);}
         catch(SkillMarketplaceException conflict) {
@@ -801,6 +843,7 @@ public final class SkillManagementService {
             SkillChangeCommandEntity cmd,Map<String,Object> command,Map<String,Object> evidence,
             SkillPackages.Description prepared) {
         String outcome=text(evidence,"outcome"),phase=text(command,"phase");long revision=state.getSkillRevision();
+        require(!"CANCELLED".equals(cmd.getState()),409,"SKILL_RESULT_CONFLICT");
         // Repeated immutable phase results are accepted, but contradictory facts never change terminal money/state.
         if("RESULT".equals(cmd.getState())) {
             require(Objects.equals(cmd.getEvidenceJson(),json(evidence)),409,"SKILL_RESULT_CONFLICT");return;
@@ -910,7 +953,8 @@ public final class SkillManagementService {
             one(market.markEntitlementFailed(a.tenantId(),a.clientId(),c.getAgentId(),ent.getEntitlementId(),installId,ent.getVersion(),now));
         }
         state.setPendingChangeId(null);one(db.saveState(state,revision));save(c,value);
-        cmd.setState("RESULT").setEvidenceJson(json(evidence));one(db.saveCommand(cmd));return;
+        // No Runtime evidence is invented for an API cancellation of a proven never-dispatched command.
+        cmd.setState(evidence==null?"CANCELLED":"RESULT").setEvidenceJson(evidence==null?null:json(evidence));one(db.saveCommand(cmd));
     }
     private void confirmCatalog(HostingRentHttp.Actor a,SkillManagedStateEntity state,SkillChangeEntity c,Map<String,Object> value) {
         if(!Set.of("VERIFYING","SUCCEEDED").contains(text(value,"status")))return;

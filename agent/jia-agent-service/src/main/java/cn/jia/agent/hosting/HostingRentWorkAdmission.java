@@ -34,6 +34,14 @@ public final class HostingRentWorkAdmission implements AgentHostingWorkAdmission
         return current != null && current.getExecutorStoppedAt() != null;
     }
 
+    /** Lifecycle-only exact original relation, not a new user action or a current-owner lookup. */
+    public boolean stoppedRelationship(ManagedHostingProvisioner.Preparation original) {
+        var current=lease(original.tenantId(),original.clientId(),original.agentId());
+        return current!=null && "FINISHING".equals(current.getStatus())
+                && original.leaseId().equals(current.getLeaseId()) && original.bindingId().equals(current.getBindingId())
+                && original.leaseId().equals(current.getHandoverId()) && current.getExecutorStoppedAt()!=null;
+    }
+
     private EconomyHostingLeaseEntity lease(String tenantId, String clientId, String agentId) {
         if (!schemaEnabled) return null;
         HostingRentHttp.exact(tenantId, 50); HostingRentHttp.exact(clientId, 50); HostingRentHttp.exact(agentId, 100);
