@@ -63,6 +63,55 @@ class AgentRuntimePersistentSessionFenceTest {
                 session.sessionGeneration(), session.sessionToken());
     }
 
+    private org.springframework.mock.web.MockHttpServletRequest http(AgentRuntimeV1SessionResponse session, String method, String path) {
+        var request = new org.springframework.mock.web.MockHttpServletRequest(method, path);
+        request.addHeader("Authorization", "AgentRuntime " + session.sessionToken());
+        request.addHeader("X-Agent-Id", AGENT); request.addHeader("X-Agent-Installation-Id", ID);
+        request.addHeader("X-Agent-Host-Id", session.hostId()); request.addHeader("X-Agent-Runtime-Id", session.runtimeInstanceId());
+        request.addHeader("X-Agent-Session-Generation", Long.toString(session.sessionGeneration()));
+        return request;
+    }
+    @Test void offlineSessionCanOnlyDeliverOriginalEvidenceAndStillRequiresCurrentPersistentAuthority() throws Exception {
+        var session = auth.issue(installation, request("host", "boot"), 1000);
+        var filter = new AgentRuntimeAuthenticationFilter(auth);
+        for (String path : List.of("/internal/agent/skill-management/results", "/internal/agent/chat/dispatches/dispatch/usage",
+                "/internal/agent/tasks/task/runs/run/conversation/usage", "/internal/agent/tasks/task/runs/run/conversation/provider-usage")) {
+            var called = new AtomicBoolean(); var response = new org.springframework.mock.web.MockHttpServletResponse();
+            filter.doFilter(http(session, "POST", path), response, (a,b) -> {
+                called.set(true);
+                assertEquals("owner", AgentRuntimeAuthenticationService.requireProof(org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication()).scope().ownerJiacn());
+            });
+            assertTrue(called.get(), path); assertEquals(200, response.getStatus());
+        }
+        for (String path : List.of("/internal/agent/skill-installations/si/package", "/internal/agent/tasks/conversation-executions/commands",
+                "/internal/agent/tasks/task/runs/run/conversation/lease", "/internal/agent/tasks/task/runs/run/conversation/result-commits/result")) {
+            var response = new org.springframework.mock.web.MockHttpServletResponse();
+            filter.doFilter(http(session, path.endsWith("package") || path.endsWith("commands") ? "GET" : "POST", path), response,
+                    (a,b) -> fail("offline session admitted new work: " + path));
+            assertEquals(401, response.getStatus());
+        }
+        var successor = auth.issue(installation, request("host", "new-boot"), 1001);
+        var stale = new org.springframework.mock.web.MockHttpServletResponse();
+        filter.doFilter(http(session, "POST", "/internal/agent/skill-management/results"), stale, (a,b) -> fail("stale proof"));
+        assertEquals(401, stale.getStatus());
+        row.setOwnerJiacn("different-owner");
+        var wrongOwner = new org.springframework.mock.web.MockHttpServletResponse();
+        filter.doFilter(http(successor, "POST", "/internal/agent/skill-management/results"), wrongOwner, (a,b) -> fail("wrong owner"));
+        assertEquals(401, wrongOwner.getStatus());
+    }
+    @Test void managementEvidenceNamespaceCannotFallThroughToUserAuthOrEncodedAliases() throws Exception {
+        for (String path : List.of("/internal/agent/skill-management/results", "/internal/agent/skill-management/unknown")) {
+            var request = new org.springframework.mock.web.MockHttpServletRequest("POST", path);
+            assertTrue(AgentRuntimeAuthenticationFilter.selectsRuntimeCredentialLane(request));
+            var response = new org.springframework.mock.web.MockHttpServletResponse();
+            new AgentRuntimeAuthenticationFilter(auth).doFilter(request, response, (a,b) -> fail("missing native proof"));
+            assertTrue(response.getStatus() >= 400);
+        }
+        for (String method : List.of("GET", "PUT", "DELETE"))
+            assertFalse(AgentRuntimeAuthenticationFilter.allowed(new org.springframework.mock.web.MockHttpServletRequest(method, "/internal/agent/skill-management/results")));
+        assertFalse(AgentRuntimeAuthenticationFilter.allowed(new org.springframework.mock.web.MockHttpServletRequest("POST", "/internal/agent/skill-management/%72esults")));
+    }
+
     @Test void filterAuthenticationEntryActuallyKeepsInstallationReadInsideProxyTransaction() {
         var session = auth.issue(installation, request("host", "boot"), 1000);
         var manager = mock(org.springframework.transaction.PlatformTransactionManager.class);

@@ -2,6 +2,9 @@ package cn.jia.agent.skill;
 
 import cn.jia.agent.api.SkillMarketplaceController;
 import cn.jia.agent.api.SkillPackageController;
+import cn.jia.agent.api.SkillManagementResultController;
+import cn.jia.agent.security.AgentRuntimeAuthentication;
+import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import cn.jia.agent.api.SkillApiExceptionAdvice;
 import cn.jia.agent.api.SkillApiWebConfiguration;
 import cn.jia.core.config.*;
@@ -33,7 +36,7 @@ class SkillManagementHttpTest {
         var controller=new SkillMarketplaceController(legacy);controller.setManagement(service);
         List<HttpMessageConverter<?>> converters=new ArrayList<>();converters.add(new ByteArrayHttpMessageConverter());converters.add(new JacksonJsonHttpMessageConverter());
         new ApiEnvelopeJsonConfig().extendMessageConverters(converters);
-        mvc=MockMvcBuilders.standaloneSetup(controller,new SkillPackageController(service)).setControllerAdvice(new ApiEnvelopeAdvice(),new ApiRequestEnvelopeAdvice(),new SkillApiExceptionAdvice(),new ExceptionHandlerAdvice())
+        mvc=MockMvcBuilders.standaloneSetup(controller,new SkillPackageController(service),new SkillManagementResultController(service)).setControllerAdvice(new ApiEnvelopeAdvice(),new ApiRequestEnvelopeAdvice(),new SkillApiExceptionAdvice(),new ExceptionHandlerAdvice())
             .setMessageConverters(converters.toArray(HttpMessageConverter[]::new)).addFilters(new RequestIdFilter()).addInterceptors(new SkillApiWebConfiguration()).build();
         auth=new JwtAuthenticationToken(Jwt.withTokenValue("synthetic").claim("tenant_id", "0").header("alg","none").subject("buyer").claim("client_id","sm-client").claim("jiacn","owner").build(),List.of());
     }
@@ -42,6 +45,31 @@ class SkillManagementHttpTest {
             return SkillManagementCodecTest.JSON.convertValue(c.get("value"),new com.fasterxml.jackson.core.type.TypeReference<Map<String,Object>>(){});
         throw new AssertionError("Missing locked fixture: "+definition);
     }
+    @Test void originalResultCrossesNativeHttpWithoutRewritingItsWireIdentity() throws Exception {
+        var fixture = read(getClass().getResourceAsStream("/skill-management-result-http-v1.json").readAllBytes(), null);
+        var request = object(fixture.get("request")); var response = object(fixture.get("response"));
+        var original = object(request.get("data")); var receipt = object(response.get("data"));
+        validate("Result", original); validate("ResultReceipt", receipt);
+        var scope = new AgentRuntimeAuthentication.Scope("0", "sm-client", "owner", "agt_sm", "cost-boot");
+        var proof = new AgentRuntimeAuthenticationService.Proof(scope,"rti_fixture","host",2L,"b".repeat(64),1L,1L);
+        var nativeAuth = mock(AgentRuntimeAuthentication.class);
+        when(nativeAuth.isAuthenticated()).thenReturn(true);when(nativeAuth.getPrincipal()).thenReturn(scope);when(nativeAuth.getDetails()).thenReturn(proof);
+        when(service.result(proof, original)).thenReturn(receipt);
+        var result = mvc.perform(post("/internal/agent/skill-management/results").principal(nativeAuth)
+                .contentType(MediaType.APPLICATION_JSON).header("X-Request-Id",request.get("requestId")).content(bytes(request)))
+                .andExpect(status().isOk()).andExpect(header().string("Cache-Control","private, no-store"))
+                .andExpect(jsonPath("$.requestId").value(request.get("requestId")))
+                .andExpect(jsonPath("$.data.correlationId").value(original.get("messageId"))).andReturn();
+        assertEquals(receipt, object(read(result.getResponse().getContentAsByteArray(),"HttpSuccess").get("data")));
+        verify(service).result(proof, original);
+        clearInvocations(service);
+        mvc.perform(post("/internal/agent/skill-management/results").principal(nativeAuth).contentType(MediaType.APPLICATION_JSON)
+                .header("X-Request-Id","different").content(bytes(request))).andExpect(status().isBadRequest());
+        mvc.perform(post("/internal/agent/skill-management/results?owner=other").principal(nativeAuth).contentType(MediaType.APPLICATION_JSON)
+                .header("X-Request-Id",request.get("requestId")).content(bytes(request))).andExpect(status().isBadRequest());
+        verifyNoInteractions(service);
+    }
+
     @Test void completeQuoteEnvelopeAndIdHeaderArePreserved() throws Exception {
         var request=sample("QuoteRequest");var response=sample("QuoteResponse");String id=text(request,"requestId");
         when(service.quote(any(),eq("quote-key"),eq(object(request.get("data"))),eq(false))).thenReturn(object(response.get("data")));

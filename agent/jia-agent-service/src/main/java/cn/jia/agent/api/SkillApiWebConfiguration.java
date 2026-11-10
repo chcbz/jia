@@ -22,6 +22,7 @@ public class SkillApiWebConfiguration implements WebMvcConfigurer, HandlerInterc
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
         if (handler instanceof HandlerMethod method
                 && (SkillMarketplaceController.class.isAssignableFrom(method.getBeanType())
+                || SkillManagementResultController.class.isAssignableFrom(method.getBeanType())
                 || SkillPackageController.class.isAssignableFrom(method.getBeanType())
                 || SkillManagedCredentialController.class.isAssignableFrom(method.getBeanType()))) {
             response.setHeader(HttpHeaders.CACHE_CONTROL, "private, no-store");

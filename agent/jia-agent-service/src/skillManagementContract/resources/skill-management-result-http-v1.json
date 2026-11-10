@@ -1,0 +1,67 @@
+{
+  "request": {
+    "protocolVersion": 1,
+    "requestId": "handover-http-fixture",
+    "data": {
+      "protocolVersion": 1,
+      "requestId": "req_demo",
+      "data": {
+        "schemaVersion": 2,
+        "resultType": "SKILL_CHANGE_RESULT",
+        "skillChangeId": "sc_demo",
+        "commandId": "cmd_activate",
+        "agentId": "agt_demo",
+        "runtimeInstallationId": "rti_demo",
+        "executionRuntimeInstanceId": "boot_demo",
+        "attempt": 1,
+        "fencingToken": "8",
+        "deliveryEpoch": "1",
+        "skillRevision": "8",
+        "evidence": {
+          "observedCommandId": "cmd_activate",
+          "phase": "ACTIVATE",
+          "outcome": "APPLIED",
+          "actual": {
+            "skillInstallationId": "si_new",
+            "productVersionId": "spv_new",
+            "skillVersion": "1.1.0",
+            "packageSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "byteLength": "2048",
+            "kind": "EXECUTABLE"
+          },
+          "appliedRevision": "8",
+          "preparedSha256": "2f34f8cc1d52ade3290dca0d3a956015f44ebc5456673fc29898dc3cc263ef09",
+          "readiness": "VERIFYING",
+          "reasonCode": null,
+          "observedAt": 1792756800000
+        },
+        "resultSha256": "8afe9bdaa3ea8a77a1c4430367c899d12db36c071ad1c4403550d7540105bbc6"
+      },
+      "messageType": "work.result",
+      "messageId": "msg_activated"
+    }
+  },
+  "response": {
+    "protocolVersion": 1,
+    "requestId": "handover-http-fixture",
+    "code": "E0",
+    "msg": "ok",
+    "data": {
+      "protocolVersion": 1,
+      "requestId": "req_demo",
+      "data": {
+        "schemaVersion": 2,
+        "skillChangeId": "sc_demo",
+        "commandId": "cmd_activate",
+        "attempt": 1,
+        "receiptStatus": "ACCEPTED"
+      },
+      "messageType": "work.result.receipt",
+      "messageId": "msg_receipt",
+      "code": "E0",
+      "msg": "ok",
+      "correlationId": "msg_activated"
+    }
+  }
+}

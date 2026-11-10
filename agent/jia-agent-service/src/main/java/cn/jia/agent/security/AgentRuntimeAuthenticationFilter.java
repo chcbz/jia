@@ -21,7 +21,8 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
         // WS and Runtime ACK/package endpoints are exclusive native lanes, even when legacy
         // API-key headers are presented: they must fail here, never fall through to old auth.
         // Elsewhere X-Agent-Id alone grants no Runtime authority; ambiguous duplicates fail closed.
-        return request.getRequestURI().startsWith(request.getContextPath()+"/internal/archive/")
+        return request.getRequestURI().startsWith(request.getContextPath()+"/internal/agent/skill-management")
+                || request.getRequestURI().startsWith(request.getContextPath()+"/internal/archive/")
                 || request.getRequestURI().startsWith(request.getContextPath()+"/internal/agent/position-skills")
                 || request.getRequestURI().matches(request.getContextPath()+"/internal/agent/chat/requests/[^/]+/turns/[^/]+/tools(?:/.*)?")
                 || request.getRequestURI().matches(request.getContextPath()+"/internal/agent/chat/requests/[^/]+/turns/[^/]+/materials/inputs/[^/]+/content")
@@ -41,7 +42,8 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
         String path = request.getRequestURI().substring(request.getContextPath().length());
         // No matrix parameters, encoded separators, dot-segments or alternate dispatch paths.
         String id = "[A-Za-z0-9][A-Za-z0-9._:-]{0,99}";
-        return "GET".equals(request.getMethod()) && (path.equals("/internal/archive/v1/jobs") || path.matches("/internal/archive/v1/jobs/"+id+"/(?:source|result)"))
+        return "POST".equals(request.getMethod()) && path.equals("/internal/agent/skill-management/results")
+                || "GET".equals(request.getMethod()) && (path.equals("/internal/archive/v1/jobs") || path.matches("/internal/archive/v1/jobs/"+id+"/(?:source|result)"))
                 || "POST".equals(request.getMethod()) && path.matches("/internal/archive/v1/jobs/"+id+"/result")
                 || "GET".equals(request.getMethod()) && (path.equals("/internal/agent/position-skills") || path.matches("/internal/agent/position-skills/"+id+"/receipt"))
                 || "POST".equals(request.getMethod()) && path.equals("/internal/agent/position-skills/results")
@@ -76,6 +78,17 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
                 + "/runs/" + id + "/(?:failure|start)");
     }
 
+    /** Evidence may arrive after the owned engine/channel stopped. This never admits
+     * command discovery, package downloads, execution leases or result commits. */
+    private static boolean isEvidenceDelivery(HttpServletRequest request) {
+        if (!"POST".equals(request.getMethod()) || request.getQueryString() != null) return false;
+        String path = request.getRequestURI().substring(request.getContextPath().length());
+        String id = "[A-Za-z0-9][A-Za-z0-9._:-]{0,99}";
+        return path.equals("/internal/agent/skill-management/results")
+                || path.matches("/internal/agent/chat/dispatches/" + id + "/usage")
+                || path.matches("/internal/agent/tasks/" + id + "/runs/" + id + "/conversation/(?:usage|provider-usage)");
+    }
+
     @Override protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
             FilterChain chain) throws ServletException, IOException {
         response.setHeader("Cache-Control", "private, no-store");
@@ -86,7 +99,7 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
             }
             boolean handshake = request.getRequestURI().equals(request.getContextPath() + "/ws/agent/channel");
             boolean ack = request.getRequestURI().startsWith(request.getContextPath() + "/agent/runtime/v1/commands/");
-            authentication = service.authenticate(sessionHeaders(request), !handshake && !ack);
+            authentication = service.authenticate(sessionHeaders(request), !handshake && !ack && !isEvidenceDelivery(request));
         } catch (org.springframework.dao.DataAccessException unavailable) { reject(response, 503); return; }
         catch (RuntimeException ignored) { reject(response, 401); return; }
         var previous = SecurityContextHolder.getContext();

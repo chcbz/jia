@@ -752,7 +752,7 @@ public final class SkillManagementService {
         // the candidate's policy fence or make READY depend on the current product pointer.
         return Long.toString(state.getActivePolicyRevision()==null?state.getSkillRevision():state.getActivePolicyRevision());
     }
-    /** Authenticated WS result consumer. Returning a receipt happens strictly after commit. */
+    /** Authenticated WS/native HTTP result consumer. A receipt is returned strictly after commit. */
     public Map<String,Object> result(AgentRuntimeAuthenticationService.Proof proof,Map<String,Object> envelope) {
         validate("Result",envelope);var data=object(envelope.get("data"));
         var hashable=new LinkedHashMap<>(data);hashable.remove("resultSha256");
