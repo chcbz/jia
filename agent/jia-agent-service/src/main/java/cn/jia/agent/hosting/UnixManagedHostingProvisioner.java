@@ -65,6 +65,43 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
             return false;
         }
     }
+    @Override public SkillInventory inventory(String tenantId, String clientId, String ownerJiacn, String agentId) {
+        outsideTransaction();
+        if (!availableFor(tenantId, clientId, ownerJiacn)) return null;
+        var request = new LinkedHashMap<String, Object>();
+        request.put("protocol", PROTOCOL); request.put("method", "inventory");
+        request.put("tenantId", tenantId); request.put("clientId", clientId);
+        request.put("ownerJiacn", ownerJiacn); request.put("canonicalAgentId", agentId);
+        try { return decodeInventory(request, exchange(request)); }
+        catch (Exception uncertain) { return null; }
+    }
+    static SkillInventory decodeInventory(Map<String, Object> request, Map<String, Object> response) {
+        if (response == null || !echoes(request, response) || !"1".equals(response.get("inventoryVersion"))
+                || !exact(response.get("hostId"), 100) || !digest(response.get("inventorySha256"))
+                || !(response.get("skills") instanceof java.util.List<?> rows)
+                || !String.valueOf(rows.size()).equals(response.get("installedSkillCount"))) return null;
+        var skills = new java.util.ArrayList<InstalledSkill>();
+        var canonical = new java.util.ArrayList<Map<String, Object>>();
+        String previous = null;
+        for (Object value : rows) {
+            if (!(value instanceof Map<?, ?> row) || !(row.get("skillKey") instanceof String key)
+                    || !exact(key, 100) || previous != null && previous.compareTo(key) >= 0
+                    || !("MANAGED".equals(row.get("source")) || "NATIVE".equals(row.get("source"))) || !digest(row.get("revision"))) return null;
+            previous = key;
+            var skill = new InstalledSkill(key, (String) row.get("source"), (String) row.get("revision"));
+            skills.add(skill);
+            // Field order is the shared inventory-v1 digest contract, not Map iteration order.
+            var item = new LinkedHashMap<String, Object>();
+            item.put("skillKey", key); item.put("source", skill.source()); item.put("revision", skill.revision());
+            canonical.add(item);
+        }
+        try {
+            String actual = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(JSON.writeValueAsBytes(canonical)));
+            if (!actual.equals(response.get("inventorySha256"))) return null;
+        } catch (Exception invalid) { return null; }
+        return new SkillInventory((String) response.get("hostId"), (String) response.get("inventorySha256"), skills);
+    }
     @Override public Observation prepareAndObserve(Preparation p) {
         outsideTransaction();
         if (!validPreparation(p) || !availableFor(p.tenantId(), p.clientId(), p.ownerJiacn())) return unknown(p);

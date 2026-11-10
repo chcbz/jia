@@ -1,0 +1,34 @@
+{
+  "request": {
+    "protocol": "runtime-hosting-v1",
+    "method": "inventory",
+    "tenantId": "0",
+    "clientId": "fixture-client",
+    "ownerJiacn": "fixture-owner",
+    "canonicalAgentId": "agt_fixture"
+  },
+  "response": {
+    "protocol": "runtime-hosting-v1",
+    "method": "inventory",
+    "tenantId": "0",
+    "clientId": "fixture-client",
+    "ownerJiacn": "fixture-owner",
+    "canonicalAgentId": "agt_fixture",
+    "hostId": "fixture-host",
+    "inventoryVersion": "1",
+    "inventorySha256": "b3bdce948e15a53f3e638b18571ba5321fc1387108be2e55439b44f5a4f183fe",
+    "installedSkillCount": "2",
+    "skills": [
+      {
+        "skillKey": "installed",
+        "source": "MANAGED",
+        "revision": "46e2043ea234979a0534ae415fb3bf9c3b313da7f053a1233463c3128942ea98"
+      },
+      {
+        "skillKey": "菜谱",
+        "source": "NATIVE",
+        "revision": "6eca69dd76cead7cce389e1386ff6ac138441127dcb3abda20b440be2547116d"
+      }
+    ]
+  }
+}

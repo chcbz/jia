@@ -37,6 +37,29 @@ class UnixManagedHostingProvisionerTest {
         when(credentials.available()).thenReturn(true);
         when(sessions.currentRegisteredProof("0", "fixture-client", "agt_fixture")).thenReturn(proof("fixture-owner", "fixture-host", "fixture-instance", 2));
     }
+    @Test void nativeInventoryFixtureBindsScopeCountAndDigestWithoutProvisioning() throws Exception {
+        try (var input = getClass().getResourceAsStream("/hosting/hosting-inventory-v1.json")) {
+            assertNotNull(input);
+            var fixture = JSON.readValue(input, new TypeReference<Map<String, Map<String, Object>>>() {});
+            var request = fixture.get("request"); var response = fixture.get("response");
+            var adapter = adapter(); doReturn(response).when(adapter).exchange(request);
+            var inventory = adapter.inventory("0", "fixture-client", "fixture-owner", "agt_fixture");
+            assertNotNull(inventory); assertEquals(2, inventory.installedSkillCount());
+            assertEquals(List.of("installed", "菜谱"), inventory.skills().stream().map(ManagedHostingProvisioner.InstalledSkill::skillKey).toList());
+            verify(credentials, never()).ensureInstallation(any(), any()); verifyNoInteractions(sessions);
+            for (String field : List.of("tenantId", "clientId", "ownerJiacn", "canonicalAgentId", "inventoryVersion", "installedSkillCount", "inventorySha256")) {
+                var changed = new LinkedHashMap<>(response); changed.put(field, "wrong");
+                assertNull(UnixManagedHostingProvisioner.decodeInventory(request, changed), field);
+            }
+            var partial = new LinkedHashMap<>(response); partial.put("skills", List.of());
+            assertNull(UnixManagedHostingProvisioner.decodeInventory(request, partial));
+            assertNull(UnixManagedHostingProvisioner.decodeInventory(request, null));
+            TransactionSynchronizationManager.setActualTransactionActive(true);
+            try { assertThrows(IllegalStateException.class, () -> adapter.inventory("0", "fixture-client", "fixture-owner", "agt_fixture")); }
+            finally { TransactionSynchronizationManager.setActualTransactionActive(false); }
+        }
+    }
+
     @Test void sharedCurrentFixtureDecodesExactAdmittedAssociation() throws Exception {
         try (var input = getClass().getResourceAsStream("/hosting/hosting-current-v1.json")) {
             assertNotNull(input);

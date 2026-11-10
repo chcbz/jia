@@ -17,6 +17,13 @@ public interface ManagedHostingProvisioner {
             throw new IllegalStateException("Hosting capability I/O inside transaction");
         return availableFor(tenantId, clientId, ownerJiacn);
     }
+    /** Public installed inventory only, transaction-external; null is unknown, never zero fees. */
+    SkillInventory inventory(String tenantId, String clientId, String ownerJiacn, String agentId);
+    record InstalledSkill(String skillKey, String source, String revision) { }
+    record SkillInventory(String hostId, String inventorySha256, java.util.List<InstalledSkill> skills) {
+        public SkillInventory { skills = java.util.List.copyOf(skills); }
+        public long installedSkillCount() { return skills.size(); }
+    }
     record Candidate(String installationId, String manifestSha256, String enrollmentSecretSha256,
                      long enrollmentExpiresAt, long provisionGeneration, String hostId) { }
     Observation prepareAndObserve(Preparation preparation);
