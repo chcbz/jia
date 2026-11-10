@@ -135,8 +135,15 @@ class WxSchedulingTransactionMySqlTest extends SkillManagementMySqlFixture {
         };
         assertThrows(IllegalStateException.class,()->dispatch(failedResult,sender).executeScheduled(invocation(claim)));
         assertEquals(State.STARTED,notices.find(key).state());
-        assertTrue(work.retry(claim,at));
-        var reclaimed=work.claimDue("",1,60000).getFirst();
+        // Retry deadlines use the same database clock as settlement, not the earlier planning clock.
+        assertTrue(work.retryAfter(claim,1));
+        var reclaimed=assertTimeoutPreemptively(java.time.Duration.ofSeconds(5),()->{
+            for (;;) {
+                var due=work.claimDue("",1,60000);
+                if (!due.isEmpty()) return due.getFirst();
+                Thread.sleep(5);
+            }
+        });
         dispatch(new JdbcWxScheduledNoticeStore(new JdbcTemplate(source(DATABASE)),scope),sender).executeScheduled(invocation(reclaimed));
         assertTrue(work.succeed(reclaimed));assertNull(work.nextWake(""));assertEquals(State.STARTED,notices.find(key).state());
         verify(sender,times(1)).sendScheduledWxTemplate(eq("client"),eq(WxSchedule.typeCode(key.kind())),eq("owner"),any(String[].class));

@@ -85,10 +85,14 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
         when(wxMpService.checkSignature("1710000000", "nonce", "valid-signature")).thenReturn(true);
     }
 
-    private void stubAccountAndIdentity() {
+    private void stubAccount() {
         MpInfoEntity account = new MpInfoEntity()
                 .setAppid(APPID).setOriginal(ORIGINAL).setClientId("client-1").setName("公众号");
         when(mpInfoService.findCachedByKey(APPID)).thenReturn(account);
+    }
+
+    private void stubAccountAndIdentity() {
+        stubAccount();
         when(mpUserService.findByAppIdAndOpenId(APPID, OPENID)).thenReturn(new MpUserEntity()
                 .setId(17L).setAppid(APPID).setOpenId(OPENID).setJiacn("user-1"));
     }
@@ -168,7 +172,8 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
 
     @Test
     void questionCommandNeverRunsQuestionLookupOnTheCallbackThreadWhenDispatchFails() throws Exception {
-        stubValidDailyVoteRequest();
+        stubValidSignature();
+        stubAccount();
         doThrow(new IllegalStateException("executor unavailable"))
                 .when(dailyVoteQuestionExecutor).execute(any(Runnable.class));
 
@@ -177,7 +182,7 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
 
         assertTrue(response.contains("正在为你准备题目，将继续发送到本会话。"));
         verify(voteService, never()).findScheduledQuestion(anyString(), anyString());
-        verifyNoInteractions(dailyVoteService);
+        verifyNoInteractions(dailyVoteService, mpUserService);
     }
 
     @Test
