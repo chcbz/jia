@@ -41,7 +41,7 @@ class ArchiveQuestionControllerTest {
     @Test
     void replayed202UsesCurrentRequestIdForBothCreateAndRetry() throws Exception {
         var service = mock(ArchiveQuestionService.class);
-        var controller = new ArchiveQuestionController(service, mock(ArchiveQuestionSseService.class), enabledPolicy());
+        var controller = new ArchiveQuestionController(service, mock(ArchiveQuestionSseService.class), enabledPolicy(), new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         var converters = new java.util.ArrayList<org.springframework.http.converter.HttpMessageConverter<?>>();
         converters.add(new org.springframework.http.converter.ByteArrayHttpMessageConverter());
         converters.add(new org.springframework.http.converter.json.JacksonJsonHttpMessageConverter());
@@ -77,14 +77,14 @@ class ArchiveQuestionControllerTest {
     void directJwtDerivesExactOwnerAndCreateReturnsStored202BusinessResult() {
         ArchiveQuestionService service = mock(ArchiveQuestionService.class);
         ArchiveQuestionSseService streams = mock(ArchiveQuestionSseService.class);
-        ArchiveQuestionController controller = new ArchiveQuestionController(service, streams, enabledPolicy());
+        ArchiveQuestionController controller = new ArchiveQuestionController(service, streams, enabledPolicy(), new cn.jia.core.security.FixedTenantAdmissionPolicy("process-a", null));
         HttpServletRequest request = mock(HttpServletRequest.class);
         byte[] stored = "{\"protocolVersion\":1,\"requestId\":null,\"code\":\"E0\",\"msg\":\"ok\",\"data\":{\"version\":\"1\"}}".getBytes(StandardCharsets.UTF_8);
         when(service.create(any(), any(), any(), any(), any())).thenReturn(
                 new ArchiveMutationResult(202, "application/json;charset=UTF-8", stored, true));
 
         var response = controller.create(ID, "key", "{}".getBytes(StandardCharsets.UTF_8), request,
-                jwt(Map.of("jiacn", "owner-a", "client_id", "client-a")));
+                jwt(Map.of("jiacn", "owner-a", "client_id", "client-a", "tenant_id", "caller-cannot-select")));
         assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
         assertEquals(cn.jia.core.util.JsonUtil.getMapper().readTree(stored).get("data"),
                 cn.jia.core.util.JsonUtil.getMapper().valueToTree(((JsonResult<?>) response.getBody()).getData()));
@@ -92,14 +92,14 @@ class ArchiveQuestionControllerTest {
         verify(service).create(owner.capture(), org.mockito.ArgumentMatchers.eq(ID),
                 org.mockito.ArgumentMatchers.eq("/archive/v1/me/questions/" + ID),
                 org.mockito.ArgumentMatchers.eq("key"), any());
-        assertEquals(new ArchiveOwnerScope("0", "client-a", "owner-a"), owner.getValue());
+        assertEquals(new ArchiveOwnerScope("process-a", "client-a", "owner-a"), owner.getValue());
     }
 
     @Test
     void authSyntaxThenFeatureGateFailClosedBeforeAnyServiceOrStreamAccess() {
         ArchiveQuestionService service = mock(ArchiveQuestionService.class);
         ArchiveQuestionSseService streams = mock(ArchiveQuestionSseService.class);
-        ArchiveQuestionController controller = new ArchiveQuestionController(service, streams, disabledPolicy());
+        ArchiveQuestionController controller = new ArchiveQuestionController(service, streams, disabledPolicy(), new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         HttpServletRequest request = mock(HttpServletRequest.class);
         JwtAuthenticationToken valid = jwt(Map.of("jiacn", "owner-a", "client_id", "client-a"));
 
@@ -125,7 +125,7 @@ class ArchiveQuestionControllerTest {
     void canonicalLowercaseUuidConcealsMalformedAndNonAsciiPaths() {
         ArchiveQuestionService service = mock(ArchiveQuestionService.class);
         ArchiveQuestionController controller = new ArchiveQuestionController(
-                service, mock(ArchiveQuestionSseService.class), enabledPolicy());
+                service, mock(ArchiveQuestionSseService.class), enabledPolicy(), new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         HttpServletRequest request = mock(HttpServletRequest.class);
         JwtAuthenticationToken valid = jwt(Map.of("jiacn", "owner-a", "client_id", "client-a"));
         for (String invalid : List.of(ID.toUpperCase(), "水", "123", ID + "/")) {
@@ -140,7 +140,7 @@ class ArchiveQuestionControllerTest {
         ArchiveQuestionService service = mock(ArchiveQuestionService.class);
         ArchiveQuestionSseService streams = mock(ArchiveQuestionSseService.class);
         JwtAuthenticationToken valid = jwt(Map.of("jiacn", "owner-a", "client_id", "client-a"));
-        ArchiveQuestionController disabled = new ArchiveQuestionController(service, streams, disabledPolicy());
+        ArchiveQuestionController disabled = new ArchiveQuestionController(service, streams, disabledPolicy(), new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         for (String invalid : List.of("", "01", "-1", "+1", " 1", "1.0", "1e2", "9223372036854775808")) {
             var response = disabled.events(ID, invalid, valid, mock(HttpServletRequest.class));
             assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode(), invalid);
@@ -149,7 +149,7 @@ class ArchiveQuestionControllerTest {
         assertEquals(HttpStatus.NOT_FOUND, disabled.events(ID, null, valid, mock(HttpServletRequest.class)).getStatusCode());
         verify(streams, never()).open(any(), any(), anyLong(), any());
 
-        ArchiveQuestionController enabled = new ArchiveQuestionController(service, streams, enabledPolicy());
+        ArchiveQuestionController enabled = new ArchiveQuestionController(service, streams, enabledPolicy(), new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         SseEmitter emitter = new SseEmitter();
         when(streams.open(any(), org.mockito.ArgumentMatchers.eq(ID), org.mockito.ArgumentMatchers.eq(Long.MAX_VALUE), any()))
                 .thenReturn(emitter);
@@ -162,7 +162,7 @@ class ArchiveQuestionControllerTest {
     void getRetryAndStreamMapConcealmentConflictRateAndProviderErrorsExactly() {
         ArchiveQuestionService service = mock(ArchiveQuestionService.class);
         ArchiveQuestionSseService streams = mock(ArchiveQuestionSseService.class);
-        ArchiveQuestionController controller = new ArchiveQuestionController(service, streams, enabledPolicy());
+        ArchiveQuestionController controller = new ArchiveQuestionController(service, streams, enabledPolicy(), new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         JwtAuthenticationToken valid = jwt(Map.of("jiacn", "owner-a", "client_id", "client-a"));
         HttpServletRequest request = mock(HttpServletRequest.class);
         when(service.get(any(), any())).thenReturn(new ArchiveQuestionDTO(ID, "1", "1", "QUEUED",

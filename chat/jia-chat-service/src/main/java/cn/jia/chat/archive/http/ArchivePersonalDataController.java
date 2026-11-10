@@ -29,16 +29,19 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 import java.util.Objects;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 
 @RestController
 @RequestMapping("/archive/v1/me")
 public class ArchivePersonalDataController {
+    private final FixedTenantAdmissionPolicy scope;
     private static final String CACHE_CONTROL = "private, no-store";
     private final ArchivePersonalDataService service;
     private final ArchiveReaderAccessPolicy accessPolicy;
 
     public ArchivePersonalDataController(ArchivePersonalDataService service,
-                                         ArchiveReaderAccessPolicy accessPolicy) {
+                                         ArchiveReaderAccessPolicy accessPolicy, FixedTenantAdmissionPolicy scope) {
+        this.scope = scope;
         this.service = Objects.requireNonNull(service, "service");
         this.accessPolicy = Objects.requireNonNull(accessPolicy, "accessPolicy");
     }
@@ -197,7 +200,7 @@ public class ArchivePersonalDataController {
                 || !ArchiveReaderAccessPolicy.validRequestClaim(clientId)) {
             return Authorization.failure(authIncomplete());
         }
-        return new Authorization(new ArchiveOwnerScope(ArchiveOwnerScope.SINGLE_TENANT, clientId, jiacn), null);
+        return new Authorization(new ArchiveOwnerScope(scope.businessTenantId(), clientId, jiacn), null);
     }
 
     private ResponseEntity<JsonResult<?>> mutationSyntax(HttpServletRequest request, String key, boolean pathValid) {

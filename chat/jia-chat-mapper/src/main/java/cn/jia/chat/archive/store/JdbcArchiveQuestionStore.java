@@ -2,6 +2,7 @@ package cn.jia.chat.archive.store;
 
 import cn.jia.chat.archive.model.ArchiveOwnerScope;
 import jakarta.inject.Named;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
@@ -44,9 +45,19 @@ public class JdbcArchiveQuestionStore implements ArchiveQuestionStore {
             rs.getString("last_error_code"), instant(rs.getTimestamp("created_at")),
             instant(rs.getTimestamp("updated_at")));
 
+    private static final String DISCOVERY_SCOPE = """
+            tenant_id=? AND CAST(tenant_id AS BINARY)=CAST(? AS BINARY)
+            AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(?)
+            AND (? IS NULL OR (client_id=? AND CAST(client_id AS BINARY)=CAST(? AS BINARY)
+                 AND OCTET_LENGTH(client_id)=OCTET_LENGTH(?)))
+            """;
+    private static final String PUBLISH_DISCOVERY_SCOPE = DISCOVERY_SCOPE
+            .replace("tenant_id", "o.tenant_id").replace("client_id", "o.client_id");
+    private final FixedTenantAdmissionPolicy scope;
     private final JdbcTemplate jdbc;
 
-    public JdbcArchiveQuestionStore(JdbcTemplate jdbc) {
+    public JdbcArchiveQuestionStore(JdbcTemplate jdbc, FixedTenantAdmissionPolicy scope) {
+        this.scope = Objects.requireNonNull(scope, "scope");
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
     }
 
@@ -251,9 +262,8 @@ public class JdbcArchiveQuestionStore implements ArchiveQuestionStore {
                 SELECT tenant_id,client_id,owner_jiacn,question_id,row_id,
                        CASE WHEN state='READY' THEN available_at ELSE lease_until END AS candidate_at
                 FROM archive_outbox
-                WHERE tenant_id='0'
-                  AND CAST(tenant_id AS BINARY)=CAST('0' AS BINARY)
-                  AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH('0')
+                WHERE\s""" + DISCOVERY_SCOPE + """
+
                   AND attempt_count<3
                   AND ((state='READY' AND available_at<=?)
                        OR (state='LEASED' AND lease_until<=?))
@@ -264,8 +274,8 @@ public class JdbcArchiveQuestionStore implements ArchiveQuestionStore {
                 """, (rs, ignored) -> new ClaimCandidate(new ArchiveOwnerScope(
                         rs.getString("tenant_id"), rs.getString("client_id"), rs.getString("owner_jiacn")),
                         rs.getString("question_id"), instant(rs.getTimestamp("candidate_at")),
-                        rs.getLong("row_id")), Timestamp.from(now), Timestamp.from(now), cursor, cursor,
-                cursor, afterRowId, limit);
+                        rs.getLong("row_id")), concat(discoveryArgs(), Timestamp.from(now), Timestamp.from(now), cursor, cursor,
+                cursor, afterRowId, limit));
     }
 
     @Override
@@ -275,16 +285,15 @@ public class JdbcArchiveQuestionStore implements ArchiveQuestionStore {
         return jdbc.query("""
                 SELECT tenant_id,client_id,owner_jiacn,question_id,row_id,lease_until AS candidate_at
                 FROM archive_outbox
-                WHERE tenant_id='0'
-                  AND CAST(tenant_id AS BINARY)=CAST('0' AS BINARY)
-                  AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH('0')
+                WHERE\s""" + DISCOVERY_SCOPE + """
+
                   AND state='LEASED' AND attempt_count>=3 AND lease_until<=?
                   AND (? IS NULL OR lease_until>? OR (lease_until=? AND row_id>?))
                 ORDER BY lease_until,row_id LIMIT ?
                 """, (rs, ignored) -> new ClaimCandidate(new ArchiveOwnerScope(
                         rs.getString("tenant_id"), rs.getString("client_id"), rs.getString("owner_jiacn")),
                         rs.getString("question_id"), instant(rs.getTimestamp("candidate_at")),
-                        rs.getLong("row_id")), Timestamp.from(now), cursor, cursor, cursor, afterRowId, limit);
+                        rs.getLong("row_id")), concat(discoveryArgs(), Timestamp.from(now), cursor, cursor, cursor, afterRowId, limit));
     }
 
     @Override
@@ -295,18 +304,22 @@ public class JdbcArchiveQuestionStore implements ArchiveQuestionStore {
                 FROM archive_outbox o JOIN archive_question q
                   ON q.tenant_id=o.tenant_id AND q.client_id=o.client_id
                  AND q.owner_jiacn=o.owner_jiacn AND q.question_id=o.question_id
-                WHERE o.tenant_id='0'
-                  AND q.tenant_id='0'
-                  AND CAST(o.tenant_id AS BINARY)=CAST('0' AS BINARY)
-                  AND CAST(q.tenant_id AS BINARY)=CAST('0' AS BINARY)
-                  AND OCTET_LENGTH(o.tenant_id)=OCTET_LENGTH('0')
-                  AND OCTET_LENGTH(q.tenant_id)=OCTET_LENGTH('0')
+                 AND CAST(q.tenant_id AS BINARY)=CAST(o.tenant_id AS BINARY)
+                 AND OCTET_LENGTH(q.tenant_id)=OCTET_LENGTH(o.tenant_id)
+                 AND CAST(q.client_id AS BINARY)=CAST(o.client_id AS BINARY)
+                 AND OCTET_LENGTH(q.client_id)=OCTET_LENGTH(o.client_id)
+                 AND CAST(q.owner_jiacn AS BINARY)=CAST(o.owner_jiacn AS BINARY)
+                 AND OCTET_LENGTH(q.owner_jiacn)=OCTET_LENGTH(o.owner_jiacn)
+                 AND CAST(q.question_id AS BINARY)=CAST(o.question_id AS BINARY)
+                 AND OCTET_LENGTH(q.question_id)=OCTET_LENGTH(o.question_id)
+                WHERE\s""" + PUBLISH_DISCOVERY_SCOPE + """
+
                   AND o.published_sequence<q.current_sequence AND o.row_id>?
                 ORDER BY o.row_id LIMIT ?
                 """, (rs, ignored) -> new PublishCandidate(new ArchiveOwnerScope(
                         rs.getString("tenant_id"), rs.getString("client_id"), rs.getString("owner_jiacn")),
                         rs.getString("question_id"), rs.getLong("row_id"),
-                        rs.getLong("published_sequence"), rs.getLong("current_sequence")), afterRowId, limit);
+                        rs.getLong("published_sequence"), rs.getLong("current_sequence")), concat(discoveryArgs(), afterRowId, limit));
     }
 
     @Override
@@ -315,6 +328,11 @@ public class JdbcArchiveQuestionStore implements ArchiveQuestionStore {
                   AND question_id=? AND CAST(question_id AS BINARY)=CAST(? AS BINARY)
                   AND OCTET_LENGTH(question_id)=OCTET_LENGTH(?) AND published_sequence=?
                 """, concat(new Object[]{delivered}, scopeArgs(owner), questionId, questionId, questionId, expected));
+    }
+
+    private Object[] discoveryArgs() {
+        return new Object[]{scope.businessTenantId(), scope.businessTenantId(), scope.businessTenantId(),
+                scope.clientId(), scope.clientId(), scope.clientId(), scope.clientId()};
     }
 
     private static Object[] scopeArgs(ArchiveOwnerScope owner) {

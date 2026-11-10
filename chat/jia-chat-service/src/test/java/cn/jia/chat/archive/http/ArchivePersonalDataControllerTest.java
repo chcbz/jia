@@ -42,23 +42,23 @@ class ArchivePersonalDataControllerTest {
     @Test
     void directJwtOnlyDerivesExactOwnerTupleWithoutAliasFallback() {
         ArchivePersonalDataService service = mock(ArchivePersonalDataService.class);
-        ArchivePersonalDataController controller = new ArchivePersonalDataController(service, enabledPolicy());
+        ArchivePersonalDataController controller = new ArchivePersonalDataController(service, enabledPolicy(), new cn.jia.core.security.FixedTenantAdmissionPolicy("process-a", null));
 
         assertEquals(HttpStatus.UNAUTHORIZED, controller.progress(EDITION,
                 new UsernamePasswordAuthenticationToken("tenant-a", "n/a")).getStatusCode());
         assertEquals(HttpStatus.UNAUTHORIZED, controller.progress(EDITION,
                 jwt(Map.of("sub", "tenant-a", "aud", List.of("client-a")))).getStatusCode());
 
-        controller.progress(EDITION, jwt(Map.of("jiacn", "owner-a", "client_id", "client-a")));
+        controller.progress(EDITION, jwt(Map.of("jiacn", "owner-a", "client_id", "client-a", "tenant_id", "caller-cannot-select")));
         ArgumentCaptor<ArchiveOwnerScope> owner = ArgumentCaptor.forClass(ArchiveOwnerScope.class);
         verify(service).progress(owner.capture(), org.mockito.ArgumentMatchers.eq(EDITION));
-        assertEquals(new ArchiveOwnerScope("0", "client-a", "owner-a"), owner.getValue());
+        assertEquals(new ArchiveOwnerScope("process-a", "client-a", "owner-a"), owner.getValue());
     }
 
     @Test
     void authThenSyntaxThenFeatureGatePreventsServiceReadsAndWrites() {
         ArchivePersonalDataService service = mock(ArchivePersonalDataService.class);
-        ArchivePersonalDataController controller = new ArchivePersonalDataController(service, disabledPolicy());
+        ArchivePersonalDataController controller = new ArchivePersonalDataController(service, disabledPolicy(), new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         HttpServletRequest request = mock(HttpServletRequest.class);
         JwtAuthenticationToken valid = jwt(Map.of("jiacn", "tenant-a", "client_id", "client-a"));
 
@@ -80,7 +80,7 @@ class ArchivePersonalDataControllerTest {
     @Test
     void nonAsciiProgressIdentifierIsConcealedBeforeServiceAtControllerAndMvcLayers() throws Exception {
         ArchivePersonalDataService service = mock(ArchivePersonalDataService.class);
-        ArchivePersonalDataController controller = new ArchivePersonalDataController(service, enabledPolicy());
+        ArchivePersonalDataController controller = new ArchivePersonalDataController(service, enabledPolicy(), new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         HttpServletRequest request = mock(HttpServletRequest.class);
         JwtAuthenticationToken valid = jwt(Map.of("jiacn", "owner-a", "client_id", "client-a"));
         when(service.putProgress(any(), org.mockito.ArgumentMatchers.eq("水"), any(), any(), any()))
@@ -120,7 +120,7 @@ class ArchivePersonalDataControllerTest {
     @Test
     void deleteAcceptsOnlyExactStrongSingleVersionAndSuccessfulReplayBusinessResultIsPreserved() {
         ArchivePersonalDataService service = mock(ArchivePersonalDataService.class);
-        ArchivePersonalDataController controller = new ArchivePersonalDataController(service, enabledPolicy());
+        ArchivePersonalDataController controller = new ArchivePersonalDataController(service, enabledPolicy(), new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         HttpServletRequest request = mock(HttpServletRequest.class);
         JwtAuthenticationToken valid = jwt(Map.of("jiacn", "tenant-a", "client_id", "client-a"));
 
@@ -144,7 +144,7 @@ class ArchivePersonalDataControllerTest {
     @Test
     void uuidSyntaxAcceptsVersion8AndFutureHexButRejectsUppercase() {
         ArchivePersonalDataService service = mock(ArchivePersonalDataService.class);
-        ArchivePersonalDataController controller = new ArchivePersonalDataController(service, enabledPolicy());
+        ArchivePersonalDataController controller = new ArchivePersonalDataController(service, enabledPolicy(), new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         HttpServletRequest request = mock(HttpServletRequest.class);
         JwtAuthenticationToken valid = jwt(Map.of("jiacn", "owner-a", "client_id", "client-a"));
         when(service.putBookmark(any(), any(), any(), any(), any()))
@@ -164,7 +164,7 @@ class ArchivePersonalDataControllerTest {
     @Test
     void listSyntaxIsCanonicalAndCheckedBeforeDisabledGate() {
         ArchivePersonalDataService service = mock(ArchivePersonalDataService.class);
-        ArchivePersonalDataController controller = new ArchivePersonalDataController(service, disabledPolicy());
+        ArchivePersonalDataController controller = new ArchivePersonalDataController(service, disabledPolicy(), new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         JwtAuthenticationToken valid = jwt(Map.of("jiacn", "tenant-a", "client_id", "client-a"));
 
         var invalidCursor = controller.bookmarks(EDITION, "01", "100", valid);

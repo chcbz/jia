@@ -32,8 +32,12 @@ class ArchiveQuestionFeatureFlagTest {
                 ArchiveQuestionEventDelivery.class)) {
             ConditionalOnProperty condition = type.getAnnotation(ConditionalOnProperty.class);
             assertNotNull(condition, type.getName());
-            assertEquals("archive.question", condition.prefix(), type.getName());
-            assertTrue(List.of(condition.name()).contains("enabled"), type.getName());
+            if (type == ArchiveQuestionBootstrap.class) {
+                assertTrue(List.of(condition.name()).containsAll(List.of("archive.question.enabled", "cyf.task.scheduling.enabled")));
+            } else {
+                assertEquals("archive.question", condition.prefix(), type.getName());
+                assertTrue(List.of(condition.name()).contains("enabled"), type.getName());
+            }
             assertEquals("true", condition.havingValue(), type.getName());
             assertTrue(condition.matchIfMissing() == false, type.getName());
         }

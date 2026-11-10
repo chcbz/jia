@@ -35,10 +35,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import cn.jia.agent.skill.SkillManagementMySqlFixture;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 
-/** Destructive H05A evidence; guarded for an explicit disposable loopback MySQL 8.0.21 fixture only. */
-class ArchiveQuestionMySqlIntegrationTest {
+/** Real production SQL on this test process's owned, disposable MySQL only. */
+class ArchiveQuestionMySqlIntegrationTest extends SkillManagementMySqlFixture {
     private static final Instant NOW = Instant.parse("2026-08-22T12:00:00Z");
     private JdbcTemplate jdbc;
     private ArchiveQuestionSchemaInitializer questionSchema;
@@ -51,14 +52,8 @@ class ArchiveQuestionMySqlIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        assumeTrue("true".equals(System.getenv("CYF_H05A_MYSQL_ISOLATED")),
-                "requires explicit isolated H05A MySQL acknowledgement");
-        var target = ArchiveQuestionMySqlTestGuard.requireDisposable(System.getenv());
-        DriverManagerDataSource dataSource = new DriverManagerDataSource();
-        dataSource.setDriverClassName("com.mysql.cj.jdbc.Driver");
-        dataSource.setUrl(target.url());
-        dataSource.setUsername(System.getenv().getOrDefault("CYF_H05A_MYSQL_USER", "root"));
-        dataSource.setPassword(System.getenv().getOrDefault("CYF_H05A_MYSQL_PASSWORD", ""));
+        admin.execute("CREATE DATABASE IF NOT EXISTS cyf_h05a_scheduling CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin");
+        DriverManagerDataSource dataSource = source("cyf_h05a_scheduling");
         jdbc = new JdbcTemplate(dataSource);
         clean();
         new ArchiveSchemaInitializer(jdbc).initialize();
@@ -72,7 +67,7 @@ class ArchiveQuestionMySqlIntegrationTest {
                 .importAndActivate(bundle.manifest(), bundle.manifestFileSha256());
         manifest = bundle.manifest();
         body = questionBody(manifest.chapters().getFirst(), "何谓忠义？");
-        store = new JdbcArchiveQuestionStore(jdbc);
+        store = new JdbcArchiveQuestionStore(jdbc, new FixedTenantAdmissionPolicy("owner-a", null));
         delivery = new ArchiveQuestionEventDelivery(store, new ArchiveQuestionEventBroker(), transactions);
         service = new ArchiveQuestionServiceImpl(store, new JdbcArchivePersonalDataStore(jdbc), transactions,
                 new ArchiveClerkFallbackProvider(), delivery, Clock.fixed(NOW, ZoneOffset.UTC));
@@ -205,6 +200,13 @@ class ArchiveQuestionMySqlIntegrationTest {
         ArchiveQuestionWorker worker = new ArchiveQuestionWorker(store, transactions,
                 new ArchiveClerkFallbackProvider(), delivery, enabledPolicy(), Clock.fixed(NOW, ZoneOffset.UTC));
         for (int index = 0; index < 10 && worker.runOnce(); index++) { }
+        // A second configured process owns the other tenant; the first must not claim it.
+        for (ArchiveOwnerScope owner : owners) if ("owner-b".equals(owner.tenantId()))
+            assertEquals("QUEUED", service.get(owner, id).status());
+        var peerStore = new JdbcArchiveQuestionStore(jdbc, new FixedTenantAdmissionPolicy("owner-b", null));
+        var peer = new ArchiveQuestionWorker(peerStore, transactions,
+                new ArchiveClerkFallbackProvider(), delivery, enabledPolicy(), Clock.fixed(NOW, ZoneOffset.UTC));
+        for (int index = 0; index < 10 && peer.runOnce(); index++) { }
         for (ArchiveOwnerScope owner : owners) assertEquals("SUCCEEDED", service.get(owner, id).status());
         assertEquals("SUCCEEDED", service.get(owners.getFirst(), raceId).status());
         assertEquals("SUCCEEDED", service.get(owners.getFirst(), conflictRaceId).status());
@@ -276,6 +278,30 @@ class ArchiveQuestionMySqlIntegrationTest {
 
         jdbc.execute("ALTER TABLE archive_question_event MODIFY payload_json LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL");
         assertThrows(IllegalStateException.class, questionSchema::initialize);
+    }
+
+    @Test
+    void configuredDiscoveryPartitionsBeforeLimitAndPreservesExactStoredOwner() {
+        delivery.stop(); // Freeze publication watermarks; no test subscriber or background mutation.
+        String id = "623e4567-e89b-42d3-a456-426614174000";
+        int index = 0;
+        for (var pair : List.of(List.of("tenant-b", "client-a"), List.of("Tenant-a", "client-a"),
+                List.of("tenant-a ", "client-a"), List.of("tenant-a", "client-b"),
+                List.of("tenant-a", "Client-a"), List.of("tenant-a", "client-a "))) {
+            var foreign = new ArchiveOwnerScope(pair.get(0), pair.get(1), "foreign-" + index++);
+            service.create(foreign, id, path(id), "foreign", body);
+        }
+        var owner = new ArchiveOwnerScope("tenant-a", "client-a", "owner-current");
+        service.create(owner, id, path(id), "current", body);
+        var scoped = new JdbcArchiveQuestionStore(jdbc, new FixedTenantAdmissionPolicy("tenant-a", "client-a"));
+        assertEquals(owner, scoped.listClaimCandidates(NOW, null, 0, 1).getFirst().owner());
+        assertEquals(owner, scoped.findPublishCandidates(0, 1).getFirst().owner());
+        assertEquals("QUEUED", scoped.findQuestion(owner, id, false).status());
+        jdbc.update("UPDATE archive_outbox SET state='LEASED',attempt_count=3,lease_until=?",
+                java.sql.Timestamp.from(NOW.minusSeconds(1)));
+        assertEquals(owner, scoped.listExhaustedCandidates(NOW, null, 0, 1).getFirst().owner());
+        var other = new JdbcArchiveQuestionStore(jdbc, new FixedTenantAdmissionPolicy("tenant-b", "client-a"));
+        assertEquals("tenant-b", other.listExhaustedCandidates(NOW, null, 0, 1).getFirst().owner().tenantId());
     }
 
     private byte[] questionBody(ArchiveManifest.Block block, String question) {

@@ -566,6 +566,15 @@ tasks.register('archiveMaintenanceTest', Test) {
 // Reuses existing test sources and fixtures without compiling unrelated chat suites.
 def archiveReaderRegressionSourceSet = sourceSets.create('archiveReaderRegression') {
     java.setSrcDirs(['src/test/java'])
+    java.srcDir '../jia-chat-mapper/src/test/java'
+    java.srcDir '../../agent/jia-agent-service/src/skillManagementContract/java'
+    java.include 'cn/jia/agent/skill/SkillManagementMySqlFixture.java'
+    java.include 'cn/jia/chat/archive/store/JdbcArchiveQuestionStoreTest.java'
+    java.include 'cn/jia/chat/archive/config/ArchiveQuestionBootstrapTest.java'
+    java.include 'cn/jia/chat/archive/config/ArchiveQuestionFeatureFlagTest.java'
+    java.include 'cn/jia/chat/archive/service/ArchiveQuestionWorkerTest.java'
+    java.include 'cn/jia/chat/archive/service/ArchiveQuestionTestSupport.java'
+    java.include 'cn/jia/chat/archive/service/ArchiveQuestionMySqlIntegrationTest.java'
     java.include 'cn/jia/chat/archive/content/ArchiveFixtureLoader.java'
     java.include 'cn/jia/chat/archive/content/ArchiveManifestBundle.java'
     java.include 'cn/jia/chat/archive/content/ArchiveGoldenSummary.java'

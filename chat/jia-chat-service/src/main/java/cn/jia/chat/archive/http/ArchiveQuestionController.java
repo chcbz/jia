@@ -29,19 +29,22 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.Map;
 import java.util.Objects;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import java.util.UUID;
 
 @ConditionalOnProperty(prefix = "archive.question", name = "enabled", havingValue = "true")
 @RestController
 @RequestMapping("/archive/v1/me/questions")
 public class ArchiveQuestionController {
+    private final FixedTenantAdmissionPolicy scope;
     private static final String CACHE_CONTROL = "private, no-store";
     private final ArchiveQuestionService service;
     private final ArchiveQuestionSseService streams;
     private final ArchiveQuestionAccessPolicy accessPolicy;
 
     public ArchiveQuestionController(ArchiveQuestionService service, ArchiveQuestionSseService streams,
-                                     ArchiveQuestionAccessPolicy accessPolicy) {
+                                     ArchiveQuestionAccessPolicy accessPolicy, FixedTenantAdmissionPolicy scope) {
+        this.scope = scope;
         this.service = Objects.requireNonNull(service, "service");
         this.streams = Objects.requireNonNull(streams, "streams");
         this.accessPolicy = Objects.requireNonNull(accessPolicy, "accessPolicy");
@@ -129,7 +132,7 @@ public class ArchiveQuestionController {
                 || !ArchiveReaderAccessPolicy.validRequestClaim(clientId)) {
             return Authorization.failure(authIncomplete());
         }
-        return new Authorization(new ArchiveOwnerScope(ArchiveOwnerScope.SINGLE_TENANT, clientId, ownerJiacn), null);
+        return new Authorization(new ArchiveOwnerScope(scope.businessTenantId(), clientId, ownerJiacn), null);
     }
 
     private ResponseEntity<JsonResult<?>> mutationSyntax(String questionId, String key, HttpServletRequest request) {

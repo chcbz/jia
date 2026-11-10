@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -51,7 +52,8 @@ public class ArchiveQuestionWorker {
     private final Duration renewInterval;
     private final AtomicBoolean started = new AtomicBoolean();
     private final Object executorLock = new Object();
-    private ScheduledExecutorService executor;
+    private ExecutorService executor;
+    private final AtomicBoolean running = new AtomicBoolean();
     private ScheduledExecutorService leaseExecutor;
     private final RetryBudget retryBudget = new RetryBudget(RETRY_CAPACITY);
     private final QueueScanState claimScan = new QueueScanState(retryBudget);
@@ -92,8 +94,27 @@ public class ArchiveQuestionWorker {
     public void start() {
         if (!accessPolicy.enabled() || !started.compareAndSet(false, true)) return;
         synchronized (executorLock) {
-            executor = daemonScheduler("archive-question-worker");
-            executor.scheduleWithFixedDelay(this::safeRun, 0, 250, TimeUnit.MILLISECONDS);
+            executor = Executors.newSingleThreadExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "archive-question-worker");
+                thread.setDaemon(true);
+                return thread;
+            });
+        }
+    }
+
+    /** Unified scheduling submits work; Provider I/O and lease renewal stay on their own workers. */
+    public void submit() {
+        synchronized (executorLock) {
+            if (!started.get() || executor == null || !running.compareAndSet(false, true)) return;
+            try {
+                executor.execute(() -> {
+                    try { safeRun(); }
+                    finally { running.set(false); }
+                });
+            } catch (RuntimeException rejected) {
+                running.set(false);
+                throw rejected;
+            }
         }
     }
 
@@ -558,8 +579,7 @@ public class ArchiveQuestionWorker {
 
     private boolean allowed(ArchiveOwnerScope owner) {
         return owner != null
-                && ArchiveOwnerScope.SINGLE_TENANT.equals(owner.tenantId())
-                && !ArchiveOwnerScope.SINGLE_TENANT.equals(owner.ownerJiacn())
+                && !"0".equals(owner.ownerJiacn())
                 && ArchiveReaderAccessPolicy.validRequestClaim(owner.ownerJiacn())
                 && accessPolicy.allows(owner.tenantId(), owner.clientId());
     }
@@ -602,7 +622,7 @@ public class ArchiveQuestionWorker {
     public void stop() {
         started.set(false);
         synchronized (executorLock) {
-            ScheduledExecutorService current = executor;
+            ExecutorService current = executor;
             executor = null;
             if (current != null) current.shutdownNow();
             ScheduledExecutorService currentLease = leaseExecutor;

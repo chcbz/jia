@@ -79,6 +79,29 @@ class ArchiveQuestionWorkerTest {
     }
 
     @Test
+    void startDoesNotPollAndUnifiedSubmissionsCoalesceWithoutBlockingCaller() throws Exception {
+        var worker = org.mockito.Mockito.spy(worker(request -> ArchiveQuestionProvider.Answer.complete("unused")));
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var callers = java.util.concurrent.Executors.newSingleThreadExecutor();
+        org.mockito.Mockito.doAnswer(invocation -> {
+            entered.countDown(); release.await(); return false;
+        }).when(worker).runOnce();
+        try {
+            worker.start();
+            org.mockito.Mockito.verify(worker, org.mockito.Mockito.never()).runOnce();
+            callers.submit(worker::submit).get(5, java.util.concurrent.TimeUnit.SECONDS);
+            assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS));
+            callers.submit(() -> { for (int i = 0; i < 10; i++) worker.submit(); }).get(5, java.util.concurrent.TimeUnit.SECONDS);
+            org.mockito.Mockito.verify(worker).runOnce();
+        } finally {
+            release.countDown(); worker.stop(); callers.shutdownNow();
+        }
+        worker.submit();
+        org.mockito.Mockito.verify(worker).runOnce();
+    }
+
+    @Test
     void springContextSelectsFiveArgumentProductionConstructor() {
         ArchiveQuestionProvider provider = request -> ArchiveQuestionProvider.Answer.complete("unused");
         try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {

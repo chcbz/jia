@@ -17,9 +17,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class JdbcArchiveQuestionStoreTest {
     @Test
-    void ownerScopeCanonicalizesAnyLegacyTenantToZeroWithoutChangingClientOrOwner() {
+    void ownerScopePreservesTrustedTenantWithoutChangingClientOrOwner() {
         ArchiveOwnerScope scope = new ArchiveOwnerScope("legacy-tenant", "client-a", "owner-a");
-        assertEquals("0", scope.tenantId());
+        assertEquals("legacy-tenant", scope.tenantId());
         assertEquals("client-a", scope.clientId());
         assertEquals("owner-a", scope.ownerJiacn());
     }
@@ -40,7 +40,7 @@ class JdbcArchiveQuestionStoreTest {
     @Test
     void replayQueryFreezesExclusiveInclusiveBoundsExactQuestionAndAscendingSequence() {
         RecordingJdbcTemplate jdbc = new RecordingJdbcTemplate();
-        JdbcArchiveQuestionStore store = new JdbcArchiveQuestionStore(jdbc);
+        JdbcArchiveQuestionStore store = new JdbcArchiveQuestionStore(jdbc, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         ArchiveOwnerScope owner = new ArchiveOwnerScope("0", "client", "owner");
         store.listEvents(owner, "123e4567-e89b-42d3-a456-426614174000", 7, 19, 100);
         assertTrue(jdbc.sql.contains("sequence>? AND sequence<=? ORDER BY sequence LIMIT ?"));
@@ -69,7 +69,7 @@ class JdbcArchiveQuestionStoreTest {
     @Test
     void leaseRenewalIsExactScopedCurrentFenceOnlyAndCandidateScansAreBounded() {
         RecordingJdbcTemplate jdbc = new RecordingJdbcTemplate();
-        JdbcArchiveQuestionStore store = new JdbcArchiveQuestionStore(jdbc);
+        JdbcArchiveQuestionStore store = new JdbcArchiveQuestionStore(jdbc, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         ArchiveOwnerScope owner = new ArchiveOwnerScope("0", "client", "tenant");
         Instant now = Instant.parse("2026-08-22T12:00:00Z");
 
@@ -84,24 +84,26 @@ class JdbcArchiveQuestionStoreTest {
         store.listClaimCandidates(now, null, 0, 100);
         assertTrue(jdbc.sql.contains("ORDER BY candidate_at,row_id LIMIT ?"));
         assertTrue(jdbc.sql.contains("row_id>?"));
-        assertEquals(100, jdbc.args[6]);
+        assertEquals(100, jdbc.args[13]);
+        assertArrayEquals(new Object[]{"0", "0", "0", null, null, null, null}, Arrays.copyOf(jdbc.args, 7));
         store.listExhaustedCandidates(now, null, 0, 50);
         assertTrue(jdbc.sql.contains("ORDER BY lease_until,row_id LIMIT ?"));
         assertTrue(jdbc.sql.contains("lease_until=? AND row_id>?"));
-        assertEquals(50, jdbc.args[5]);
+        assertEquals(50, jdbc.args[12]);
 
         store.findPublishCandidates(123, 25);
         assertTrue(jdbc.sql.contains("o.row_id>?"));
         assertTrue(jdbc.sql.contains("ORDER BY o.row_id LIMIT ?"));
-        assertArrayEquals(new Object[]{123L, 25}, jdbc.args);
+        assertArrayEquals(new Object[]{"0", "0", "0", null, null, null, null, 123L, 25}, jdbc.args);
     }
 
     @Test
     void claimAndRecoveryQueriesCarryDurableLeaseFencingAndPublicationWatermark() throws Exception {
         String source = java.nio.file.Files.readString(java.nio.file.Path.of(
-                "src/main/java/cn/jia/chat/archive/store/JdbcArchiveQuestionStore.java"));
-        assertTrue(source.contains("WHERE tenant_id='0'"));
-        assertTrue(source.contains("WHERE o.tenant_id='0'"));
+                "../jia-chat-mapper/src/main/java/cn/jia/chat/archive/store/JdbcArchiveQuestionStore.java"));
+        assertTrue(source.contains("tenant_id=? AND CAST(tenant_id AS BINARY)=CAST(? AS BINARY)"));
+        assertTrue(source.contains("scope.businessTenantId()"));
+        assertTrue(source.contains("PUBLISH_DISCOVERY_SCOPE"));
         assertTrue(source.contains("attempt_count<3"));
         assertTrue(source.contains("state='LEASED' AND lease_until<=?"));
         assertTrue(source.contains("ORDER BY candidate_at,row_id LIMIT ?"));
@@ -112,6 +114,23 @@ class JdbcArchiveQuestionStoreTest {
         assertTrue(source.contains("published_sequence<q.current_sequence AND o.row_id>?"));
         assertTrue(source.contains("AND published_sequence=?"));
         assertTrue(source.contains("FOR UPDATE"));
+    }
+
+    @Test
+    void discoveryBindsConfiguredPartitionBeforeOrderingAndLimit() {
+        var jdbc = new RecordingJdbcTemplate();
+        var store = new JdbcArchiveQuestionStore(jdbc,
+                new cn.jia.core.security.FixedTenantAdmissionPolicy("tenant-a", "client-a"));
+        Instant now = Instant.parse("2026-08-22T12:00:00Z");
+        for (int lane = 0; lane < 3; lane++) {
+            if (lane == 0) store.listClaimCandidates(now, null, 0, 1);
+            else if (lane == 1) store.listExhaustedCandidates(now, null, 0, 1);
+            else store.findPublishCandidates(0, 1);
+            assertArrayEquals(new Object[]{"tenant-a", "tenant-a", "tenant-a", "client-a", "client-a", "client-a", "client-a"}, Arrays.copyOf(jdbc.args, 7));
+            assertTrue(jdbc.sql.indexOf("WHERE ") >= 0);
+            assertTrue(jdbc.sql.indexOf("OCTET_LENGTH(", jdbc.sql.indexOf("WHERE ")) < jdbc.sql.indexOf("ORDER BY"));
+            assertEquals(1, jdbc.args[jdbc.args.length - 1]);
+        }
     }
 
     private static final class RecordingJdbcTemplate extends JdbcTemplate {
