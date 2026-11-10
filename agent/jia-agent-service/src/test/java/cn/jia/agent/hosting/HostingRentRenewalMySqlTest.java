@@ -126,6 +126,16 @@ class HostingRentRenewalMySqlTest {
         wallet("tenant", "client", "user", 1000);
     }
     @AfterEach void dropSchema() { if (database != null) admin.execute("DROP DATABASE `" + database + "`"); }
+    @Test void handoverSnapshotRequiresCallerTransactionAndRetainsMissingIntentAsUnknown() {
+        seed("finish", "FINISHING", 500, now(), null);
+        assertThrows(IllegalStateException.class, () -> service.lockHandover(scope, "missing", "finish"));
+        var snapshot = new org.springframework.transaction.support.TransactionTemplate(manager)
+                .execute(tx -> service.lockHandover(scope, "missing", "finish"));
+        assertNull(snapshot.intent()); assertEquals("finish", snapshot.lease().getLeaseId());
+        assertEquals("FINISHING", snapshot.lease().getStatus()); assertEquals("user", snapshot.lease().getPrincipalId());
+        assertEquals(1000, balance()); assertEquals(0, charges());
+    }
+
     private HostingRentRenewalService.Result complete(String id, String user, String binding, String agent) {
         return new org.springframework.transaction.support.TransactionTemplate(manager).execute(tx ->
                 service.completeHandover(scope, new EconomyPrincipal(EconomyPrincipalType.USER, user), id, binding, agent));

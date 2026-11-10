@@ -7,7 +7,6 @@ import cn.jia.agent.service.*;
 import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import cn.jia.economy.entity.*;
 import cn.jia.economy.hosting.HostingRentRenewalService;
-import cn.jia.economy.mapper.EconomyHostingRentMapper;
 import cn.jia.oauth.service.ApiKeyService;
 import org.junit.jupiter.api.*;
 import org.springframework.aop.framework.ProxyFactory;
@@ -25,7 +24,6 @@ import static org.mockito.Mockito.*;
 class HostingRentHandoverCompletionTest {
     final AgentRuntimeV1InstallationDao installations=mock(AgentRuntimeV1InstallationDao.class);
     final AgentPersonaBindingDao bindings=mock(AgentPersonaBindingDao.class);
-    final EconomyHostingRentMapper leases=mock(EconomyHostingRentMapper.class);
     final HostingRentRenewalService renewal=mock(HostingRentRenewalService.class);
     final AgentIdentityService identities=mock(AgentIdentityService.class);
     final AgentRuntimeDao runtimes=mock(AgentRuntimeDao.class);
@@ -45,7 +43,7 @@ class HostingRentHandoverCompletionTest {
         var source=new DriverManagerDataSource("jdbc:h2:mem:handover_"+UUID.randomUUID()+";DB_CLOSE_DELAY=-1","sa","");
         jdbc=new JdbcTemplate(source); jdbc.execute("CREATE TABLE effects(name VARCHAR(100))");
         ObjectProvider<ApiKeyService> provider=mock(ObjectProvider.class); when(provider.getIfAvailable()).thenReturn(keys);
-        var target=new HostingRentHandoverCompletion(installations,bindings,leases,renewal,identities,runtimes,runtime,tasks,provider,
+        var target=new HostingRentHandoverCompletion(installations,bindings,renewal,identities,runtimes,runtime,tasks,provider,
                 new FixedTenantAdmissionPolicy("tenant","client"));
         var proxy=new ProxyFactory(target); proxy.setProxyTargetClass(true);
         proxy.addAdvice(new TransactionInterceptor(new DataSourceTransactionManager(source),new AnnotationTransactionAttributeSource()));
@@ -58,10 +56,9 @@ class HostingRentHandoverCompletionTest {
         intent=new EconomyHostingProvisioningIntentEntity().setQuotePurpose("INITIAL").setPrincipalType("USER").setPrincipalId("old-payer")
                 .setStatus("ACTIVE").setAgentId("agent").setLeaseId("lease").setReservedAt(1000L)
                 .setRuntimeInstallationId("installation").setRuntimeManifestSha256("manifest");
-        when(leases.selectIntentForUpdate("tenant","client","intent")).thenReturn(intent);
         lease=new EconomyHostingLeaseEntity().setStatus("FINISHING").setPrincipalType("USER").setPrincipalId("old-payer")
                 .setBindingId("7").setAgentId("agent").setPersonaCode("hero");
-        when(leases.selectLeaseForUpdate("tenant","client","lease")).thenReturn(lease);
+        when(renewal.lockHandover(any(),eq("intent"),eq("lease"))).thenReturn(new HostingRentRenewalService.HandoverSnapshot(intent,lease));
         when(tasks.unfinishedPage("tenant","client","old-owner","agent",0)).thenReturn(List.of());
         projection=new AgentRuntimeEntity().setId(9L).setBindingId(7L).setOwnerJiacn("old-owner")
                 .setRuntimeInstallationId("installation").setRuntimeHostId("host"); projection.setClientId("client");
@@ -78,9 +75,9 @@ class HostingRentHandoverCompletionTest {
     @AfterEach void close() {jdbc.execute("DROP ALL OBJECTS");}
     @Test void closesOriginalRelationshipInOneTransactionUsingInstallationFirstOrder() {
         service.completeManaged(cleaned);assertEquals(5,effects());assertEquals(0,binding.getStatus());
-        var order=inOrder(installations,bindings,leases,runtime,renewal,identities,runtimes);
+        var order=inOrder(installations,bindings,runtime,renewal,identities,runtimes);
         order.verify(installations).lock("installation");order.verify(bindings).findByIdForUpdate(7L);
-        order.verify(leases).selectIntentForUpdate("tenant","client","intent");order.verify(leases).selectLeaseForUpdate("tenant","client","lease");
+        order.verify(renewal).lockHandover(any(),eq("intent"),eq("lease"));
         order.verify(runtimes).findByAgentIdForUpdate("agent");
         order.verify(runtime).revoke(eq("tenant"),eq("client"),eq("old-owner"),eq("installation"),anyLong());
         order.verify(renewal).completeHandover(any(),argThat(a->"old-payer".equals(a.id())),eq("lease"),eq("7"),eq("agent"));
@@ -94,14 +91,16 @@ class HostingRentHandoverCompletionTest {
     @Test void closedOriginalReplayDoesNotRevokeOrTouchLaterInvitationProjection() {
         lease.setStatus("CLOSED");binding.setStatus(0);projection.setOwnerJiacn("next-owner").setBindingId(8L);
         service.completeManaged(cleaned);assertEquals(0,effects());
-        verifyNoInteractions(runtime,renewal,identities,runtimes,tasks,keys);
+        verifyNoInteractions(runtime,identities,runtimes,tasks,keys);
+        verify(renewal,never()).completeHandover(any(),any(),anyString(),anyString(),anyString());
     }
     @Test void unfinishedWorkOrChangedHostNeverReleasesFinancialOrIdentityState() {
         when(tasks.unfinishedPage("tenant","client","old-owner","agent",0)).thenReturn(List.of(new AgentTaskMetaEntity()));
         assertThrows(IllegalStateException.class,()->service.completeManaged(cleaned));
         when(tasks.unfinishedPage("tenant","client","old-owner","agent",0)).thenReturn(List.of());projection.setRuntimeHostId("other-host");
         assertThrows(IllegalStateException.class,()->service.completeManaged(cleaned));
-        verifyNoInteractions(runtime,renewal,identities,keys);assertEquals(0,effects());
+        verifyNoInteractions(runtime,identities,keys);assertEquals(0,effects());
+        verify(renewal,never()).completeHandover(any(),any(),anyString(),anyString(),anyString());
     }
     @Test void changedHistoricalOwnerCannotReplayCompletion() {
         lease.setStatus("CLOSED");binding.setJiacn("next-owner");
@@ -111,6 +110,7 @@ class HostingRentHandoverCompletionTest {
         intent.setManagedApiKeyId("old-key");
         when(keys.disableManagedKey("old-key","tenant","client","old-owner","hosting:intent")).thenReturn(false);
         assertThrows(IllegalStateException.class,()->service.completeManaged(cleaned));assertEquals(0,effects());
-        verifyNoInteractions(renewal,identities);
+        verifyNoInteractions(identities);
+        verify(renewal,never()).completeHandover(any(),any(),anyString(),anyString(),anyString());
     }
 }

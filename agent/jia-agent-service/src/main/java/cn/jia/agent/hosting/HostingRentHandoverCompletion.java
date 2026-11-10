@@ -10,7 +10,6 @@ import cn.jia.agent.service.AgentRuntimeV1Service;
 import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import cn.jia.economy.common.EconomyPrincipalType;
 import cn.jia.economy.hosting.HostingRentRenewalService;
-import cn.jia.economy.mapper.EconomyHostingRentMapper;
 import cn.jia.economy.service.EconomyPrincipal;
 import cn.jia.economy.service.EconomyScope;
 import cn.jia.oauth.service.ApiKeyService;
@@ -25,7 +24,6 @@ import java.util.Objects;
 public class HostingRentHandoverCompletion {
     private final AgentRuntimeV1InstallationDao installations;
     private final AgentPersonaBindingDao bindings;
-    private final EconomyHostingRentMapper leases;
     private final HostingRentRenewalService renewal;
     private final AgentIdentityService identities;
     private final AgentRuntimeDao runtimes;
@@ -35,10 +33,10 @@ public class HostingRentHandoverCompletion {
     private final FixedTenantAdmissionPolicy scope;
 
     public HostingRentHandoverCompletion(AgentRuntimeV1InstallationDao installations, AgentPersonaBindingDao bindings,
-            EconomyHostingRentMapper leases, HostingRentRenewalService renewal, AgentIdentityService identities,
+            HostingRentRenewalService renewal, AgentIdentityService identities,
             AgentRuntimeDao runtimes, AgentRuntimeV1Service runtime, HostingRentFinishingMapper tasks,
             ObjectProvider<ApiKeyService> keys, FixedTenantAdmissionPolicy scope) {
-        this.installations=installations; this.bindings=bindings; this.leases=leases; this.renewal=renewal;
+        this.installations=installations; this.bindings=bindings; this.renewal=renewal;
         this.identities=identities; this.runtimes=runtimes; this.runtime=runtime; this.tasks=tasks; this.keys=keys; this.scope=scope;
     }
 
@@ -50,8 +48,8 @@ public class HostingRentHandoverCompletion {
         var installation=installations.lock(candidate.installationId());
         long bindingId=Long.parseLong(p.bindingId());
         var binding=bindings.findByIdForUpdate(bindingId);
-        var intent=leases.selectIntentForUpdate(p.tenantId(), p.clientId(), p.intentId());
-        var lease=leases.selectLeaseForUpdate(p.tenantId(), p.clientId(), p.leaseId());
+        var financial=renewal.lockHandover(new EconomyScope(p.tenantId(), p.clientId()), p.intentId(), p.leaseId());
+        var intent=financial.intent(); var lease=financial.lease();
         require(binding!=null && Objects.equals(binding.getId(), bindingId)
                 && p.tenantId().equals(binding.getTenantId()) && p.clientId().equals(binding.getClientId())
                 && p.ownerJiacn().equals(binding.getJiacn()) && p.agentId().equals(binding.getAgentId()));

@@ -57,6 +57,15 @@ public final class HostingRentRenewalServiceImpl implements HostingRentRenewalSe
                 && renewal.nowMillis() >= Math.addExact(lease.getLockedAt(), LOCK_RETENTION_MILLIS);
     }
 
+    @Override public HandoverSnapshot lockHandover(EconomyScope scope, String initialIntentId, String leaseId) {
+        gate.requireMutationAllowed(scope.tenantId(), scope.clientId());
+        if (!org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())
+            throw new IllegalStateException("Handover snapshot requires the binding release transaction");
+        var intent = leases.selectIntentForUpdate(scope.tenantId(), scope.clientId(), initialIntentId);
+        var lease = leases.selectLeaseForUpdate(scope.tenantId(), scope.clientId(), leaseId);
+        return new HandoverSnapshot(intent, lease);
+    }
+
     @Override public Result completeHandover(EconomyScope scope, EconomyPrincipal owner, String leaseId,
                                               String bindingId, String agentId) {
         gate.requireMutationAllowed(scope.tenantId(), scope.clientId());
