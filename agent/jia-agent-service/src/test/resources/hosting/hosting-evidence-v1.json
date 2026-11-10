@@ -1,0 +1,55 @@
+{
+  "request": {
+    "protocolVersion": 1,
+    "requestId": "finish-fixture-request",
+    "messageType": "hosting.evidence",
+    "messageId": "finish-fixture-message",
+    "data": {
+      "tenantId": "0",
+      "clientId": "fixture-client",
+      "ownerJiacn": "fixture-owner",
+      "canonicalAgentId": "agt_fixture",
+      "bindingId": "16",
+      "leaseId": "hrl_fixture",
+      "initialIntentId": "hri_fixture",
+      "operationId": "hri_fixture",
+      "operationKind": "INITIAL",
+      "reservedAt": 1791594000000,
+      "requestedAt": 1791594000000,
+      "manifestSha256": "bea7b13b1e4440da851825135880d734c2ba9acc9c707fd9336c1c29eaaad07b",
+      "provisionGeneration": "1",
+      "handoverId": "finish-fixture-lease",
+      "runtimeInstallationId": "rti_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "validUntilAt": null
+    }
+  },
+  "reply": {
+    "protocolVersion": 1,
+    "requestId": "finish-fixture-request",
+    "messageType": "hosting.evidence.result",
+    "messageId": "finish-fixture-reply",
+    "correlationId": "finish-fixture-message",
+    "code": "E0",
+    "msg": "ok",
+    "data": {
+      "tenantId": "0",
+      "clientId": "fixture-client",
+      "ownerJiacn": "fixture-owner",
+      "canonicalAgentId": "agt_fixture",
+      "bindingId": "16",
+      "leaseId": "hrl_fixture",
+      "initialIntentId": "hri_fixture",
+      "operationId": "hri_fixture",
+      "operationKind": "INITIAL",
+      "reservedAt": 1791594000000,
+      "requestedAt": 1791594000000,
+      "manifestSha256": "bea7b13b1e4440da851825135880d734c2ba9acc9c707fd9336c1c29eaaad07b",
+      "provisionGeneration": "1",
+      "handoverId": "finish-fixture-lease",
+      "outcome": "EVIDENCE_ACCEPTED",
+      "hostId": "fixture-host",
+      "runtimeInstallationId": "rti_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "validUntilAt": null
+    }
+  }
+}

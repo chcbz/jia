@@ -82,29 +82,41 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
         }
     }
     @Override public boolean quiesce(Preparation p, Candidate candidate, String handoverId) {
+        return handover(p, candidate, handoverId, "quiesce", "QUIESCED");
+    }
+    @Override public boolean flushEvidence(Preparation p, Candidate candidate, String handoverId) {
+        return handover(p, candidate, handoverId, "evidence", "EVIDENCE_ACCEPTED");
+    }
+    private boolean handover(Preparation p, Candidate candidate, String handoverId, String method, String outcome) {
         outsideTransaction();
         if (!validPreparation(p) || candidate == null || !exact(handoverId, 100)
                 || !availableFor(p.tenantId(), p.clientId(), p.ownerJiacn())) return false;
         try {
-            var request = quiesceRequest(p, candidate, handoverId);
-            return decodeQuiesced(request, candidate, exchange(request));
+            var request = handoverRequest(p, candidate, handoverId, method);
+            return decodeHandover(request, candidate, exchange(request), outcome);
         } catch (Exception uncertain) {
-            // Retry only the same handover id. A lost response cannot authorize cleanup/reinvitation.
+            // Same relationship/operation retry only. A missing receipt never advances cleanup.
             return false;
         }
     }
     static Map<String, Object> quiesceRequest(Preparation p, Candidate candidate, String handoverId) {
-        if (!exact(handoverId, 100)) throw new IllegalArgumentException("Invalid handover id");
-        var request = request(p, "quiesce", candidate);
+        return handoverRequest(p, candidate, handoverId, "quiesce");
+    }
+    static Map<String, Object> handoverRequest(Preparation p, Candidate candidate, String handoverId, String method) {
+        if (!exact(handoverId, 100) || !Set.of("quiesce", "evidence").contains(method)) throw new IllegalArgumentException("Invalid handover request");
+        var request = request(p, method, candidate);
         request.put("handoverId", handoverId);
         return request;
     }
     static boolean decodeQuiesced(Map<String, Object> request, Candidate candidate, Map<String, Object> response) {
+        return decodeHandover(request, candidate, response, "QUIESCED");
+    }
+    static boolean decodeHandover(Map<String, Object> request, Candidate candidate, Map<String, Object> response, String outcome) {
         if (response == null) return false;
         var allowed = new java.util.HashSet<>(request.keySet());
         allowed.addAll(Set.of("outcome", "hostId"));
         return response.keySet().equals(allowed) && echoes(request, response)
-                && candidate.hostId().equals(response.get("hostId")) && "QUIESCED".equals(response.get("outcome"));
+                && candidate.hostId().equals(response.get("hostId")) && outcome.equals(response.get("outcome"));
     }
     private static boolean recoveryRequired(Map<String, Object> response) {
         return response != null && "RECOVERY_REQUIRED".equals(response.get("outcome"));
@@ -121,7 +133,7 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
         return observation;
     }
     static Map<String, Object> request(Preparation p, String method, Candidate candidate) {
-        if (!validPreparation(p) || !Set.of("prepare", "ensure", "observe", "quiesce").contains(method)
+        if (!validPreparation(p) || !Set.of("prepare", "ensure", "observe", "quiesce", "evidence").contains(method)
                 || !"prepare".equals(method) && candidate == null) throw new IllegalArgumentException("Invalid hosting control request");
         Map<String, Object> request = association(p);
         request.put("protocol", PROTOCOL); request.put("method", method);

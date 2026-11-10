@@ -365,4 +365,36 @@ class UnixManagedHostingProvisionerTest {
     }
 
 
+    @Test void evidenceUsesSharedFixtureAndNeverConfusesStopOrPendingWithAccepted() throws Exception {
+        Map<String, Object> frozen;
+        try (var input = getClass().getResourceAsStream("/hosting/hosting-evidence-v1.json")) {
+            assertNotNull(input); frozen = JSON.readValue(input.readAllBytes(), new TypeReference<Map<String, Object>>() {});
+        }
+        @SuppressWarnings("unchecked") var publicRequest = (Map<String, Object>) frozen.get("request");
+        var request = UnixManagedHostingProvisioner.handoverRequest(preparation(), candidate(), "finish-fixture-lease", "evidence");
+        assertEquals(publicRequest.get("data"), UnixManagedHostingProvisioner.hostingData(request));
+        @SuppressWarnings("unchecked") var reply = (Map<String, Object>) frozen.get("reply");
+        var envelope = cn.jia.core.entity.ProtocolMessage.event("finish-fixture-request", "hosting.evidence", "finish-fixture-message", publicRequest.get("data"));
+        var response = UnixManagedHostingProvisioner.hostingResponse(envelope, reply);
+        assertTrue(UnixManagedHostingProvisioner.decodeHandover(request, candidate(), response, "EVIDENCE_ACCEPTED"));
+        for (var field : List.of("handoverId", "bindingId", "ownerJiacn", "leaseId", "installationId", "hostId", "outcome")) {
+            var changed = new LinkedHashMap<>(response); changed.put(field, "wrong");
+            assertFalse(UnixManagedHostingProvisioner.decodeHandover(request, candidate(), changed, "EVIDENCE_ACCEPTED"), field);
+        }
+        var adapter = adapter();
+        doReturn(response).when(adapter).exchange(anyMap());
+        assertTrue(adapter.flushEvidence(preparation(), candidate(), "finish-fixture-lease"));
+        for (var outcome : List.of("QUIESCED", "EVIDENCE_PENDING")) {
+            var pending = new LinkedHashMap<>(response); pending.put("outcome", outcome);
+            doReturn(pending).when(adapter).exchange(anyMap());
+            assertFalse(adapter.flushEvidence(preparation(), candidate(), "finish-fixture-lease"));
+        }
+        doThrow(new java.net.SocketTimeoutException("lost receipt")).when(adapter).exchange(anyMap());
+        assertFalse(adapter.flushEvidence(preparation(), candidate(), "finish-fixture-lease"));
+        verifyNoInteractions(sessions); verify(credentials, never()).ensureInstallation(any(), any());
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        try { assertThrows(IllegalStateException.class, () -> adapter.flushEvidence(preparation(), candidate(), "finish-fixture-lease")); }
+        finally { TransactionSynchronizationManager.clear(); }
+    }
+
 }

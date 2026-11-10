@@ -22,6 +22,8 @@ public interface ManagedHostingProvisioner {
     Observation prepareAndObserve(Preparation preparation);
     /** Transaction-external, current relationship only. True proves process stop, NOT private cleanup or unbinding. */
     boolean quiesce(Preparation preparation, Candidate candidate, String handoverId);
+    /** All original cost/management evidence accepted; does NOT prove private cleanup or release. */
+    boolean flushEvidence(Preparation preparation, Candidate candidate, String handoverId);
     record Preparation(String tenantId, String clientId, String ownerJiacn, String agentId,
                        String intentId, String leaseId, String bindingId, long reservedAt,
                        String operationId, long requestedAt, Long validUntil) {
