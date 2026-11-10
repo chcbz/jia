@@ -24,7 +24,10 @@ class SkillManagementRetainedInventoryMySqlTest extends SkillManagementTransacti
     private SkillRelationshipAuthorizations authorizations;
 
     private void retainedFixture(String owner) throws Exception {
-        original=install();report(original,"PREPARED",null);report(current(original),"APPLIED",null);original=current(original);catalog(original);
+        retainedFixture(owner, install());
+    }
+    private void retainedFixture(String owner, Map<String,Object> first) throws Exception {
+        original=first;report(original,"PREPARED",null);report(current(original),"APPLIED",null);original=current(original);catalog(original);
         installation=text(object(original.get("target")),"skillInstallationId");
         originalAuthorization=jdbc.queryForMap("SELECT * FROM agent_skill_installation_authorization WHERE installation_id=?",installation);
         // Use the real component DDL, not a permissive surrogate authorization table.
@@ -104,17 +107,7 @@ class SkillManagementRetainedInventoryMySqlTest extends SkillManagementTransacti
     }
     @Test void retainedDifferentBuyerCanAdmitAndDisableButPredecessorCannot() throws Exception {
         retainedFixture("new-owner");
-        var next=new cn.jia.agent.hosting.HostingRentHttp.Actor("new-buyer","0",ACTOR.clientId(),"new-owner");
-        for(String table:List.of("economy_hosting_rent_quote","economy_hosting_lease","economy_hosting_provisioning_intent"))
-            jdbc.update("UPDATE "+table+" SET principal_id='new-buyer'");
-        // Only the external authentication/Agent ownership adapters are synthetic; installation,
-        // paid inventory lookup, policy state and immutable provenance remain real MySQL.
-        var owners=(cn.jia.agent.hosting.HostingRentOwnerResolver)ReflectionTestUtils.getField(versions,"owners");
-        doReturn(next.ownerJiacn()).when(owners).requireOwner(next);
-        @SuppressWarnings("unchecked") var agents=(org.springframework.beans.factory.ObjectProvider<cn.jia.agent.service.AgentService>)ReflectionTestUtils.getField(versions,"agents");
-        var dto=new cn.jia.agent.entity.AgentRuntimeDTO();dto.setAgentId(AGENT);dto.setStatus("online");dto.setSystemAgent(false);
-        when(agents.getObject().requireApiKeyOwnedAgentForUpdate(next.clientId(),next.ownerJiacn(),AGENT)).thenReturn(dto);
-        when(agents.getObject().requireOwnedAgentCapabilities(next.tenantId(),next.clientId(),next.ownerJiacn(),AGENT)).thenReturn(dto);
+        var next=nextBuyer();
         catalog(original);
         assertThrows(SkillMarketplaceException.class,()->current(original));
         assertEquals("admitted",service.admitNative(scope(next.ownerJiacn()),text(original,"skillKey"),installation,()->"admitted"));
@@ -127,6 +120,58 @@ class SkillManagementRetainedInventoryMySqlTest extends SkillManagementTransacti
         assertEquals(next.actorId(),change.getActorId());assertEquals(next.ownerJiacn(),change.getOwnerJiacn());
         assertEquals(NEXT_RUNTIME,change.getRuntimeInstallationId());assertEquals(before,wallet());
         assertThrows(SkillMarketplaceException.class,()->service.admitNative(scope(next.ownerJiacn()),text(original,"skillKey"),installation,()->"disabled"));
+        assertHistoryUnchanged();
+    }
+
+    private cn.jia.agent.hosting.HostingRentHttp.Actor nextBuyer() {
+        var next=new cn.jia.agent.hosting.HostingRentHttp.Actor("new-buyer","0",ACTOR.clientId(),"new-owner");
+        for(String table:List.of("economy_hosting_rent_quote","economy_hosting_lease","economy_hosting_provisioning_intent"))
+            jdbc.update("UPDATE "+table+" SET principal_id='new-buyer'");
+        // Only the external authentication/Agent ownership adapters are synthetic; installation,
+        // paid inventory lookup, policy state and immutable provenance remain real MySQL.
+        var owners=(cn.jia.agent.hosting.HostingRentOwnerResolver)ReflectionTestUtils.getField(versions,"owners");
+        doReturn(next.ownerJiacn()).when(owners).requireOwner(next);
+        @SuppressWarnings("unchecked") var agents=(org.springframework.beans.factory.ObjectProvider<cn.jia.agent.service.AgentService>)ReflectionTestUtils.getField(versions,"agents");
+        var dto=new cn.jia.agent.entity.AgentRuntimeDTO();dto.setAgentId(AGENT);dto.setStatus("online");dto.setSystemAgent(false);
+        when(agents.getObject().requireApiKeyOwnedAgentForUpdate(next.clientId(),next.ownerJiacn(),AGENT)).thenReturn(dto);
+        when(agents.getObject().requireOwnedAgentCapabilities(next.tenantId(),next.clientId(),next.ownerJiacn(),AGENT)).thenReturn(dto);
+        return next;
+    }
+
+    @Test void retainedDifferentBuyerUpgradeChargesNewWalletOnceAndKeepsOriginalProvenance() throws Exception {
+        publishInstruction("1.0.0",1);
+        retainedFixture("new-owner",packageChange("INSTALL",null,"0","spv_pdf_1"));
+        var next=nextBuyer();catalog(original);
+        sql.getMapper(cn.jia.economy.mapper.EconomyLedgerMapper.class).insertAccountIfAbsent(
+                new cn.jia.economy.entity.EconomyAccountEntity().setAccountId("next-wallet").setOwnerType("USER")
+                        .setOwnerId(next.actorId()).setPurpose("AVAILABLE").setCurrency("WEN").setBalanceWen(100L)
+                        .setAllowNegative(0).setStatus("ACTIVE").setVersion(0L).setTenantId("0")
+                        .setClientId(ACTOR.clientId()).setCreateTime(1L).setUpdateTime(1L));
+        long previousOwnerBalance=wallet();
+        publishInstruction("2.0.0",2);
+        jdbc.update("INSERT INTO agent_skill_upgrade_policy VALUES (?,?,?,?,?)","0",ACTOR.clientId(),"spv_pdf_1","spv_pdf_2","PAID");
+        var input=map("action","UPGRADE","agentId",AGENT,"skillKey","pdf-export","sourceSkillInstallationId",installation,
+                "targetProductVersionId","spv_pdf_2","expectedAgentVersion",Long.toString(versions.readOwned(next,AGENT)),
+                "expectedSkillRevision",original.get("skillRevision"),"approvedPermissions",List.of());
+        var quote=service.quote(next,"next-upgrade-quote",input,false);
+        assertEquals("20",object(quote.get("price")).get("amountMinor"));
+        var request=creation(quote,input);
+        var change=service.create(next,AGENT,"next-upgrade-create","request",request,false);
+        assertEquals(text(change,"skillChangeId"),text(service.create(next,AGENT,"next-upgrade-create","request",request,false),"skillChangeId"));
+        assertEquals(80L,jdbc.queryForObject("SELECT balance_wen FROM economy_account WHERE account_id='next-wallet'",Long.class));
+        assertEquals(previousOwnerBalance,wallet());assertEquals("HELD",change.get("fundingStatus"));
+        assertEquals(NEXT_RUNTIME,db.findChange("0",ACTOR.clientId(),text(change,"skillChangeId")).getRuntimeInstallationId());
+        report(change,"PREPARED",null);
+        change=service.change(next,AGENT,text(change,"skillChangeId"));
+        var applied=result(change,evidence(change,"APPLIED",null));
+        service.result(proof(),applied);service.result(proof(),applied);
+        change=service.change(next,AGENT,text(change,"skillChangeId"));catalog(change);
+        assertEquals("SUCCEEDED",change.get("status"));assertEquals("CAPTURED",change.get("fundingStatus"));
+        assertEquals(80L,jdbc.queryForObject("SELECT balance_wen FROM economy_account WHERE account_id='next-wallet'",Long.class));
+        assertEquals(previousOwnerBalance,wallet());assertEquals(2,count("economy_skill_order"));
+        String nextInstallation=text(object(change.get("target")),"skillInstallationId");assertNotEquals(installation,nextInstallation);
+        assertEquals("admitted",service.admitNative(scope(next.ownerJiacn()),"pdf-export",nextInstallation,()->"admitted"));
+        assertThrows(SkillMarketplaceException.class,()->service.admitNative(scope(ACTOR.ownerJiacn()),"pdf-export",nextInstallation,()->"old-owner"));
         assertHistoryUnchanged();
     }
 

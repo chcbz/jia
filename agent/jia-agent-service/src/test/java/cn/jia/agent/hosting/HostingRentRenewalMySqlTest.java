@@ -562,6 +562,31 @@ class HostingRentRenewalMySqlTest {
         verifyNoInteractions(fixture.keys());
     }
 
+    @Test void inventoryRejectionAllowsExplicitNewQuoteWithoutRevivingOldIntent() throws Exception {
+        var fixture = initialRefundFixture(ManagedHostingProvisioner.Outcome.FAILED_NO_EFFECT);
+        fixture.reconciler().reconcileOne(fixture.intent(), fixture.provider());
+        assertEquals(1000, balance());
+        var ledger = new HostingRentLedgerServiceImpl(leases, accounts, posting, manager);
+        var principal = new EconomyPrincipal(EconomyPrincipalType.USER, "user");
+        var quote = ledger.quote(new HostingRentQuoteCommand(scope, principal,
+                "00000000-0000-0000-0000-000000000093", new byte[32], HostingRentQuotePurpose.INITIAL,
+                "hosted", 1L, "public-persona", fixture.intent().getAgentId(), null, null, inventory(4)));
+        assertEquals(1000, balance()); // Only a user-confirmed reserve below changes available funds.
+        var command = new HostingRentReserveCommand(scope, principal,
+                "00000000-0000-0000-0000-000000000094", new byte[32], quote.quoteId());
+        var reserved = ledger.reserve(command);
+        assertEquals(reserved, ledger.reserve(command));
+        assertNotEquals(fixture.intent().getIntentId(), reserved.intentId());
+        assertEquals(700L, reserved.amountWen()); assertEquals(300, balance());
+        String binding = leases.selectLeaseForUpdate("tenant", "client", fixture.intent().getLeaseId()).getBindingId();
+        assertEquals(1, leases.attachBinding("tenant", "client", reserved.leaseId(), binding));
+        fixture.reconciler().reconcileOne(fixture.intent(), fixture.provider());
+        assertEquals("REFUNDED", leases.selectIntent("tenant", "client", fixture.intent().getIntentId()).getStatus());
+        assertEquals("FUNDS_RESERVED", leases.selectIntent("tenant", "client", reserved.intentId()).getStatus());
+        assertEquals(300, balance()); verify(fixture.provider()).prepareAndObserve(any());
+        verifyNoInteractions(fixture.keys());
+    }
+
     @Test void issuedRuntimeAssociationRollsBackActualRefundAndLeavesEscrowReserved() throws Exception {
         var fixture = initialRefundFixture(ManagedHostingProvisioner.Outcome.FAILED_NO_EFFECT);
         jdbc.update("""
