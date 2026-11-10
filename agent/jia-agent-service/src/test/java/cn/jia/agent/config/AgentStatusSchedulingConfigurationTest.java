@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class AgentStatusSchedulingConfigurationTest {
-    @Test void registersLocalRefreshAndClusterTimeoutWithoutLocalTimersOrDiscovery() {
+    @Test void registersLocalRefreshAndClusterTimeoutWithoutLocalTimersOrDiscovery() throws Exception {
         var monitor=mock(AgentStatusMonitor.class);
         var schedules=mock(CronScheduleService.class);
         var configuration=new AgentStatusSchedulingConfiguration(monitor,schedules,
