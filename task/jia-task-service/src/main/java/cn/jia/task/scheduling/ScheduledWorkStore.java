@@ -48,7 +48,7 @@ public final class ScheduledWorkStore implements ScheduleService {
     public void cancel(ScheduleKey key) { change(key, ScheduledWork::cancel, false); }
 
     private void change(ScheduleKey key, Function<ScheduledWork, ScheduledWork> transition, boolean create) {
-        scope.tenantForClient(key.clientId());
+        ScheduleAdmission.requireClient(scope, key.clientId());
         transaction.executeWithoutResult(status -> {
             if (create) mapper.ensure(scope.businessTenantId(), key);
             var row = mapper.lock(scope.businessTenantId(), key);
@@ -108,7 +108,7 @@ public final class ScheduledWorkStore implements ScheduleService {
     private boolean settle(LeasedWork work,
             java.util.function.BiFunction<ScheduledWork, Long, Optional<ScheduledWork>> transition) {
         requireWorkerBoundary();
-        scope.tenantForClient(work.key().clientId());
+        ScheduleAdmission.requireClient(scope, work.key().clientId());
         return Boolean.TRUE.equals(transaction.execute(status -> {
             var row = mapper.lock(scope.businessTenantId(), work.key());
             if (row == null) return false;

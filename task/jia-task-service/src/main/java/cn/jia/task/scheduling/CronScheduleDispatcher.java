@@ -32,7 +32,7 @@ public final class CronScheduleDispatcher implements CronScheduleService, Schedu
     @Override public String getName() { return HANDLER; }
 
     @Override public void register(CronSchedule definition) {
-        scope.tenantForClient(definition.clientId());
+        ScheduleAdmission.requireClient(scope, definition.clientId());
         if (HANDLER.equals(definition.handler()) || !(registry.getHandler(definition.handler()) instanceof ScheduledJobHandler))
             throw new IllegalArgumentException("Cron target must explicitly support durable scheduled execution");
         Objects.requireNonNull(definition.targetNode(), "Cron node is required; empty means cluster");
@@ -57,7 +57,7 @@ public final class CronScheduleDispatcher implements CronScheduleService, Schedu
     }
 
     @Override public void cancel(String client,String handler,String node) {
-        scope.tenantForClient(client);
+        ScheduleAdmission.requireClient(scope, client);
         transactions.executeWithoutResult(status -> {
             var row=lock(client,handler,node);
             if(row==null)return;
@@ -67,7 +67,7 @@ public final class CronScheduleDispatcher implements CronScheduleService, Schedu
     }
 
     @Override public void executeScheduled(ScheduledInvocation invocation) {
-        scope.requireAdmitted(invocation.tenantId(),invocation.key().clientId());
+        ScheduleAdmission.requireInvocation(scope, invocation);
         if(!HANDLER.equals(invocation.key().handler()))throw new IllegalArgumentException("Wrong cron dispatch key");
         transactions.executeWithoutResult(status -> {
             var row=lock(invocation.key().clientId(),invocation.key().businessKey(),invocation.key().targetNode());

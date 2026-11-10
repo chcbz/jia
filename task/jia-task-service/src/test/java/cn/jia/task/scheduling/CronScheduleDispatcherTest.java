@@ -36,6 +36,30 @@ class CronScheduleDispatcherTest {
         dispatcher=new CronScheduleDispatcher(mapper,clock,schedules,new FixedTenantAdmissionPolicy("tenant","client"),registry,manager);
     }
     void fire() {dispatcher.executeScheduled(new ScheduledInvocation("tenant",wake,1));}
+    @Test void tenantMaintenanceUsesExplicitEmptyClientWithoutWeakeningExternalAdmission() {
+        var scope = new FixedTenantAdmissionPolicy("tenant", null);
+        dispatcher = new CronScheduleDispatcher(mapper,clock,schedules,scope,registry,manager);
+        row.setClientId("");
+        when(mapper.lock("tenant","","hourly","")).thenReturn(row);
+        var maintenance = new CronSchedule("","hourly","",spec.expression(),"UTC",spec.misfire());
+        dispatcher.register(maintenance);
+        var maintenanceWake = new ScheduleKey("",CronScheduleDispatcher.HANDLER,"hourly","");
+        dispatcher.executeScheduled(new ScheduledInvocation("tenant",maintenanceWake,1));
+        verify(schedules).signal(maintenance.occurrence(hour),hour);
+        assertThrows(IllegalArgumentException.class, () -> scope.tenantForClient(""));
+        assertThrows(IllegalArgumentException.class, () -> dispatcher.executeScheduled(
+                new ScheduledInvocation("foreign",maintenanceWake,1)));
+    }
+    @Test void restrictedProcessRejectsMaintenanceAndNullClientBeforeSql() {
+        var maintenance = new CronSchedule("","hourly","",spec.expression(),"UTC",spec.misfire());
+        assertThrows(IllegalArgumentException.class, () -> dispatcher.register(maintenance));
+        assertThrows(IllegalArgumentException.class, () -> dispatcher.cancel("","hourly",""));
+        assertThrows(IllegalArgumentException.class, () -> dispatcher.executeScheduled(
+                new ScheduledInvocation("tenant",new ScheduleKey("",CronScheduleDispatcher.HANDLER,"hourly",""),1)));
+        assertThrows(IllegalArgumentException.class, () -> dispatcher.register(
+                new CronSchedule(null,"hourly","",spec.expression(),"UTC",spec.misfire())));
+        verifyNoInteractions(mapper,schedules);
+    }
     @Test void restartPreservesOriginalOverdueCursor() {
         dispatcher.register(spec);verify(schedules).signal(wake,hour);verify(mapper,never()).replace(any(),any(),anyBoolean(),any());
     }

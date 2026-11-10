@@ -113,6 +113,33 @@ class ScheduledWorkStoreMySqlTest {
     }
     @AfterEach void dropSchema() { if (database != null) admin.execute("DROP DATABASE `" + database + "`"); }
 
+    @Test void tenantMaintenanceIsExcludedBeforeClientLimitAndCannotBeSettledByClientWorker() throws Exception {
+        var maintenance = new ScheduleKey("", "maintenance", "scan", "");
+        store.signal(maintenance, 0);
+        store.signal(KEY, 1);
+        var client = store("tenant", "client");
+        assertThrows(IllegalArgumentException.class, () -> client.signal(maintenance, 0));
+        var own = client.claimDue("", 1, 60000);
+        assertEquals(List.of(KEY), own.stream().map(ScheduledWorkStore.LeasedWork::key).toList());
+        assertTrue(client.succeed(own.getFirst()));
+        assertNull(client.nextWake(""));
+        assertNull(client.nextDelay(""));
+        var tenantWork = store.claimDue("", 1, 60000).getFirst();
+        assertEquals(maintenance, tenantWork.key());
+        assertThrows(IllegalArgumentException.class, () -> client.succeed(tenantWork));
+        assertTrue(store.succeed(tenantWork));
+    }
+
+    @Test void tenantMaintenanceRetainsTenantAndNodePartition() throws Exception {
+        var maintenance = new ScheduleKey("", "maintenance", "scan", "node-a");
+        store.signal(maintenance, 0);
+        var other = store("other-tenant", null);
+        assertNull(other.nextWake("node-a"));
+        assertTrue(other.claimDue("node-a", 1, 60000).isEmpty());
+        assertTrue(store.claimDue("node-b", 1, 60000).isEmpty());
+        assertEquals(maintenance, store.claimDue("node-a", 1, 60000).getFirst().key());
+    }
+
     @Test void notificationJoinsBusinessRollbackAndCommit() {
         jdbc.execute("CREATE TABLE business_fact (id INT PRIMARY KEY)");
         var tx = new TransactionTemplate(manager);
