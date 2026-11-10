@@ -69,11 +69,11 @@ class PlatformKnowledgeUsageControllerTest {
             new AgentRuntimeAuthenticationFilter(auth).doFilter(request, response, (req, res) -> fail("denied request reached controller"));
             assertEquals(status, response.getStatus());
             var body = new tools.jackson.databind.ObjectMapper().readTree(response.getContentAsString());
-            assertEquals(6, body.size()); assertEquals(1, body.get("protocolVersion").asInt());
+            assertEquals(5, body.size()); assertEquals(1, body.get("protocolVersion").asInt());
             assertEquals("request-" + status, body.get("requestId").asString());
             assertEquals(body.get("requestId").asString(), response.getHeader("X-Request-Id"));
             assertEquals("AGENT_RUNTIME_UNAUTHENTICATED", body.get("code").asString());
-            assertTrue(body.get("data").isNull()); assertTrue(body.get("msg").isString());
+            assertTrue(body.get("data").isNull()); assertFalse(body.get("msg").asString().isBlank());
             assertFalse(response.getContentAsString().contains("private database"));
             assertFalse(response.getContentAsString().contains("rts1_"));
         }
