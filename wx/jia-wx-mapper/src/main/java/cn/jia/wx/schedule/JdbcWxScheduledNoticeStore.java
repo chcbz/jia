@@ -32,12 +32,16 @@ public final class JdbcWxScheduledNoticeStore implements WxScheduledNoticeStore 
         } catch (DuplicateKeyException alreadyPlanned) {
             // A repeated cron or concurrent planner must not move an existing random deadline.
         }
-        WxScheduledNotice notice = find(key);
+        // Concurrent INSERT may wait for a winner newer than our REPEATABLE_READ snapshot.
+        // A current read returns that immutable winner, not the earlier "absent" snapshot.
+        WxScheduledNotice notice = read(key, true);
         if (notice == null) throw new IllegalStateException("Notice planning receipt is unavailable");
         return notice;
     }
-    @Override public WxScheduledNotice find(Key key) {
-        var rows = jdbc.query("SELECT jiacn,due_at,state,start_token FROM wx_scheduled_notice WHERE " + KEY,
+    @Override public WxScheduledNotice find(Key key) { return read(key, false); }
+    private WxScheduledNotice read(Key key, boolean current) {
+        var rows = jdbc.query("SELECT jiacn,due_at,state,start_token FROM wx_scheduled_notice WHERE " + KEY
+                        + (current ? " FOR UPDATE" : ""),
                 (rs, row) -> new WxScheduledNotice(key, rs.getString("jiacn"), rs.getLong("due_at"),
                         State.valueOf(rs.getString("state")), rs.getString("start_token")),
                 tenant(key), key.clientId(), Date.valueOf(key.day()), key.kind().name(), key.subscriptionId());

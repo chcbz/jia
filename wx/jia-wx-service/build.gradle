@@ -32,6 +32,7 @@ def scheduledNoticeSourceSet = sourceSets.create('scheduledNoticeRegression') {
     java.include 'cn/jia/wx/schedule/WxSubscriptionScopeMySqlTest.java'
     java.include 'cn/jia/wx/schedule/WxRecipientScopeMySqlTest.java'
     java.include 'cn/jia/wx/schedule/WxMaterialScopeMySqlTest.java'
+    java.include 'cn/jia/wx/schedule/WxSchedulingTransactionMySqlTest.java'
     java.include 'cn/jia/wx/schedule/WxScheduleTest.java'
     java.include 'cn/jia/wx/schedule/WxNoticeDispatchTest.java'
     java.include 'cn/jia/wx/dailyvote/WxDailyVoteKeysTest.java'
@@ -49,6 +50,8 @@ configurations.named(scheduledNoticeSourceSet.runtimeOnlyConfigurationName) {
 dependencies {
     add(scheduledNoticeSourceSet.implementationConfigurationName, project(':kefu:jia-kefu-mapper'))
     add(scheduledNoticeSourceSet.implementationConfigurationName, project(':material:jia-material-mapper'))
+    add(scheduledNoticeSourceSet.implementationConfigurationName, project(':task:jia-task-service'))
+    add(scheduledNoticeSourceSet.implementationConfigurationName, project(':task:jia-task-mapper'))
 }
 tasks.register('scheduledNoticeRegression', Test) {
     group = 'verification'

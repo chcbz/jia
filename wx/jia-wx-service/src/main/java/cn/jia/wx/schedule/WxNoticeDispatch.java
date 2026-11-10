@@ -87,7 +87,7 @@ public final class WxNoticeDispatch implements ScheduledJobHandler {
             var result=sender.sendScheduledWxTemplate(key.clientId(),type,notice.jiacn(),content);
             outcome=result.sent()?State.SUCCEEDED:State.FAILED;
             if(result.sent() && result.active() && questionId!=null) {
-                try { redis.set(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer(result.appid(),notice.jiacn()),Long.toString(questionId),2L,TimeUnit.HOURS); }
+                try { redis.set(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer(invocation.tenantId(),result.appid(),notice.jiacn()),Long.toString(questionId),2L,TimeUnit.HOURS); }
                 catch(RuntimeException cacheFailure) { log.warn("WeChat accepted notice but answer pointer write failed",cacheFailure); }
             }
         } catch(Exception failure) {

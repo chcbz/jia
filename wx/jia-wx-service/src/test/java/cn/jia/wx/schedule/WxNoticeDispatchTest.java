@@ -101,7 +101,7 @@ class WxNoticeDispatchTest {
         when(votes.findScheduledQuestion("client","owner")).thenReturn(question);
         when(sender.sendScheduledWxTemplate(eq("client"),eq(WxSchedule.typeCode(voteKey.kind())),eq("owner"),any(String[].class)))
                 .thenReturn(new WxNoticeSendResult(true,true,"app"));
-        String pointer=cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer("app","owner");
+        String pointer=cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer("tenant","app","owner");
         doThrow(new IllegalStateException("Redis unavailable")).when(redis).set(pointer,"337",2L,java.util.concurrent.TimeUnit.HOURS);
         dispatch(at).executeScheduled(invoke);
         verify(redis).set(pointer,"337",2L,java.util.concurrent.TimeUnit.HOURS);

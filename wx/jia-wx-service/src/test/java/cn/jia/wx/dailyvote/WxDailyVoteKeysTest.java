@@ -47,10 +47,11 @@ class WxDailyVoteKeysTest {
 
     @Test
     void answerPointersAreSharedByProducersAndPartitionedByExactAppAndAccount() {
-        assertEquals(WxDailyVoteKeys.answerPointer("app", "owner"), WxDailyVoteKeys.answerPointer("app", "owner"));
-        assertNotEquals(WxDailyVoteKeys.answerPointer("app", "owner"), WxDailyVoteKeys.answerPointer("App", "owner"));
-        assertNotEquals(WxDailyVoteKeys.answerPointer("app", "owner"), WxDailyVoteKeys.answerPointer("app", "Owner"));
-        assertNotEquals(WxDailyVoteKeys.answerPointer("app", "owner"), WxDailyVoteKeys.answerPointer("app", "owner "));
+        assertNotEquals(WxDailyVoteKeys.answerPointer("tenant", "app", "owner"), WxDailyVoteKeys.answerPointer("Tenant", "app", "owner"));
+        assertEquals(WxDailyVoteKeys.answerPointer("tenant", "app", "owner"), WxDailyVoteKeys.answerPointer("tenant", "app", "owner"));
+        assertNotEquals(WxDailyVoteKeys.answerPointer("tenant", "app", "owner"), WxDailyVoteKeys.answerPointer("tenant", "App", "owner"));
+        assertNotEquals(WxDailyVoteKeys.answerPointer("tenant", "app", "owner"), WxDailyVoteKeys.answerPointer("tenant", "app", "Owner"));
+        assertNotEquals(WxDailyVoteKeys.answerPointer("tenant", "app", "owner"), WxDailyVoteKeys.answerPointer("tenant", "app", "owner "));
     }
 
     private WxMpXmlMessage fallback(String content) {

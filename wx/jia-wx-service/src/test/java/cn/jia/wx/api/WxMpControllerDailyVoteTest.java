@@ -65,6 +65,7 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
         wxMpService = mock(WxMpService.class, RETURNS_DEEP_STUBS);
         request = mock(HttpServletRequest.class);
 
+        ReflectionTestUtils.setField(controller, "processScope", new cn.jia.core.security.FixedTenantAdmissionPolicy("tenant", null));
         ReflectionTestUtils.setField(controller, "mpInfoService", mpInfoService);
         ReflectionTestUtils.setField(controller, "mpUserService", mpUserService);
         ReflectionTestUtils.setField(controller, "redisService", redisService);
@@ -88,7 +89,6 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
         MpInfoEntity account = new MpInfoEntity()
                 .setAppid(APPID).setOriginal(ORIGINAL).setClientId("client-1").setName("公众号");
         when(mpInfoService.findCachedByKey(APPID)).thenReturn(account);
-        when(mpInfoService.findByKey(APPID)).thenReturn(account);
         when(mpUserService.findByAppIdAndOpenId(APPID, OPENID)).thenReturn(new MpUserEntity()
                 .setId(17L).setAppid(APPID).setOpenId(OPENID).setJiacn("user-1"));
     }
@@ -129,7 +129,7 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
         verify(dailyVoteQuestionExecutor).execute(any(Runnable.class));
         verifyNoInteractions(dailyVoteService);
         verify(voteService, never()).findScheduledQuestion(anyString(), anyString());
-        verify(redisService, never()).get(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer(APPID, "user-1"));
+        verify(redisService, never()).get(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer("tenant", APPID, "user-1"));
 
         ArgumentCaptor<Runnable> task = ArgumentCaptor.forClass(Runnable.class);
         verify(dailyVoteQuestionExecutor).execute(task.capture());
@@ -140,7 +140,7 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
         assertEquals(OPENID, delivery.getValue().getToUser());
         assertEquals("水浒第一题\n\nA 及时雨宋江\n", delivery.getValue().getContent());
         verify(voteService).findScheduledQuestion("client-1", "user-1");
-        verify(redisService).set(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer(APPID, "user-1"), "337", 2L, java.util.concurrent.TimeUnit.HOURS);
+        verify(redisService).set(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer("tenant", APPID, "user-1"), "337", 2L, java.util.concurrent.TimeUnit.HOURS);
         verify(mpUserService).touchLastActive(eq(17L), anyLong());
     }
 
@@ -163,7 +163,7 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
 
         verify(wxMpService.getKefuService()).sendKefuMessage(any(WxMpKefuMessage.class));
         verify(redisService).set("active_mp_user_" + OPENID, "Y", java.time.Duration.ofDays(2));
-        verify(redisService).set(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer(APPID, "user-1"), "337", 2L, java.util.concurrent.TimeUnit.HOURS);
+        verify(redisService).set(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer("tenant", APPID, "user-1"), "337", 2L, java.util.concurrent.TimeUnit.HOURS);
     }
 
     @Test
@@ -184,17 +184,17 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
     void committedAnswerSurvivesCacheCleanupFailureAndUsesCompareDelete() throws Exception {
         stubValidDailyVoteRequest();
         when(dailyVoteService.findReplay(any())).thenReturn(Optional.empty());
-        when(redisService.get(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer(APPID, "user-1"))).thenReturn("337");
+        when(redisService.get(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer("tenant", APPID, "user-1"))).thenReturn("337");
         when(dailyVoteService.answer(any())).thenReturn(new WxDailyVoteAnswerResult(
                 91L, 337L, "恭喜你，答案正确，增加2积分！", true, 2, true));
-        when(redisService.deleteIfValueEquals(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer(APPID, "user-1"), "337"))
+        when(redisService.deleteIfValueEquals(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer("tenant", APPID, "user-1"), "337"))
                 .thenThrow(new IllegalStateException("cache unavailable"));
 
         String response = (String) controller.receiveMsg(XML, request);
 
         assertTrue(response.contains("恭喜你，答案正确，增加2积分！"));
-        verify(redisService).deleteIfValueEquals(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer(APPID, "user-1"), "337");
-        verify(redisService, never()).delete(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer(APPID, "user-1"));
+        verify(redisService).deleteIfValueEquals(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer("tenant", APPID, "user-1"), "337");
+        verify(redisService, never()).delete(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer("tenant", APPID, "user-1"));
         verify(taskExecutor).execute(any(Runnable.class));
     }
 
@@ -202,15 +202,15 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
     void lateTransactionalReplayClearsPersistedQuestionAndPreservesNewPointer() throws Exception {
         stubValidDailyVoteRequest();
         when(dailyVoteService.findReplay(any())).thenReturn(Optional.empty());
-        when(redisService.get(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer(APPID, "user-1"))).thenReturn("338");
+        when(redisService.get(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer("tenant", APPID, "user-1"))).thenReturn("338");
         when(dailyVoteService.answer(any())).thenReturn(new WxDailyVoteAnswerResult(
                 91L, 337L, "恭喜你，答案正确，增加2积分！", true, 2, false));
 
         String response = (String) controller.receiveMsg(XML, request);
 
         assertTrue(response.contains("恭喜你，答案正确，增加2积分！"));
-        verify(redisService).deleteIfValueEquals(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer(APPID, "user-1"), "337");
-        verify(redisService, never()).deleteIfValueEquals(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer(APPID, "user-1"), "338");
+        verify(redisService).deleteIfValueEquals(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer("tenant", APPID, "user-1"), "337");
+        verify(redisService, never()).deleteIfValueEquals(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer("tenant", APPID, "user-1"), "338");
         verify(taskExecutor, never()).execute(any(Runnable.class));
     }
 
@@ -222,7 +222,7 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
                 Optional.empty(),
                 Optional.of(new WxDailyVoteAnswerResult(
                         91L, 337L, "恭喜你，答案正确，增加2积分！", true, 2, true)));
-        when(redisService.get(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer(APPID, "user-1"))).thenReturn("338");
+        when(redisService.get(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer("tenant", APPID, "user-1"))).thenReturn("338");
         when(dailyVoteService.answer(any())).thenThrow(original);
 
         String response = (String) controller.receiveMsg(XML, request);
@@ -230,8 +230,8 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
         assertTrue(response.contains("恭喜你，答案正确，增加2积分！"));
         verify(dailyVoteService, times(2)).findReplay(any());
         verify(dailyVoteService).answer(any());
-        verify(redisService).deleteIfValueEquals(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer(APPID, "user-1"), "337");
-        verify(redisService, never()).deleteIfValueEquals(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer(APPID, "user-1"), "338");
+        verify(redisService).deleteIfValueEquals(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer("tenant", APPID, "user-1"), "337");
+        verify(redisService, never()).deleteIfValueEquals(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer("tenant", APPID, "user-1"), "338");
         verify(taskExecutor, never()).execute(any(Runnable.class));
     }
 
@@ -240,7 +240,7 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
         stubValidDailyVoteRequest();
         IllegalStateException original = new IllegalStateException("database unavailable");
         when(dailyVoteService.findReplay(any())).thenReturn(Optional.empty());
-        when(redisService.get(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer(APPID, "user-1"))).thenReturn("337");
+        when(redisService.get(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer("tenant", APPID, "user-1"))).thenReturn("337");
         when(dailyVoteService.answer(any())).thenThrow(original);
 
         IllegalStateException thrown = assertThrows(IllegalStateException.class,
@@ -260,7 +260,7 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
         when(dailyVoteService.findReplay(any()))
                 .thenReturn(Optional.empty())
                 .thenThrow(replayFailure);
-        when(redisService.get(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer(APPID, "user-1"))).thenReturn("338");
+        when(redisService.get(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer("tenant", APPID, "user-1"))).thenReturn("338");
         when(dailyVoteService.answer(any())).thenThrow(original);
 
         IllegalStateException thrown = assertThrows(IllegalStateException.class,
@@ -278,7 +278,7 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
     void missingReceiptSchemaKeepsTheCurrentQuestionAndReturnsRecoverableReply() throws Exception {
         stubValidDailyVoteRequest();
         when(dailyVoteService.findReplay(any())).thenReturn(Optional.empty());
-        when(redisService.get(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer(APPID, "user-1"))).thenReturn("337");
+        when(redisService.get(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer("tenant", APPID, "user-1"))).thenReturn("337");
         when(dailyVoteService.answer(any())).thenThrow(new RuntimeException("mapper failed",
                 new SQLException("Table 'jia.wx_daily_vote_message_receipt' doesn't exist", "42S02", 1146)));
 
@@ -295,14 +295,14 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
     void incorrectAnswerNeverDispatchesRedpack() throws Exception {
         stubValidDailyVoteRequest();
         when(dailyVoteService.findReplay(any())).thenReturn(Optional.empty());
-        when(redisService.get(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer(APPID, "user-1"))).thenReturn("337");
+        when(redisService.get(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer("tenant", APPID, "user-1"))).thenReturn("337");
         when(dailyVoteService.answer(any())).thenReturn(new WxDailyVoteAnswerResult(
                 92L, 337L, "很遗憾，回答错误，正确答案是A,下次继续努力！", false, 0, true));
 
         String response = (String) controller.receiveMsg(XML, request);
 
         assertTrue(response.contains("很遗憾，回答错误，正确答案是A,下次继续努力！"));
-        verify(redisService).deleteIfValueEquals(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer(APPID, "user-1"), "337");
+        verify(redisService).deleteIfValueEquals(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer("tenant", APPID, "user-1"), "337");
         verify(taskExecutor, never()).execute(any(Runnable.class));
     }
 
@@ -322,15 +322,15 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
         stubValidDailyVoteRequest();
         when(dailyVoteService.findReplay(any())).thenReturn(Optional.of(new WxDailyVoteAnswerResult(
                 91L, 337L, "恭喜你，答案正确，增加2积分！", true, 2, false)));
-        when(redisService.deleteIfValueEquals(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer(APPID, "user-1"), "337")).thenReturn(false);
+        when(redisService.deleteIfValueEquals(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer("tenant", APPID, "user-1"), "337")).thenReturn(false);
 
         String response = (String) controller.receiveMsg(XML, request);
 
         assertTrue(response.contains("恭喜你，答案正确，增加2积分！"));
-        verify(redisService, never()).get(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer(APPID, "user-1"));
+        verify(redisService, never()).get(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer("tenant", APPID, "user-1"));
         verify(dailyVoteService, never()).answer(any());
-        verify(redisService).deleteIfValueEquals(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer(APPID, "user-1"), "337");
-        verify(redisService, never()).delete(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer(APPID, "user-1"));
+        verify(redisService).deleteIfValueEquals(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer("tenant", APPID, "user-1"), "337");
+        verify(redisService, never()).delete(cn.jia.wx.dailyvote.WxDailyVoteKeys.answerPointer("tenant", APPID, "user-1"));
         verify(taskExecutor, never()).execute(any(Runnable.class));
     }
 }

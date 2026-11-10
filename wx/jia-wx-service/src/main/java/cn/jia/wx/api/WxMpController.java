@@ -92,6 +92,8 @@ import java.util.concurrent.TimeUnit;
 public class WxMpController {
 
     @Autowired
+    private cn.jia.core.security.FixedTenantAdmissionPolicy processScope;
+    @Autowired
     private MpInfoService mpInfoService;
     @Autowired
     private PayInfoService payInfoService;
@@ -217,7 +219,7 @@ public class WxMpController {
             outMessage.setFromUserName(message.getToUser());
             outMessage.setToUserName(message.getFromUser());
             unsubscribeVote(mpUser);
-            redisService.delete(WxDailyVoteKeys.answerPointer(appid, mpUser.getJiacn()));
+            redisService.delete(WxDailyVoteKeys.answerPointer(processScope.businessTenantId(), appid, mpUser.getJiacn()));
             outMessage.setContent("退订成功咯！哼！！");
             return toXml(outMessage, timing);
         }
@@ -402,7 +404,7 @@ public class WxMpController {
                 return toXml(dailyVoteReply(message, result.replyContent()), timing);
             }
 
-            String voteKey = WxDailyVoteKeys.answerPointer(appid, mpUser.getJiacn());
+            String voteKey = WxDailyVoteKeys.answerPointer(processScope.businessTenantId(), appid, mpUser.getJiacn());
             long voteRedisStage = timing.startStage();
             String obj;
             try {
@@ -549,7 +551,7 @@ public class WxMpController {
 
             // Only expose an answer pointer after WeChat accepted the question for delivery.
             if (question != null) {
-                redisService.set(WxDailyVoteKeys.answerPointer(appid, mpUser.getJiacn()), String.valueOf(question.getId()),
+                redisService.set(WxDailyVoteKeys.answerPointer(processScope.businessTenantId(), appid, mpUser.getJiacn()), String.valueOf(question.getId()),
                         2L, TimeUnit.HOURS);
             }
             log.info("Daily-vote question delivered: appid={}, questionId={}, trace={}",
@@ -637,7 +639,7 @@ public class WxMpController {
                                   WxCallbackTiming timing) {
         long redisStage = timing.startStage();
         try {
-            redisService.deleteIfValueEquals(WxDailyVoteKeys.answerPointer(appid, jiacn), String.valueOf(questionId));
+            redisService.deleteIfValueEquals(WxDailyVoteKeys.answerPointer(processScope.businessTenantId(), appid, jiacn), String.valueOf(questionId));
         } catch (RuntimeException e) {
             log.warn("Daily vote cache cleanup failed: appid={}, questionId={}, trace={}, error={}",
                     appid, questionId, WxDailyVoteKeys.trace(messageKey), e.getClass().getSimpleName());

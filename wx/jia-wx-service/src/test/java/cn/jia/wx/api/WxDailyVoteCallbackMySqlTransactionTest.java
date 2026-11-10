@@ -239,6 +239,7 @@ class WxDailyVoteCallbackMySqlTransactionTest {
         taskExecutor = mock(ThreadPoolTaskExecutor.class);
         WxMpService wxMpService = mock(WxMpService.class, RETURNS_DEEP_STUBS);
 
+        ReflectionTestUtils.setField(controller, "processScope", new cn.jia.core.security.FixedTenantAdmissionPolicy("tenant", null));
         ReflectionTestUtils.setField(controller, "mpInfoService", mpInfoService);
         ReflectionTestUtils.setField(controller, "mpUserService", mpUserService);
         ReflectionTestUtils.setField(controller, "redisService", redis);
