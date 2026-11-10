@@ -13,6 +13,10 @@ public class EconomyHostingRentQuoteEntity {
     private Long planVersion;
     private Long amountWen;
     private Long recurringAmountWen;
+    private Long initialSkillCount;
+    private String inventorySha256;
+    private String inventoryHostId;
+    private String inventorySnapshotJson;
     private Long periodSeconds;
     private String principalType;
     private String principalId;

@@ -14,7 +14,8 @@ public record HostingRentQuoteCommand(
         String personaCode,
         String agentId,
         String leaseId,
-        Long expectedLeaseVersion) {
+        Long expectedLeaseVersion,
+        HostingRentInitialSkills initialSkills) {
     public HostingRentQuoteCommand {
         requestHash = requestHash == null ? null : requestHash.clone();
     }

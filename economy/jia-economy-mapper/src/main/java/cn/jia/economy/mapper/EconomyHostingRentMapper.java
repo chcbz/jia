@@ -43,17 +43,17 @@ public interface EconomyHostingRentMapper {
 
     @Insert("""
             INSERT INTO economy_hosting_rent_quote(
-                quote_id,quote_purpose,plan_id,plan_version,amount_wen,recurring_amount_wen,period_seconds,
+                quote_id,quote_purpose,plan_id,plan_version,amount_wen,recurring_amount_wen,initial_skill_count,inventory_sha256,inventory_host_id,inventory_snapshot_json,period_seconds,
                 principal_type,principal_id,persona_code,agent_id,lease_id,expected_lease_version,
                 idempotency_key,request_hash,expires_at,tenant_id,client_id,create_time)
-            VALUES(#{quoteId},#{quotePurpose},#{planId},#{planVersion},#{amountWen},#{recurringAmountWen},#{periodSeconds},
+            VALUES(#{quoteId},#{quotePurpose},#{planId},#{planVersion},#{amountWen},#{recurringAmountWen},#{initialSkillCount},#{inventorySha256},#{inventoryHostId},#{inventorySnapshotJson},#{periodSeconds},
                 #{principalType},#{principalId},#{personaCode},#{agentId},#{leaseId},#{expectedLeaseVersion},
                 #{idempotencyKey},#{requestHash},#{expiresAt},#{tenantId},#{clientId},#{createTime})
             """)
     int insertQuote(EconomyHostingRentQuoteEntity quote);
 
     @Select("""
-            SELECT id,quote_id,quote_purpose,plan_id,plan_version,amount_wen,recurring_amount_wen,period_seconds,
+            SELECT id,quote_id,quote_purpose,plan_id,plan_version,amount_wen,recurring_amount_wen,initial_skill_count,inventory_sha256,inventory_host_id,inventory_snapshot_json,period_seconds,
                    principal_type,principal_id,persona_code,agent_id,lease_id,expected_lease_version,
                    idempotency_key,request_hash,expires_at,tenant_id,client_id,create_time
             FROM economy_hosting_rent_quote
@@ -73,7 +73,7 @@ public interface EconomyHostingRentMapper {
             @Param("idempotencyKey") byte[] idempotencyKey);
 
     @Select("""
-            SELECT id,quote_id,quote_purpose,plan_id,plan_version,amount_wen,recurring_amount_wen,period_seconds,
+            SELECT id,quote_id,quote_purpose,plan_id,plan_version,amount_wen,recurring_amount_wen,initial_skill_count,inventory_sha256,inventory_host_id,inventory_snapshot_json,period_seconds,
                    principal_type,principal_id,persona_code,agent_id,lease_id,expected_lease_version,
                    idempotency_key,request_hash,expires_at,tenant_id,client_id,create_time
             FROM economy_hosting_rent_quote

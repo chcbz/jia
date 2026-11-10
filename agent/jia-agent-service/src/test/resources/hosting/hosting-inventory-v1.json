@@ -16,18 +16,29 @@
     "canonicalAgentId": "agt_fixture",
     "hostId": "fixture-host",
     "inventoryVersion": "1",
-    "inventorySha256": "b3bdce948e15a53f3e638b18571ba5321fc1387108be2e55439b44f5a4f183fe",
+    "inventorySha256": "65f11a9f3c2ae3c87d468475bdc54d0aa9b67627d327abccfd0d8941d6701ed3",
     "installedSkillCount": "2",
     "skills": [
       {
         "skillKey": "installed",
         "source": "MANAGED",
-        "revision": "46e2043ea234979a0534ae415fb3bf9c3b313da7f053a1233463c3128942ea98"
+        "revision": "46e2043ea234979a0534ae415fb3bf9c3b313da7f053a1233463c3128942ea98",
+        "enabled": false,
+        "installation": {
+          "skillInstallationId": "skill-fixture-installed",
+          "productVersionId": "product-fixture-v1",
+          "skillVersion": "1.0.0",
+          "kind": "INSTRUCTION",
+          "packageSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "manifestSha256": null
+        }
       },
       {
         "skillKey": "菜谱",
         "source": "NATIVE",
-        "revision": "6eca69dd76cead7cce389e1386ff6ac138441127dcb3abda20b440be2547116d"
+        "revision": "6eca69dd76cead7cce389e1386ff6ac138441127dcb3abda20b440be2547116d",
+        "enabled": true,
+        "installation": null
       }
     ]
   }

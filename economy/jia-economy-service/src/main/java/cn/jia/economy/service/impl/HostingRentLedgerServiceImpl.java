@@ -1,6 +1,8 @@
 package cn.jia.economy.service.impl;
 
 import cn.jia.economy.common.EconomyAccountOwnerType;
+import cn.jia.economy.common.SkillOperationFees;
+import cn.jia.economy.hosting.HostingRentInitialSkills;
 import cn.jia.economy.common.EconomyAccountPurpose;
 import cn.jia.economy.common.EconomyConstants;
 import cn.jia.economy.common.EconomyEscrowType;
@@ -150,6 +152,8 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
                     command.scope().tenantId(), command.scope().clientId(), command.command().leaseId());
             requireRenewalLease(command, lease);
         }
+        HostingRentInitialSkills skills = command.command().initialSkills();
+        long firstSkillFee = skills == null ? 0 : checkedMultiply(skills.count(), SkillOperationFees.INSTALL_WEN);
         long now = positiveNow();
         long expiresAt = checkedAdd(now, checkedMultiply(plan.getQuoteTtlSeconds(), 1_000L));
         EconomyHostingRentQuoteEntity quote = new EconomyHostingRentQuoteEntity()
@@ -157,8 +161,12 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
                 .setQuotePurpose(command.command().purpose().name())
                 .setPlanId(plan.getPlanId())
                 .setPlanVersion(plan.getPlanVersion())
-                .setAmountWen(plan.getAmountWen())
+                .setAmountWen(checkedAdd(plan.getAmountWen(), firstSkillFee))
                 .setRecurringAmountWen(plan.getAmountWen())
+                .setInitialSkillCount(skills == null ? 0L : skills.count())
+                .setInventorySha256(skills == null ? null : skills.inventorySha256())
+                .setInventoryHostId(skills == null ? null : skills.hostId())
+                .setInventorySnapshotJson(skills == null ? null : skills.snapshotJson())
                 .setPeriodSeconds(plan.getPeriodSeconds())
                 .setPrincipalType(command.principal().type().name())
                 .setPrincipalId(command.principal().id())
@@ -538,10 +546,16 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
         requireExact(command.agentId(), "agentId", 100);
         if (command.planVersion() <= 0) throw new HostingRentException(INVALID_COMMAND, "planVersion must be positive");
         if (command.purpose() == HostingRentQuotePurpose.INITIAL) {
+            if (command.initialSkills() == null || command.initialSkills().count() < 0
+                    || command.initialSkills().inventorySha256() == null || !command.initialSkills().inventorySha256().matches("[0-9a-f]{64}")
+                    || command.initialSkills().snapshotJson() == null || command.initialSkills().snapshotJson().isBlank())
+                throw new HostingRentException(INVALID_COMMAND, "initial quote requires verified inventory");
+            requireExact(command.initialSkills().hostId(), "inventoryHostId", 100);
             if (command.leaseId() != null || command.expectedLeaseVersion() != null) {
                 throw new HostingRentException(INVALID_COMMAND, "initial quote must not carry renewal state");
             }
         } else {
+            if (command.initialSkills() != null) throw new HostingRentException(INVALID_COMMAND, "renewal must not charge initial skills");
             requireExact(command.leaseId(), "leaseId", 100);
             if (command.expectedLeaseVersion() == null || command.expectedLeaseVersion() <= 0) {
                 throw new HostingRentException(INVALID_COMMAND, "renewal quote requires expectedLeaseVersion");
@@ -619,7 +633,8 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
                 || !exact(quote.getPrincipalId(), command.principal().id())
                 || quote.getAmountWen() == null || quote.getAmountWen() <= 0
                 || quote.getRecurringAmountWen() == null || quote.getRecurringAmountWen() <= 0
-                || quote.getAmountWen() < quote.getRecurringAmountWen()
+                || quote.getInitialSkillCount() == null || quote.getInitialSkillCount() < 0
+                || quote.getAmountWen() != checkedAdd(quote.getRecurringAmountWen(), checkedMultiply(quote.getInitialSkillCount(), SkillOperationFees.INSTALL_WEN))
                 || (HostingRentQuotePurpose.RENEWAL.name().equals(quote.getQuotePurpose())
                     && !quote.getAmountWen().equals(quote.getRecurringAmountWen()))
                 || quote.getPeriodSeconds() == null || quote.getPeriodSeconds() <= 0
@@ -713,7 +728,9 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
         return new HostingRentQuoteReceipt(quote.getQuoteId(), HostingRentQuotePurpose.valueOf(quote.getQuotePurpose()),
                 quote.getPlanId(), quote.getPlanVersion(), quote.getAmountWen(), quote.getPeriodSeconds(),
                 quote.getPersonaCode(), quote.getAgentId(), quote.getLeaseId(),
-                quote.getExpectedLeaseVersion(), quote.getExpiresAt());
+                quote.getExpectedLeaseVersion(), quote.getExpiresAt(), quote.getRecurringAmountWen(),
+                HostingRentQuotePurpose.INITIAL.name().equals(quote.getQuotePurpose())
+                    ? new HostingRentInitialSkills(quote.getInitialSkillCount(), quote.getInventorySha256(), quote.getInventoryHostId(), quote.getInventorySnapshotJson()) : null);
     }
 
     private HostingRentMutationReceipt reserveReceipt(EconomyHostingProvisioningIntentEntity intent) {

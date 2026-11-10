@@ -19,8 +19,10 @@ public interface ManagedHostingProvisioner {
     }
     /** Public installed inventory only, transaction-external; null is unknown, never zero fees. */
     SkillInventory inventory(String tenantId, String clientId, String ownerJiacn, String agentId);
-    record InstalledSkill(String skillKey, String source, String revision) { }
-    record SkillInventory(String hostId, String inventorySha256, java.util.List<InstalledSkill> skills) {
+    record ManagedSkillReference(String skillInstallationId, String productVersionId, String skillVersion,
+                                 String kind, String packageSha256, String manifestSha256) { }
+    record InstalledSkill(String skillKey, String source, String revision, boolean enabled, ManagedSkillReference installation) { }
+    record SkillInventory(String hostId, String inventorySha256, java.util.List<InstalledSkill> skills, String snapshotJson) {
         public SkillInventory { skills = java.util.List.copyOf(skills); }
         public long installedSkillCount() { return skills.size(); }
     }

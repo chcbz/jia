@@ -459,15 +459,13 @@ class HostingRentRenewalMySqlTest {
     @Test void firstInvoiceOneOffChargeIsNeverCarriedIntoAutomaticRenewal() throws Exception {
         new cn.jia.economy.config.EconomyHostingRentSchemaInitializer(jdbc).afterPropertiesSet();
         var ledger = new HostingRentLedgerServiceImpl(leases, accounts, posting, manager);
-        var initial = initialProvisionCommand(ledger);
+        var initial = initialProvisionCommand(ledger, 3);
         var frozen = leases.selectQuoteForUpdate("tenant", "client", initial.quoteId());
         assertEquals(500L, frozen.getRecurringAmountWen());
-        // Separate immutable invoice fixture: full inventory pricing is outside this test's boundary.
-        frozen.setId(null).setQuoteId("hrq-with-first-skill-fee").setAmountWen(650L)
-                .setIdempotencyKey("00000000-0000-0000-0000-000000000201".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        assertEquals(1, leases.insertQuote(frozen));
-        var confirmation = new HostingRentReserveCommand(scope, initial.principal(), initial.idempotencyKey(),
-                initial.requestHash(), frozen.getQuoteId());
+        assertEquals(650L, frozen.getAmountWen());
+        assertEquals(3L, frozen.getInitialSkillCount());
+        assertEquals(inventory(3).snapshotJson(), frozen.getInventorySnapshotJson());
+        var confirmation = initial;
         var reserved = ledger.reserve(confirmation);
         assertEquals(650L, reserved.amountWen()); assertEquals(350, balance());
         ledger.confirmProvisioningSucceeded(new HostingRentOutcomeCommand(scope, initial.principal(), reserved.intentId(), 1, "first-fee-ready"));
@@ -544,15 +542,32 @@ class HostingRentRenewalMySqlTest {
     }
 
     private HostingRentReserveCommand initialProvisionCommand(HostingRentLedgerService ledger) {
+        return initialProvisionCommand(ledger, 0);
+    }
+
+    private HostingRentReserveCommand initialProvisionCommand(HostingRentLedgerService ledger, int skillCount) {
         leases.insertPlanVersion(new EconomyHostingRentPlanEntity().setPlanId("hosted").setPlanVersion(1L)
                 .setAmountWen(500L).setPeriodSeconds(PERIOD / 1000).setQuoteTtlSeconds(300L)
                 .setCurrency("WEN").setStatus("ACTIVE").setTenantId("tenant").setClientId("client").setCreateTime(now()));
         var principal = new EconomyPrincipal(EconomyPrincipalType.USER, "user");
         var quote = ledger.quote(new HostingRentQuoteCommand(scope, principal,
                 "00000000-0000-0000-0000-000000000091", new byte[32], HostingRentQuotePurpose.INITIAL,
-                "hosted", 1L, "public-persona", "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", null, null));
+                "hosted", 1L, "public-persona", "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", null, null, inventory(skillCount)));
         return new HostingRentReserveCommand(scope, principal,
                 "00000000-0000-0000-0000-000000000092", new byte[32], quote.quoteId());
+    }
+
+    /** Synthetic public inventory; Runtime discovery is verified by the adapter integration suite. */
+    private static cn.jia.economy.hosting.HostingRentInitialSkills inventory(int count) {
+        String json = java.util.stream.IntStream.range(0, count)
+                .mapToObj(i -> "{\"skillKey\":\"skill-" + i + "\",\"source\":\"NATIVE\",\"revision\":\""
+                        + "a".repeat(64) + "\",\"enabled\":false,\"installation\":null}")
+                .collect(java.util.stream.Collectors.joining(",", "[", "]"));
+        try {
+            String digest = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(json.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            return new cn.jia.economy.hosting.HostingRentInitialSkills(count, digest, "fixture-host", json);
+        } catch (java.security.NoSuchAlgorithmException impossible) { throw new AssertionError(impossible); }
     }
 
     private HostingRentReconciler provisioningScheduler(HostingRentLedgerService ledger) {

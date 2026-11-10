@@ -48,6 +48,10 @@ class HostingRentApplicationServiceTest {
     private final HostingRentMutationReceipt receipt = new HostingRentMutationReceipt(
             "hri-test", "hrl-test", "hrq-test", "etx-test", "FUNDS_RESERVED", 1000000000L, 2592000L, 1800000000000L);
 
+    private static final cn.jia.economy.hosting.HostingRentInitialSkills EMPTY_INVENTORY =
+            new cn.jia.economy.hosting.HostingRentInitialSkills(0,
+                    "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", "fixture-host", "[]");
+
     @BeforeEach
     void setUp() {
         var dataSource = new DriverManagerDataSource("jdbc:h2:mem:rent_app_" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1", "sa", "");
@@ -61,6 +65,11 @@ class HostingRentApplicationServiceTest {
             assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
             return provider.available();
         });
+        when(provider.inventory(anyString(), anyString(), anyString(), anyString())).thenAnswer(call -> {
+            assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+            return provider.available() ? new ManagedHostingProvisioner.SkillInventory(
+                    EMPTY_INVENTORY.hostId(), EMPTY_INVENTORY.inventorySha256(), List.of(), EMPTY_INVENTORY.snapshotJson()) : null;
+        });
         application = new HostingRentApplicationService(new AgentHostingRentProperties(true, "1", "1000000000", "2592000"),
                 new EconomyPreviewGate(new EconomyPreviewProperties(true, List.of(
                         new EconomyPreviewProperties.AllowedScope("0", "Client-A")))), owners, rent,
@@ -72,7 +81,10 @@ class HostingRentApplicationServiceTest {
         when(roots.lockBindings("Client-A", "wuyong")).thenReturn(List.of());
         when(rent.selectQuoteForUpdate("0", "Client-A", "hrq-test")).thenReturn(new EconomyHostingRentQuoteEntity()
                 .setQuoteId("hrq-test").setQuotePurpose("INITIAL").setPrincipalId("login-sub").setPrincipalType("USER")
-                .setPersonaCode("wuyong").setAgentId(AGENT).setPlanVersion(1L).setAmountWen(1000000000L).setPeriodSeconds(2592000L));
+                .setPersonaCode("wuyong").setAgentId(AGENT).setPlanVersion(1L).setAmountWen(1000000000L).setPeriodSeconds(2592000L)
+                .setRecurringAmountWen(1000000000L).setInitialSkillCount(0L)
+                .setInventorySha256(EMPTY_INVENTORY.inventorySha256()).setInventoryHostId(EMPTY_INVENTORY.hostId())
+                .setInventorySnapshotJson(EMPTY_INVENTORY.snapshotJson()));
         when(ledger.reserve(any())).thenAnswer(call -> {
             assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
             HostingRentReserveCommand command = call.getArgument(0);
@@ -118,7 +130,7 @@ class HostingRentApplicationServiceTest {
         when(ledger.quote(any())).thenAnswer(call -> {
             HostingRentQuoteCommand command = call.getArgument(0); assertEquals(AGENT, command.agentId());
             return new HostingRentQuoteReceipt("quote",HostingRentQuotePurpose.INITIAL,"plan",1L,500L,
-                    2592000L,"wuyong",AGENT,null,null,1800000000000L);
+                    2592000L,"wuyong",AGENT,null,null,1800000000000L,500L,EMPTY_INVENTORY);
         });
         application.quote(ACTOR,"wuyong",KEY,Map.of("purpose","INITIAL"));
         verifyNoInteractions(bindings,identities,reconciler);
@@ -196,7 +208,7 @@ class HostingRentApplicationServiceTest {
                 .setLeaseId("hrl-test").setAgentId(AGENT).setPersonaCode("wuyong")
                 .setPrincipalId("login-sub").setPrincipalType("USER"));
         when(ledger.quote(any())).thenReturn(new HostingRentQuoteReceipt("hrq-renew", HostingRentQuotePurpose.RENEWAL,
-                "plan", 1L, 1000000000L, 2592000L, "wuyong", AGENT, "hrl-test", 4L, 1800000000000L));
+                "plan", 1L, 1000000000L, 2592000L, "wuyong", AGENT, "hrl-test", 4L, 1800000000000L, 1000000000L, null));
         application.renewalQuote(ACTOR, "hrl-test", KEY, Map.of("agentId", AGENT, "expectedLeaseVersion", "4"));
         var quoteOrder = inOrder(bindings, rent);
         quoteOrder.verify(bindings).findByIdForUpdate(17L);
@@ -228,9 +240,11 @@ class HostingRentApplicationServiceTest {
 
     @Test void initialQuoteReplayKeepsOriginalFactWithoutNewInvitationAdmission() {
         when(rent.selectQuoteByActorKeyForUpdate(eq("0"), eq("Client-A"), eq("USER"), eq("login-sub"), any(byte[].class)))
-                .thenReturn(new EconomyHostingRentQuoteEntity().setAgentId(AGENT).setPlanId("plan").setPlanVersion(1L));
+                .thenReturn(new EconomyHostingRentQuoteEntity().setAgentId(AGENT).setPlanId("plan").setPlanVersion(1L)
+                        .setInitialSkillCount(0L).setInventorySha256(EMPTY_INVENTORY.inventorySha256())
+                        .setInventoryHostId(EMPTY_INVENTORY.hostId()).setInventorySnapshotJson(EMPTY_INVENTORY.snapshotJson()));
         when(ledger.quote(any())).thenReturn(new HostingRentQuoteReceipt("quote", HostingRentQuotePurpose.INITIAL,
-                "plan", 1L, 500L, 2592000L, "wuyong", AGENT, null, null, 1800000000000L));
+                "plan", 1L, 500L, 2592000L, "wuyong", AGENT, null, null, 1800000000000L, 500L, EMPTY_INVENTORY));
         assertEquals("quote", application.quote(ACTOR, "wuyong", KEY,
                 Map.of("purpose", "INITIAL", "agentId", AGENT)).quoteId());
         verify(rent, never()).selectLiveLeaseByAgentForUpdate(anyString(), anyString(), anyString());
@@ -285,7 +299,7 @@ class HostingRentApplicationServiceTest {
 
     @Test
     void missingLiveControlRefusesNewReserveDespiteConfiguredAdapterButSuccessfulReplaySkipsProbe() {
-        when(provider.probeCapabilities(anyString(), anyString(), anyString())).thenReturn(false);
+        when(provider.inventory(anyString(), anyString(), anyString(), anyString())).thenReturn(null);
         assertEquals("HOSTING_RENT_NOT_READY", assertThrows(HostingRentApplicationException.class,
                 () -> application.bind(ACTOR, "wuyong", KEY, confirmation())).code());
         verifyNoInteractions(ledger, bindings, identities, runtimes, reconciler);
@@ -293,7 +307,21 @@ class HostingRentApplicationServiceTest {
         when(rent.selectIntentByQuoteForUpdate("0", "Client-A", "hrq-test")).thenReturn(new EconomyHostingProvisioningIntentEntity().setIntentId("hri-test"));
         doReturn(receipt).when(ledger).reserve(any()); clearInvocations(provider);
         assertEquals("FUNDS_RESERVED", application.bind(ACTOR, "wuyong", KEY, confirmation()).status());
-        verify(provider, never()).probeCapabilities(anyString(), anyString(), anyString());
+        verify(provider, never()).inventory(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void changedInventoryOrHostRefusesConfirmationBeforeAnyFundsAreReserved() {
+        for (boolean changedHost : List.of(false, true)) {
+            when(provider.inventory(anyString(), anyString(), anyString(), anyString())).thenReturn(
+                    new ManagedHostingProvisioner.SkillInventory(changedHost ? "other-host" : EMPTY_INVENTORY.hostId(),
+                            changedHost ? EMPTY_INVENTORY.inventorySha256() : "a".repeat(64), List.of(), "[]"));
+            assertEquals("HOSTING_RENT_QUOTE_STALE", assertThrows(HostingRentApplicationException.class,
+                    () -> application.bind(ACTOR, "wuyong", KEY, confirmation())).code());
+            assertEquals(0, count());
+        }
+        verify(ledger, never()).reserve(any());
+        verifyNoInteractions(reconciler, identities, runtimes);
     }
 
     @Test
@@ -353,7 +381,7 @@ class HostingRentApplicationServiceTest {
             HostingRentQuoteCommand command = call.getArgument(0);
             assertTrue(command.agentId().matches("agt_[0-9a-f]{32}"));
             return new HostingRentQuoteReceipt("hrq-test", command.purpose(), command.planId(), command.planVersion(),
-                    1000000000L, 2592000L, command.personaCode(), command.agentId(), null, null, 1800000300000L);
+                    1000000000L, 2592000L, command.personaCode(), command.agentId(), null, null, 1800000300000L, 1000000000L, command.initialSkills());
         });
         var quote = application.quote(ACTOR, "wuyong", KEY, Map.of("purpose", "INITIAL"));
         assertEquals("1", quote.planVersion());
@@ -361,6 +389,61 @@ class HostingRentApplicationServiceTest {
         assertEquals(0, count());
         verifyNoInteractions(bindings, identities, runtimes, reconciler);
         verify(ledger, never()).reserve(any());
+    }
+
+    @Test
+    void retainedDisabledSkillInventoryIsPassedToLedgerAndItsAuthoritativeBreakdownIsDisplayed() {
+        releasedInvitation();
+        when(rent.selectPlanForUpdate(anyString(), anyString(), anyString(), eq(1L))).thenReturn(
+                new EconomyHostingRentPlanEntity().setPlanId("plan").setPlanVersion(1L)
+                        .setAmountWen(500L).setPeriodSeconds(2592000L).setStatus("ACTIVE"));
+        var skill = new ManagedHostingProvisioner.InstalledSkill("disabled", "NATIVE", "a".repeat(64), false, null);
+        var observed = new ManagedHostingProvisioner.SkillInventory("fixture-host", "b".repeat(64), List.of(skill), "fixture-public-snapshot");
+        when(provider.inventory(anyString(), anyString(), anyString(), eq(AGENT))).thenAnswer(call -> {
+            assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+            return observed;
+        });
+        when(ledger.quote(any())).thenAnswer(call -> {
+            assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
+            HostingRentQuoteCommand command = call.getArgument(0);
+            assertEquals(1L, command.initialSkills().count());
+            assertEquals(observed.inventorySha256(), command.initialSkills().inventorySha256());
+            assertEquals(observed.snapshotJson(), command.initialSkills().snapshotJson());
+            assertEquals(observed.hostId(), command.initialSkills().hostId());
+            return new HostingRentQuoteReceipt("quote", command.purpose(), "plan", 1L, 550L,
+                    2592000L, "wuyong", AGENT, null, null, 1800000000000L, 500L, command.initialSkills());
+        });
+        var view = application.quote(ACTOR, "wuyong", KEY, Map.of("purpose", "INITIAL"));
+        assertEquals("550", view.amountWen()); assertEquals("500", view.recurringAmountWen());
+        assertEquals("1", view.initialSkillCount()); assertEquals("50", view.initialSkillAmountWen());
+        assertEquals(0, count()); verify(ledger, never()).reserve(any());
+    }
+
+    @Test
+    void ownerChangesDuringInventoryObservationCannotCreateQuote() {
+        when(provider.inventory(anyString(), anyString(), anyString(), anyString())).thenAnswer(call -> {
+            assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+            when(owners.requireOwner(ACTOR)).thenReturn("another-owner");
+            return new ManagedHostingProvisioner.SkillInventory(EMPTY_INVENTORY.hostId(),
+                    EMPTY_INVENTORY.inventorySha256(), List.of(), "[]");
+        });
+        assertThrows(HostingRentApplicationException.class,
+                () -> application.quote(ACTOR, "wuyong", KEY, Map.of("purpose", "INITIAL")));
+        verifyNoInteractions(ledger); assertEquals(0, count());
+    }
+
+    @Test
+    void concurrentSuccessfulConfirmationIsReplayedEvenWhenInventoryBecomesUnavailable() {
+        doReturn(receipt).when(ledger).reserve(any());
+        when(provider.inventory(anyString(), anyString(), anyString(), anyString())).thenAnswer(call -> {
+            assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+            when(rent.selectIntentByQuoteForUpdate("0", "Client-A", "hrq-test"))
+                    .thenReturn(new EconomyHostingProvisioningIntentEntity().setIntentId("hri-test"));
+            return null;
+        });
+        assertEquals("FUNDS_RESERVED", application.bind(ACTOR, "wuyong", KEY, confirmation()).status());
+        verify(ledger).reserve(any()); verifyNoInteractions(bindings, identities, runtimes, reconciler);
+        assertEquals(0, count());
     }
 
     @AfterEach

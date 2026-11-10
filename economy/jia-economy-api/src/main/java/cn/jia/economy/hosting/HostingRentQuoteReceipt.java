@@ -11,5 +11,7 @@ public record HostingRentQuoteReceipt(
         String agentId,
         String leaseId,
         Long expectedLeaseVersion,
-        long expiresAt) {
+        long expiresAt,
+        long recurringAmountWen,
+        HostingRentInitialSkills initialSkills) {
 }

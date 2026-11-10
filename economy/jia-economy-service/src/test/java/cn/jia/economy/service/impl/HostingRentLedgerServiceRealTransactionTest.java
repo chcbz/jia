@@ -216,14 +216,17 @@ class HostingRentLedgerServiceRealTransactionTest {
     }
 
     private cn.jia.economy.entity.EconomyHostingRentQuoteEntity firstFeeInvoice() {
-        var quote = service.quote(initialQuote("agent-first-fee", "persona-renew", "plan-test", 1));
+        var command = new HostingRentQuoteCommand(scope(), principal(),
+                "00000000-0000-0000-0000-000000000201", HASH_QUOTE,
+                HostingRentQuotePurpose.INITIAL, "plan-test", 1, "persona-renew", "agent-first-fee", null, null, inventory(3));
+        var quote = service.quote(command);
+        assertEquals(quote, service.quote(command));
+        assertEquals(V1_AMOUNT_WEN + 150, quote.amountWen());
+        assertEquals(V1_AMOUNT_WEN, quote.recurringAmountWen());
+        assertEquals(inventory(3), quote.initialSkills());
         var frozen = hostingMapper.selectQuoteForUpdate(TENANT, CLIENT, quote.quoteId());
-        assertEquals(V1_AMOUNT_WEN, frozen.getRecurringAmountWen());
-        // Separately frozen invoice: exercises the money boundary, not Runtime skill discovery/pricing.
-        // Never update the original immutable quote to fabricate a new price.
-        frozen.setId(null).setQuoteId("hrq-with-first-fee").setAmountWen(V1_AMOUNT_WEN + 150)
-                .setIdempotencyKey("00000000-0000-0000-0000-000000000201".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        assertEquals(1, hostingMapper.insertQuote(frozen));
+        assertEquals(3L, frozen.getInitialSkillCount());
+        assertEquals(inventory(3).snapshotJson(), frozen.getInventorySnapshotJson());
         return frozen;
     }
 
@@ -358,7 +361,7 @@ class HostingRentLedgerServiceRealTransactionTest {
                 () -> service.quote(new HostingRentQuoteCommand(scope(), principal(),
                         "00000000-0000-0000-0000-000000000041", hash(41),
                         HostingRentQuotePurpose.RENEWAL, "plan-test", 1,
-                        "Persona-A", "Agent-A", null, null)));
+                        "Persona-A", "Agent-A", null, null, null)));
         assertEquals(HostingRentException.Reason.INVALID_COMMAND, invalidRenewal.reason());
     }
 
@@ -718,7 +721,7 @@ class HostingRentLedgerServiceRealTransactionTest {
     private HostingRentQuoteCommand renewalQuote(String leaseId, String agentId, long leaseVersion, long planVersion, int marker) {
         return new HostingRentQuoteCommand(scope(), principal(),
                 String.format("00000000-0000-0000-0000-%012d", marker), hash(marker), HostingRentQuotePurpose.RENEWAL,
-                "plan-test", planVersion, "persona-renew", agentId, leaseId, leaseVersion);
+                "plan-test", planVersion, "persona-renew", agentId, leaseId, leaseVersion, null);
     }
 
     private Outcome renewalOutcome(HostingRentReserveCommand command) {
@@ -791,7 +794,20 @@ class HostingRentLedgerServiceRealTransactionTest {
     private HostingRentQuoteCommand initialQuote(
             String agent, String persona, String plan, long version, String key, byte[] hash) {
         return new HostingRentQuoteCommand(scope(), principal(), key, hash,
-                HostingRentQuotePurpose.INITIAL, plan, version, persona, agent, null, null);
+                HostingRentQuotePurpose.INITIAL, plan, version, persona, agent, null, null, inventory(0));
+    }
+
+    /** Synthetic public inventory; Runtime discovery is verified by the adapter integration suite. */
+    private static cn.jia.economy.hosting.HostingRentInitialSkills inventory(int count) {
+        String json = java.util.stream.IntStream.range(0, count)
+                .mapToObj(i -> "{\"skillKey\":\"skill-" + i + "\",\"source\":\"NATIVE\",\"revision\":\""
+                        + "a".repeat(64) + "\",\"enabled\":false,\"installation\":null}")
+                .collect(java.util.stream.Collectors.joining(",", "[", "]"));
+        try {
+            String digest = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(json.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            return new cn.jia.economy.hosting.HostingRentInitialSkills(count, digest, "fixture-host", json);
+        } catch (java.security.NoSuchAlgorithmException impossible) { throw new AssertionError(impossible); }
     }
 
     private HostingRentReserveCommand reserve(String quoteId, String key) {
@@ -863,7 +879,7 @@ class HostingRentLedgerServiceRealTransactionTest {
                 "CREATE TABLE economy_escrow(id BIGINT AUTO_INCREMENT PRIMARY KEY,escrow_id VARCHAR(100),business_type VARCHAR(32),business_id VARCHAR(100),payer_account_id VARCHAR(100),escrow_account_id VARCHAR(100),currency VARCHAR(16),gross_wen BIGINT,captured_wen BIGINT,refunded_wen BIGINT,status VARCHAR(24),version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,update_time BIGINT,UNIQUE(tenant_id,client_id,escrow_id),UNIQUE(tenant_id,client_id,business_type,business_id),UNIQUE(tenant_id,client_id,escrow_account_id))",
                 "CREATE TABLE economy_escrow_funding_lot(id BIGINT AUTO_INCREMENT PRIMARY KEY,escrow_id VARCHAR(100),funding_sequence INT,reserve_transaction_id VARCHAR(100),payer_account_id VARCHAR(100),amount_wen BIGINT,escrow_gross_after_wen BIGINT,escrow_version_after BIGINT,currency VARCHAR(16),tenant_id VARCHAR(50),client_id VARCHAR(50),created_at BIGINT,UNIQUE(tenant_id,client_id,escrow_id,funding_sequence),UNIQUE(tenant_id,client_id,reserve_transaction_id))",
                 "CREATE TABLE economy_hosting_rent_plan(id BIGINT AUTO_INCREMENT PRIMARY KEY,plan_id VARCHAR(100),plan_version BIGINT,amount_wen BIGINT,period_seconds BIGINT,quote_ttl_seconds BIGINT,currency VARCHAR(16),status VARCHAR(16),tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,UNIQUE(tenant_id,client_id,plan_id,plan_version))",
-                "CREATE TABLE economy_hosting_rent_quote(id BIGINT AUTO_INCREMENT PRIMARY KEY,quote_id VARCHAR(100),quote_purpose VARCHAR(16),plan_id VARCHAR(100),plan_version BIGINT,amount_wen BIGINT,recurring_amount_wen BIGINT NOT NULL,period_seconds BIGINT,principal_type VARCHAR(20),principal_id VARCHAR(100),persona_code VARCHAR(100),agent_id VARCHAR(100),lease_id VARCHAR(100),expected_lease_version BIGINT,idempotency_key VARBINARY(36),request_hash BINARY(32),expires_at BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,UNIQUE(tenant_id,client_id,quote_id),UNIQUE(tenant_id,client_id,principal_type,principal_id,idempotency_key))",
+                "CREATE TABLE economy_hosting_rent_quote(id BIGINT AUTO_INCREMENT PRIMARY KEY,quote_id VARCHAR(100),quote_purpose VARCHAR(16),plan_id VARCHAR(100),plan_version BIGINT,amount_wen BIGINT,recurring_amount_wen BIGINT NOT NULL,initial_skill_count BIGINT NOT NULL,inventory_sha256 CHAR(64),inventory_host_id VARCHAR(100),inventory_snapshot_json CLOB,period_seconds BIGINT,principal_type VARCHAR(20),principal_id VARCHAR(100),persona_code VARCHAR(100),agent_id VARCHAR(100),lease_id VARCHAR(100),expected_lease_version BIGINT,idempotency_key VARBINARY(36),request_hash BINARY(32),expires_at BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,UNIQUE(tenant_id,client_id,quote_id),UNIQUE(tenant_id,client_id,principal_type,principal_id,idempotency_key))",
                 "CREATE TABLE economy_hosting_lease(id BIGINT AUTO_INCREMENT PRIMARY KEY,lease_id VARCHAR(100),principal_type VARCHAR(20),principal_id VARCHAR(100),persona_code VARCHAR(100),agent_id VARCHAR(100),binding_id VARCHAR(100),live_slot TINYINT DEFAULT 1,plan_id VARCHAR(100),plan_version BIGINT,amount_wen BIGINT,period_seconds BIGINT,status VARCHAR(24),paid_from BIGINT,paid_through BIGINT,locked_at BIGINT,handover_id VARCHAR(100),executor_stopped_at BIGINT,latest_intent_id VARCHAR(100),version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,update_time BIGINT,UNIQUE(tenant_id,client_id,lease_id),UNIQUE(tenant_id,client_id,agent_id,live_slot),UNIQUE(tenant_id,client_id,latest_intent_id))",
                 "CREATE TABLE economy_hosting_provisioning_intent(id BIGINT AUTO_INCREMENT PRIMARY KEY,intent_id VARCHAR(100),lease_id VARCHAR(100),quote_id VARCHAR(100),quote_purpose VARCHAR(16),principal_type VARCHAR(20),principal_id VARCHAR(100),persona_code VARCHAR(100),agent_id VARCHAR(100),amount_wen BIGINT,period_seconds BIGINT,status VARCHAR(32),settlement_kind VARCHAR(16) NOT NULL DEFAULT 'PAID',reserve_idempotency_key VARBINARY(36),reserve_request_hash BINARY(32),reserve_transaction_id VARCHAR(100),reserved_at BIGINT,escrow_version BIGINT,capture_idempotency_key VARBINARY(36),capture_request_hash BINARY(32),capture_transaction_id VARCHAR(100),captured_at BIGINT,refund_idempotency_key VARBINARY(36),refund_request_hash BINARY(32),refund_transaction_id VARCHAR(100),refunded_at BIGINT,managed_api_key_id VARCHAR(100),runtime_installation_id VARCHAR(100),runtime_manifest_sha256 VARCHAR(64),runtime_provision_generation BIGINT NOT NULL DEFAULT 0,outcome_evidence_ref VARCHAR(100),service_ready_at BIGINT,paid_from BIGINT,paid_through BIGINT,version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,update_time BIGINT,UNIQUE(tenant_id,client_id,intent_id),UNIQUE(tenant_id,client_id,quote_id),UNIQUE(tenant_id,client_id,runtime_installation_id),UNIQUE(tenant_id,client_id,principal_type,principal_id,reserve_idempotency_key))"
         )) jdbc.execute(ddl);

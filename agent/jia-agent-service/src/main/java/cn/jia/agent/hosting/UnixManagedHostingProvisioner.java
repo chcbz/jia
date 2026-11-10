@@ -86,21 +86,40 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
         for (Object value : rows) {
             if (!(value instanceof Map<?, ?> row) || !(row.get("skillKey") instanceof String key)
                     || !exact(key, 100) || previous != null && previous.compareTo(key) >= 0
-                    || !("MANAGED".equals(row.get("source")) || "NATIVE".equals(row.get("source"))) || !digest(row.get("revision"))) return null;
+                    || !("MANAGED".equals(row.get("source")) || "NATIVE".equals(row.get("source"))) || !digest(row.get("revision")) || !(row.get("enabled") instanceof Boolean enabled)) return null;
             previous = key;
-            var skill = new InstalledSkill(key, (String) row.get("source"), (String) row.get("revision"));
+            ManagedSkillReference installation = null;
+            if ("MANAGED".equals(row.get("source"))) {
+                if (!(row.get("installation") instanceof Map<?, ?> ref)
+                        || !exact(ref.get("skillInstallationId"), 100) || !exact(ref.get("productVersionId"), 100)
+                        || !exact(ref.get("skillVersion"), 100) || !digest(ref.get("packageSha256"))
+                        || !("INSTRUCTION".equals(ref.get("kind")) ? ref.get("manifestSha256") == null
+                            : "EXECUTABLE".equals(ref.get("kind")) && digest(ref.get("manifestSha256")))) return null;
+                installation = new ManagedSkillReference((String) ref.get("skillInstallationId"), (String) ref.get("productVersionId"),
+                        (String) ref.get("skillVersion"), (String) ref.get("kind"), (String) ref.get("packageSha256"), (String) ref.get("manifestSha256"));
+            } else if (row.get("installation") != null) return null;
+            var skill = new InstalledSkill(key, (String) row.get("source"), (String) row.get("revision"), enabled, installation);
             skills.add(skill);
             // Field order is the shared inventory-v1 digest contract, not Map iteration order.
             var item = new LinkedHashMap<String, Object>();
             item.put("skillKey", key); item.put("source", skill.source()); item.put("revision", skill.revision());
+            item.put("enabled", skill.enabled());
+            Map<String, Object> reference = null;
+            if (installation != null) {
+                reference = new LinkedHashMap<>(); reference.put("skillInstallationId", installation.skillInstallationId());
+                reference.put("productVersionId", installation.productVersionId()); reference.put("skillVersion", installation.skillVersion());
+                reference.put("kind", installation.kind()); reference.put("packageSha256", installation.packageSha256());
+                reference.put("manifestSha256", installation.manifestSha256());
+            }
+            item.put("installation", reference);
             canonical.add(item);
         }
         try {
             String actual = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
                     .digest(JSON.writeValueAsBytes(canonical)));
             if (!actual.equals(response.get("inventorySha256"))) return null;
+            return new SkillInventory((String) response.get("hostId"), (String) response.get("inventorySha256"), skills, JSON.writeValueAsString(canonical));
         } catch (Exception invalid) { return null; }
-        return new SkillInventory((String) response.get("hostId"), (String) response.get("inventorySha256"), skills);
     }
     @Override public Observation prepareAndObserve(Preparation p) {
         outsideTransaction();
