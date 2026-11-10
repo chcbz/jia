@@ -17,6 +17,8 @@ public interface AgentRuntimeDao extends IBaseDao<AgentRuntimeEntity> {
 
     AgentRuntimeEntity findByAgentIdForUpdate(String agentId);
 
+    List<AgentRuntimeEntity> findByAgentIds(java.util.Set<String> agentIds);
+
     List<AgentRuntimeEntity> findByStatusAndAbility(String status, String ability);
 
     default List<AgentRuntimeEntity> findRosterByOwner(String clientId, String jiacn, String status, String ability) {

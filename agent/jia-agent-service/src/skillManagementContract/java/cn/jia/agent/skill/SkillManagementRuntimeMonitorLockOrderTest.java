@@ -110,7 +110,7 @@ class SkillManagementRuntimeMonitorLockOrderTest extends SkillManagementMySqlFix
         var publisher = mock(AgentEventPublisher.class);
         when(publishers.getIfAvailable()).thenReturn(publisher);
         when(publisher.connectedAgentIds()).thenReturn(Set.of(agent));
-        var monitor = new AgentStatusTransitionWorker(bindingDao, registry, runtimes, publishers);
+        var monitor = new AgentStatusTransitionWorker(new cn.jia.core.security.FixedTenantAdmissionPolicy("0",null), bindingDao, registry, runtimes, publishers);
         var threads = Executors.newFixedThreadPool(2);
         try {
             var request = threads.submit(() -> tx.execute(status -> auth.withFence(proof, false, () -> {

@@ -27,6 +27,7 @@ public class AgentStatusTransitionWorker {
     private cn.jia.agent.skill.SkillAgentVersions skillAgentVersions;
     @org.springframework.beans.factory.annotation.Autowired
     public void setSkillAgentVersions(cn.jia.agent.skill.SkillAgentVersions versions) { this.skillAgentVersions=versions; }
+    private final cn.jia.core.security.FixedTenantAdmissionPolicy partition;
     private final AgentPersonaBindingDao bindingDao;
     private final AgentIdentityRegistryDao identityRegistryDao;
     private final AgentRuntimeDao runtimeDao;
@@ -119,7 +120,7 @@ public class AgentStatusTransitionWorker {
         }
 
         AgentIdentityRegistryEntity identity = identityRegistryDao.findExactByBindingInScopeForUpdate(
-                "0", clientId, ownerJiacn, bindingId);
+                partition.businessTenantId(), clientId, ownerJiacn, bindingId);
         if (!isActiveIdentity(identity, ownerJiacn, clientId, bindingId, agentId)) {
             return null;
         }
@@ -158,7 +159,7 @@ public class AgentStatusTransitionWorker {
             String ownerJiacn, String clientId, long bindingId) {
         return binding != null
                 && Objects.equals(binding.getId(), bindingId)
-                && "0".equals(binding.getTenantId())
+                && partition.businessTenantId().equals(binding.getTenantId())
                 && Objects.equals(binding.getClientId(), clientId)
                 && Objects.equals(binding.getJiacn(), ownerJiacn)
                 && binding.getStatus() != null
@@ -168,7 +169,7 @@ public class AgentStatusTransitionWorker {
     private boolean isActiveIdentity(AgentIdentityRegistryEntity identity,
             String ownerJiacn, String clientId, long bindingId, String agentId) {
         return identity != null
-                && "0".equals(identity.getTenantId())
+                && partition.businessTenantId().equals(identity.getTenantId())
                 && Objects.equals(identity.getClientId(), clientId)
                 && Objects.equals(identity.getOwnerJiacn(), ownerJiacn)
                 && Objects.equals(identity.getBindingId(), bindingId)

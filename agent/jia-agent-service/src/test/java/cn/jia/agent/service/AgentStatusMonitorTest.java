@@ -46,7 +46,7 @@ class AgentStatusMonitorTest extends BaseMockTest {
     @BeforeEach
     void setUpMonitor() {
         AgentStatusTransitionWorker worker = new AgentStatusTransitionWorker(
-                bindingDao, identityRegistryDao, agentRuntimeDao, eventPublisherProvider);
+                new cn.jia.core.security.FixedTenantAdmissionPolicy("0",null), bindingDao, identityRegistryDao, agentRuntimeDao, eventPublisherProvider);
         monitor = new AgentStatusMonitor(agentRuntimeDao, worker,
                 new AgentScopePublicationCoordinator(), eventPublisherProvider);
         ReflectionTestUtils.setField(monitor, "heartbeatTimeoutSeconds", 60L);
@@ -67,12 +67,12 @@ class AgentStatusMonitorTest extends BaseMockTest {
         current.setLastSeenAt(1L);
         stubActiveLocks(current);
 
-        when(agentRuntimeDao.findByStatusAndAbility(null, null)).thenReturn(List.of());
         when(agentRuntimeDao.findHeartbeatTimedOut(anyLong()))
                 .thenReturn(List.of(songjiang, candidate));
         when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
         when(eventPublisher.connectedAgentIds()).thenReturn(Set.of());
 
+        monitor.refreshLocallyConnectedAgents();
         monitor.markHeartbeatTimedOutAgentsOffline();
 
         assertEquals(AgentConstants.STATUS_ONLINE, songjiang.getStatus());
@@ -95,9 +95,9 @@ class AgentStatusMonitorTest extends BaseMockTest {
 
         when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
         when(eventPublisher.connectedAgentIds()).thenReturn(Set.of());
-        when(agentRuntimeDao.findByStatusAndAbility(null, null)).thenReturn(List.of());
         when(agentRuntimeDao.findHeartbeatTimedOut(anyLong())).thenReturn(List.of(stale));
 
+        monitor.refreshLocallyConnectedAgents();
         monitor.markHeartbeatTimedOutAgentsOffline();
 
         ArgumentCaptor<AgentRuntimeEntity> updated = ArgumentCaptor.forClass(AgentRuntimeEntity.class);
@@ -135,10 +135,10 @@ class AgentStatusMonitorTest extends BaseMockTest {
                 .thenReturn(identity(suspended, AgentConstants.IDENTITY_STATUS_SUSPENDED));
         when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
         when(eventPublisher.connectedAgentIds()).thenReturn(Set.of());
-        when(agentRuntimeDao.findByStatusAndAbility(null, null)).thenReturn(List.of());
         when(agentRuntimeDao.findHeartbeatTimedOut(anyLong()))
                 .thenReturn(List.of(provisioned, suspended));
 
+        monitor.refreshLocallyConnectedAgents();
         monitor.markHeartbeatTimedOutAgentsOffline();
 
         verify(agentRuntimeDao, never()).findByAgentIdForUpdate(org.mockito.ArgumentMatchers.anyString());
@@ -159,9 +159,10 @@ class AgentStatusMonitorTest extends BaseMockTest {
 
         when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
         when(eventPublisher.connectedAgentIds()).thenReturn(Set.of("agent-connected"));
-        when(agentRuntimeDao.findByStatusAndAbility(null, null)).thenReturn(List.of(candidate));
+        when(agentRuntimeDao.findByAgentIds(org.mockito.ArgumentMatchers.anySet())).thenReturn(List.of(candidate));
         when(agentRuntimeDao.findHeartbeatTimedOut(anyLong())).thenReturn(List.of(candidate));
 
+        monitor.refreshLocallyConnectedAgents();
         monitor.markHeartbeatTimedOutAgentsOffline();
 
         assertEquals(AgentConstants.STATUS_ONLINE, current.getStatus());
@@ -181,9 +182,10 @@ class AgentStatusMonitorTest extends BaseMockTest {
 
         when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
         when(eventPublisher.connectedAgentIds()).thenReturn(Set.of("agent-monotonic"));
-        when(agentRuntimeDao.findByStatusAndAbility(null, null)).thenReturn(List.of(candidate));
+        when(agentRuntimeDao.findByAgentIds(org.mockito.ArgumentMatchers.anySet())).thenReturn(List.of(candidate));
         when(agentRuntimeDao.findHeartbeatTimedOut(anyLong())).thenReturn(List.of());
 
+        monitor.refreshLocallyConnectedAgents();
         monitor.markHeartbeatTimedOutAgentsOffline();
 
         assertEquals(futureLastSeenAt, current.getLastSeenAt());
@@ -210,9 +212,10 @@ class AgentStatusMonitorTest extends BaseMockTest {
                 .thenReturn(transitioned);
         when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
         when(eventPublisher.connectedAgentIds()).thenReturn(Set.of("agent-raced-unbind"));
-        when(agentRuntimeDao.findByStatusAndAbility(null, null)).thenReturn(List.of(candidate));
+        when(agentRuntimeDao.findByAgentIds(org.mockito.ArgumentMatchers.anySet())).thenReturn(List.of(candidate));
         when(agentRuntimeDao.findHeartbeatTimedOut(anyLong())).thenReturn(List.of());
 
+        monitor.refreshLocallyConnectedAgents();
         monitor.markHeartbeatTimedOutAgentsOffline();
 
         assertEquals(AgentConstants.STATUS_ONLINE, transitioned.getStatus());
@@ -242,9 +245,10 @@ class AgentStatusMonitorTest extends BaseMockTest {
                 .thenReturn(transitioned, changed);
         when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
         when(eventPublisher.connectedAgentIds()).thenReturn(Set.of("agent-raced-presence"));
-        when(agentRuntimeDao.findByStatusAndAbility(null, null)).thenReturn(List.of(candidate));
+        when(agentRuntimeDao.findByAgentIds(org.mockito.ArgumentMatchers.anySet())).thenReturn(List.of(candidate));
         when(agentRuntimeDao.findHeartbeatTimedOut(anyLong())).thenReturn(List.of());
 
+        monitor.refreshLocallyConnectedAgents();
         monitor.markHeartbeatTimedOutAgentsOffline();
 
         assertEquals(AgentConstants.STATUS_ONLINE, transitioned.getStatus());
@@ -277,10 +281,11 @@ class AgentStatusMonitorTest extends BaseMockTest {
 
         when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
         when(eventPublisher.connectedAgentIds()).thenReturn(Set.of("agent-idle", "agent-busy"));
-        when(agentRuntimeDao.findByStatusAndAbility(null, null))
+        when(agentRuntimeDao.findByAgentIds(org.mockito.ArgumentMatchers.anySet()))
                 .thenReturn(List.of(idleCandidate, busyCandidate, disconnected));
         when(agentRuntimeDao.findHeartbeatTimedOut(anyLong())).thenReturn(List.of());
 
+        monitor.refreshLocallyConnectedAgents();
         monitor.markHeartbeatTimedOutAgentsOffline();
 
         assertEquals(AgentConstants.STATUS_ONLINE, idleCurrent.getStatus());
@@ -336,4 +341,25 @@ class AgentStatusMonitorTest extends BaseMockTest {
         identity.setLifecycleStatus(lifecycle);
         return identity;
     }
+    @Test void noLocalConnectionsDoNotScanAllRuntimesOrQueryCandidates() {
+        when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
+        when(eventPublisher.connectedAgentIds()).thenReturn(Set.of());
+        monitor.refreshLocallyConnectedAgents();
+        org.mockito.Mockito.verifyNoInteractions(agentRuntimeDao);
+    }
+
+    @Test void transitionUsesConfiguredTenantForIdentityAndBinding() {
+        var worker=new AgentStatusTransitionWorker(new cn.jia.core.security.FixedTenantAdmissionPolicy("blue","jia_client"),
+                bindingDao,identityRegistryDao,agentRuntimeDao,eventPublisherProvider);
+        var current=runtime("local",31L,AgentConstants.STATUS_ONLINE,"[]");current.setLastSeenAt(1L);
+        var binding=binding(current);binding.setTenantId("blue");
+        var identity=identity(current,AgentConstants.IDENTITY_STATUS_ACTIVE);identity.setTenantId("blue");
+        when(bindingDao.findByIdForUpdate(31L)).thenReturn(binding);
+        when(identityRegistryDao.findExactByBindingInScopeForUpdate("blue","jia_client","juyiting",31L)).thenReturn(identity);
+        when(agentRuntimeDao.findByAgentIdForUpdate("local")).thenReturn(current);
+        var result=worker.markHeartbeatTimedOutOffline(current,100L);
+        assertEquals(AgentConstants.STATUS_OFFLINE,result.status());
+        verify(identityRegistryDao,never()).findExactByBindingInScopeForUpdate("0","jia_client","juyiting",31L);
+    }
+
 }

@@ -9,7 +9,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -28,10 +27,8 @@ public class AgentStatusMonitor {
     @Value("${jia.agent.status.heartbeat-timeout-seconds:60}")
     private long heartbeatTimeoutSeconds;
 
-    @Scheduled(fixedDelayString = "${jia.agent.status.offline-scan-interval-seconds:10}000")
     public void markHeartbeatTimedOutAgentsOffline() {
         Set<String> connectedAgentIds = connectedAgentIds();
-        syncWebSocketAgentStatuses(connectedAgentIds);
 
         long cutoffTime = System.currentTimeMillis() - heartbeatTimeoutSeconds * 1000;
         for (AgentRuntimeEntity candidate : agentRuntimeDao.findHeartbeatTimedOut(cutoffTime)) {
@@ -54,9 +51,11 @@ public class AgentStatusMonitor {
         }
     }
 
-    private void syncWebSocketAgentStatuses(Set<String> connectedAgentIds) {
+    public void refreshLocallyConnectedAgents() {
+        Set<String> connectedAgentIds = connectedAgentIds();
+        if (connectedAgentIds.isEmpty()) return;
         long now = System.currentTimeMillis();
-        List<AgentRuntimeEntity> candidates = agentRuntimeDao.findByStatusAndAbility(null, null);
+        List<AgentRuntimeEntity> candidates = agentRuntimeDao.findByAgentIds(connectedAgentIds);
         for (AgentRuntimeEntity candidate : candidates) {
             if (AgentConstants.BUILTIN_SONGJIANG_AGENT_ID.equals(candidate.getAgentId())
                     || !connectedAgentIds.contains(candidate.getAgentId())) {

@@ -957,6 +957,8 @@ tasks.withType(org.gradle.api.tasks.testing.Test).configureEach {
 
 // SKILL-MANAGEMENT-API-20261023: real SM-C1 codec/HTTP/owned-MySQL transactions.
 def skillManagementContractSourceSet = sourceSets.create('skillManagementContract') {
+    java.include 'cn/jia/agent/service/AgentStatusMonitorTest.java'
+    java.include 'cn/jia/agent/config/AgentStatusSchedulingConfigurationTest.java'
     java.setSrcDirs(['src/skillManagementContract/java', 'src/test/java'])
     java.include 'cn/jia/agent/skill/SkillManagement*.java'
     java.include 'cn/jia/agent/skill/SkillInstallRecoveryServiceTest.java'
@@ -976,6 +978,7 @@ dependencies {
     add(skillManagementContractSourceSet.implementationConfigurationName,
         platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}"))
     add(skillManagementContractSourceSet.implementationConfigurationName, libs.junit.jupiter)
+    add(skillManagementContractSourceSet.implementationConfigurationName, project(':common:jia-common-test'))
     add(skillManagementContractSourceSet.implementationConfigurationName, 'org.mockito:mockito-core')
     add(skillManagementContractSourceSet.implementationConfigurationName, 'org.springframework:spring-test')
     add(skillManagementContractSourceSet.implementationConfigurationName, 'org.hamcrest:hamcrest')
@@ -992,7 +995,7 @@ dependencies {
 tasks.register('skillManagementContract', Test) {
     group = 'verification'
     description = 'Strict SM-C1 wire, actual HTTP adapter and private MySQL transactions; never production DB.'
-    filter { includeTestsMatching 'cn.jia.agent.skill.SkillManagement*'; includeTestsMatching 'cn.jia.agent.skill.SkillInstallRecoveryServiceTest' }
+    filter { includeTestsMatching 'cn.jia.agent.skill.SkillManagement*'; includeTestsMatching 'cn.jia.agent.skill.SkillInstallRecoveryServiceTest'; includeTestsMatching 'cn.jia.agent.service.AgentStatusMonitorTest'; includeTestsMatching 'cn.jia.agent.config.AgentStatusSchedulingConfigurationTest' }
     dependsOn tasks.named(skillManagementContractSourceSet.classesTaskName)
     testClassesDirs = skillManagementContractSourceSet.output.classesDirs
     classpath = skillManagementContractSourceSet.runtimeClasspath

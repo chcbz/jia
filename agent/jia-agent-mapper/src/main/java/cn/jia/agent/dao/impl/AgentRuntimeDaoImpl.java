@@ -13,6 +13,18 @@ import java.util.List;
 
 @Named
 public class AgentRuntimeDaoImpl extends BaseDaoImpl<AgentRuntimeMapper, AgentRuntimeEntity> implements AgentRuntimeDao {
+    @jakarta.inject.Inject
+    private cn.jia.core.security.FixedTenantAdmissionPolicy partition;
+
+    private LambdaQueryWrapper<AgentRuntimeEntity> presencePartition() {
+        var query = new LambdaQueryWrapper<AgentRuntimeEntity>()
+                .eq(AgentRuntimeEntity::getTenantId, partition.businessTenantId())
+                .apply("BINARY tenant_id=BINARY {0}", partition.businessTenantId());
+        if (partition.clientId() != null) query.eq(AgentRuntimeEntity::getClientId, partition.clientId())
+                .apply("BINARY client_id=BINARY {0}", partition.clientId());
+        return query;
+    }
+
     @Override
     public int updateRegistration(AgentRuntimeEntity entity) {
         // The service holds the authorized runtime row lock. Include nullable model in this
@@ -44,6 +56,13 @@ public class AgentRuntimeDaoImpl extends BaseDaoImpl<AgentRuntimeMapper, AgentRu
     public AgentRuntimeEntity findByAgentIdForUpdate(String agentId) {
         requireExactId(agentId, "agentId");
         return baseMapper.findExactByAgentIdForUpdate(agentId);
+    }
+
+    @Override
+    public List<AgentRuntimeEntity> findByAgentIds(java.util.Set<String> agentIds) {
+        if (agentIds.isEmpty()) return List.of();
+        return baseMapper.selectList(presencePartition()
+                .in(AgentRuntimeEntity::getAgentId, agentIds));
     }
 
     @Override
@@ -102,7 +121,7 @@ public class AgentRuntimeDaoImpl extends BaseDaoImpl<AgentRuntimeMapper, AgentRu
 
     @Override
     public List<AgentRuntimeEntity> findHeartbeatTimedOut(long cutoffTime) {
-        return baseMapper.selectList(new LambdaQueryWrapper<AgentRuntimeEntity>()
+        return baseMapper.selectList(presencePartition()
                 .ne(AgentRuntimeEntity::getStatus, "offline")
                 .ne(AgentRuntimeEntity::getAgentId, AgentConstants.BUILTIN_SONGJIANG_AGENT_ID)
                 .and(wrapper -> wrapper
