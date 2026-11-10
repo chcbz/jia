@@ -58,7 +58,9 @@ class HostingRentFinishingHandlerTest {
                 if(enabled)assertSame(context.getBean(HostingRentFinishingHandler.class),registered);else assertNull(registered);
             }
         }
-        verifyNoInteractions(discovery,renewal,tasks,stop,runtime,skills,completion);
+        verifyNoInteractions(discovery,renewal,tasks,stop,runtime,completion);
+        // Spring legitimately invokes the mock bean's @Autowired dependency setter, not business work.
+        verify(skills,never()).settleHandoverChanges(any());
     }
     @Test void finalReleaseFollowsTaskStopEvidenceFinancialAndPrivateCleanupInOrder() {
         ready();handler.executeScheduled(invocation);assertEquals(HostingRentLeaseWakeup.FINISH,handler.getName());
