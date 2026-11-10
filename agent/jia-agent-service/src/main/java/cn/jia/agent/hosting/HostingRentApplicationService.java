@@ -101,8 +101,14 @@ public final class HostingRentApplicationService {
                 if (rent.selectLiveLeaseByAgentForUpdate(actor.tenantId(), actor.clientId(), canonical) != null)
                     throw conflict("HOSTING_RENT_LEASE_CONFLICT");
             } else {
-                if (requestedAgent != null) throw forbidden();
-                canonical = "agt_" + UUID.randomUUID().toString().replace("-", "");
+                AgentRuntimeEntity released = releasedInstance(actor, personaCode);
+                if (released == null) {
+                    if (requestedAgent != null) throw forbidden();
+                    canonical = "agt_" + UUID.randomUUID().toString().replace("-", "");
+                } else {
+                    canonical = released.getAgentId();
+                    if (requestedAgent != null && !requestedAgent.equals(canonical)) throw forbidden();
+                }
             }
             // Proposed ID is stored ONLY in this quote. No binding, registry or runtime row yet.
             return quoteView(ledger.quote(quoteCommand(actor, idempotencyKey, hash, persona.getPersonaCode(),
@@ -145,6 +151,9 @@ public final class HostingRentApplicationService {
             AgentPersonaEntity persona = persona(personaCode);
             AgentPersonaBindingEntity binding = currentBinding(actor, owner, personaCode);
             if (binding != null) requireExisting(actor, owner, quote.getAgentId(), personaCode);
+            AgentRuntimeEntity released = binding == null ? releasedInstance(actor, personaCode) : null;
+            if (released != null && !quote.getAgentId().equals(released.getAgentId()))
+                throw conflict("HOSTING_RENT_QUOTE_STALE");
             // Quote/persona/binding roots are locked before REQUIRED W02 funds posting.
             HostingRentMutationReceipt receipt = ledger.reserve(new HostingRentReserveCommand(
                     actor.scope(), actor.principal(), idempotencyKey, hash, quote.getQuoteId()));
@@ -160,13 +169,18 @@ public final class HostingRentApplicationService {
                         || !actor.tenantId().equals(identity.getTenantId()) || !owner.equals(identity.getOwnerJiacn())) {
                     throw forbidden();
                 }
-                AgentRuntimeEntity runtime = new AgentRuntimeEntity();
-                runtime.setAgentId(identity.getCanonicalAgentId()); runtime.setBindingId(binding.getId());
-                runtime.setTenantId(actor.tenantId()); runtime.setClientId(actor.clientId()); runtime.setOwnerJiacn(owner);
-                runtime.setPersonaCode(personaCode); runtime.setPersonaName(persona.getName()); runtime.setName(persona.getName());
-                runtime.setAvatar(persona.getAvatar()); runtime.setAbilities(persona.getAbilities());
-                runtime.setStatus(AgentConstants.STATUS_OFFLINE); runtime.setLastSeenAt(receipt.occurredAt());
-                if (runtimes.insert(runtime) != 1) throw conflict("HOSTING_RENT_CONFLICT");
+                if (released != null) {
+                    if (runtimes.attachReleasedBinding(released.getId(), binding.getId(), owner, receipt.occurredAt()) != 1)
+                        throw conflict("HOSTING_RENT_CONFLICT");
+                } else {
+                    AgentRuntimeEntity runtime = new AgentRuntimeEntity();
+                    runtime.setAgentId(identity.getCanonicalAgentId()); runtime.setBindingId(binding.getId());
+                    runtime.setTenantId(actor.tenantId()); runtime.setClientId(actor.clientId()); runtime.setOwnerJiacn(owner);
+                    runtime.setPersonaCode(personaCode); runtime.setPersonaName(persona.getName()); runtime.setName(persona.getName());
+                    runtime.setAvatar(persona.getAvatar()); runtime.setAbilities(persona.getAbilities());
+                    runtime.setStatus(AgentConstants.STATUS_OFFLINE); runtime.setLastSeenAt(receipt.occurredAt());
+                    if (runtimes.insert(runtime) != 1) throw conflict("HOSTING_RENT_CONFLICT");
+                }
             }
             if (binding.getId() == null || rent.attachBinding(actor.tenantId(), actor.clientId(), receipt.leaseId(),
                     binding.getId().toString()) != 1) throw conflict("HOSTING_RENT_CONFLICT");
@@ -359,6 +373,18 @@ public final class HostingRentApplicationService {
         if (persona == null || !code.equals(persona.getPersonaCode()) || !Boolean.TRUE.equals(persona.getActive())
                 || Boolean.TRUE.equals(persona.getSystemAgent())) throw forbidden();
         return persona;
+    }
+
+    private AgentRuntimeEntity releasedInstance(Actor actor, String personaCode) {
+        var candidates = roots.lockPublicInstances(actor.tenantId(), actor.clientId(), personaCode);
+        if (candidates.isEmpty()) return null;
+        if (candidates.size() != 1) throw conflict("HOSTING_RENT_INSTANCE_CONFLICT");
+        var runtime = candidates.getFirst();
+        if (runtime.getId() == null || runtime.getBindingId() != null || runtime.getOwnerJiacn() != null
+                || !renewal.completedHandover(actor.scope(), runtime.getAgentId(), runtime.getRuntimeInstallationId()))
+            throw conflict("HOSTING_RENT_HANDOVER_PENDING");
+        requireCanonicalShape(runtime.getAgentId());
+        return runtime;
     }
 
     private AgentPersonaBindingEntity currentBinding(Actor actor, String owner, String personaCode) {

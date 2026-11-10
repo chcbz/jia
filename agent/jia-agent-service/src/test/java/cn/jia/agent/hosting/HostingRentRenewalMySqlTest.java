@@ -44,6 +44,7 @@ class HostingRentRenewalMySqlTest {
     private JdbcTemplate jdbc;
     private cn.jia.agent.mapper.AgentRuntimeMapper runtimeProjection;
     private cn.jia.agent.mapper.AgentExternalServicePolicyMapper externalIdentities;
+    private cn.jia.agent.mapper.AgentHostingRentBindingMapper admissionRoots;
     private EconomyHostingRentMapper leases;
     private EconomyHostingRenewalMapper renewals;
     private EconomyLedgerMapper accounts;
@@ -109,11 +110,13 @@ class HostingRentRenewalMySqlTest {
         manager = new DataSourceTransactionManager(source);
         var config = new MybatisConfiguration(); config.setMapUnderscoreToCamelCase(true);
         config.addMapper(EconomyLedgerMapper.class); config.addMapper(EconomyHostingRentMapper.class);
+        config.addMapper(cn.jia.agent.mapper.AgentHostingRentBindingMapper.class);
         config.addMapper(cn.jia.agent.mapper.AgentRuntimeMapper.class);
         config.addMapper(EconomyHostingRenewalMapper.class); config.addMapper(ScheduledWorkMapper.class);
         var factory = new MybatisSqlSessionFactoryBean(); factory.setDataSource(source); factory.setConfiguration(config);
         factory.setPlugins(new TaskTenantConfiguration().taskPlanTenantInterceptor(policy));
         var template = new SqlSessionTemplate(factory.getObject());
+        admissionRoots = template.getMapper(cn.jia.agent.mapper.AgentHostingRentBindingMapper.class);
         runtimeProjection = template.getMapper(cn.jia.agent.mapper.AgentRuntimeMapper.class);
         accounts = template.getMapper(EconomyLedgerMapper.class); leases = template.getMapper(EconomyHostingRentMapper.class);
         renewals = spy(template.getMapper(EconomyHostingRenewalMapper.class));
@@ -242,6 +245,51 @@ class HostingRentRenewalMySqlTest {
         binding.setId(id); binding.setJiacn(owner); binding.setPersonaCode("wuyong"); binding.setAgentId(agent);
         binding.setBoundAt(1L); binding.setStatus(1); binding.setTenantId("tenant"); binding.setClientId("client");
         return identities.provisionOpaqueIdentity(binding, "authorized invitation fixture");
+    }
+
+    @Test void releasedPublicInstanceIsDiscoveredAndAttachedWithoutReplacingPublicData() {
+        seedRuntimeProjection();
+        assertEquals(1,runtimeProjection.clearBindingAfterUnbind(1,"agent",7,"client","old-owner",100));
+        new org.springframework.transaction.support.TransactionTemplate(manager).executeWithoutResult(tx -> {
+            var rows=admissionRoots.lockPublicInstances("tenant","client","wuyong");
+            assertEquals(1,rows.size());assertEquals("agent",rows.getFirst().getAgentId());
+            assertTrue(admissionRoots.lockPublicInstances("tenant","other-client","wuyong").isEmpty());
+            assertTrue(admissionRoots.lockPublicInstances("tenant","client","other-persona").isEmpty());
+            assertEquals(1,runtimeProjection.attachReleasedBinding(rows.getFirst().getId(),8,"new-owner",200));
+            assertEquals(0,runtimeProjection.attachReleasedBinding(rows.getFirst().getId(),9,"intruder",201));
+        });
+        var row=jdbc.queryForMap("SELECT * FROM agent_runtime WHERE id=1");
+        assertEquals("agent",row.get("agent_id"));assertEquals("wuyong",row.get("persona_code"));
+        assertEquals("吴用",row.get("persona_name"));assertEquals("client",row.get("client_id"));
+        assertEquals("new-owner",row.get("owner_jiacn"));assertEquals(8L,((Number)row.get("binding_id")).longValue());
+        assertNull(row.get("endpoint"));assertNull(row.get("token_hash"));assertNull(row.get("current_task_title"));
+        assertEquals(0,runtimeProjection.clearBindingAfterUnbind(1,"agent",7,"client","old-owner",300));
+        assertEquals(row,jdbc.queryForMap("SELECT * FROM agent_runtime WHERE id=1"));
+    }
+
+    @Test void completedHandoverRequiresLatestClosedLeaseAndExactOriginalInstallation() {
+        seed("finish","FINISHING",500,now(),null);
+        jdbc.update("""
+                INSERT INTO economy_hosting_provisioning_intent (intent_id,lease_id,quote_id,quote_purpose,
+                    principal_type,principal_id,persona_code,agent_id,amount_wen,period_seconds,status,
+                    reserve_idempotency_key,reserve_request_hash,reserved_at,escrow_version,version,tenant_id,client_id,
+                    create_time,update_time,runtime_installation_id)
+                VALUES ('initial-finish','finish','quote-finish','INITIAL','USER','user','persona-finish','agent-finish',
+                    500,2592000,'ACTIVE','original-key',REPEAT('a',32),1,1,1,'tenant','client',1,1,'original-installation')
+                """);
+        assertFalse(service.completedHandover(scope,"agent-finish","original-installation"));
+        new org.springframework.transaction.support.TransactionTemplate(manager).executeWithoutResult(tx ->
+                service.recordExecutorStopped(scope,new EconomyPrincipal(EconomyPrincipalType.USER,"user"),
+                        "finish","binding-finish","agent-finish","finish"));
+        assertFalse(service.completedHandover(scope,"agent-finish","original-installation"));
+        complete("finish","user","binding-finish","agent-finish");
+        assertTrue(service.completedHandover(scope,"agent-finish","original-installation"));
+        assertFalse(service.completedHandover(scope,"agent-finish","other-installation"));
+        assertFalse(service.completedHandover(scope,"other-agent","original-installation"));
+        seed("new","ACTIVE",500,now(),null);
+        jdbc.update("UPDATE economy_hosting_lease SET agent_id='agent-finish' WHERE lease_id='new'");
+        assertFalse(service.completedHandover(scope,"agent-finish","original-installation"));
+        assertEquals(1000,balance());assertEquals(0,charges());
     }
 
     @Test void finalReleaseRetainsPublicInstanceAndClearsPrivateRelationship() {

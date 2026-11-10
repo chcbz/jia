@@ -34,6 +34,7 @@ class HostingRentApplicationServiceTest {
     static final String KEY = "00000000-0000-0000-0000-000000000002";
     static final HostingRentHttp.Actor ACTOR = new HostingRentHttp.Actor("login-sub", "0", "Client-A", "Tenant-A");
     private final EconomyHostingRentMapper rent = mock(EconomyHostingRentMapper.class);
+    private final HostingRentRenewalService renewal = mock(HostingRentRenewalService.class);
     private final HostingRentLedgerService ledger = mock(HostingRentLedgerService.class);
     private final AgentHostingRentBindingMapper roots = mock(AgentHostingRentBindingMapper.class);
     private final AgentPersonaBindingDao bindings = mock(AgentPersonaBindingDao.class);
@@ -63,7 +64,7 @@ class HostingRentApplicationServiceTest {
         application = new HostingRentApplicationService(new AgentHostingRentProperties(true, "1", "1000000000", "2592000"),
                 new EconomyPreviewGate(new EconomyPreviewProperties(true, List.of(
                         new EconomyPreviewProperties.AllowedScope("0", "Client-A")))), owners, rent,
-                ledger, mock(HostingRentRenewalService.class), roots, bindings, runtimes, identities, providers, reconciler,
+                ledger, renewal, roots, bindings, runtimes, identities, providers, reconciler,
                 new DataSourceTransactionManager(dataSource), true);
         when(owners.requireOwner(ACTOR)).thenReturn("Tenant-A");
         when(roots.lockPersona("wuyong")).thenReturn(new AgentPersonaEntity().setPersonaCode("wuyong").setName("fixture")
@@ -95,6 +96,82 @@ class HostingRentApplicationServiceTest {
         });
         when(runtimes.insert(any())).thenAnswer(call -> { jdbc.update("INSERT INTO effects VALUES('runtime')"); return 1; });
         when(rent.attachBinding("0", "Client-A", "hrl-test", "17")).thenReturn(1);
+    }
+
+    private AgentRuntimeEntity releasedInvitation() {
+        var runtime = new AgentRuntimeEntity(); runtime.setId(23L); runtime.setAgentId(AGENT);
+        runtime.setTenantId("0"); runtime.setClientId("Client-A"); runtime.setPersonaCode("wuyong");
+        runtime.setRuntimeInstallationId("original-installation");
+        when(roots.lockPublicInstances("0", "Client-A", "wuyong")).thenReturn(List.of(runtime));
+        when(renewal.completedHandover(ACTOR.scope(), AGENT, "original-installation")).thenReturn(true);
+        when(runtimes.attachReleasedBinding(eq(23L),eq(17L),eq("Tenant-A"),anyLong())).thenAnswer(call -> {
+            jdbc.update("INSERT INTO effects VALUES('reattach')"); return 1;
+        });
+        return runtime;
+    }
+
+    @Test void reInvitationQuoteUsesRetainedAgentWithoutNewBindingOrFunds() {
+        releasedInvitation();
+        when(rent.selectPlanForUpdate(anyString(),anyString(),anyString(),eq(1L))).thenReturn(
+                new EconomyHostingRentPlanEntity().setPlanId("plan").setPlanVersion(1L));
+        when(ledger.quote(any())).thenAnswer(call -> {
+            HostingRentQuoteCommand command = call.getArgument(0); assertEquals(AGENT, command.agentId());
+            return new HostingRentQuoteReceipt("quote",HostingRentQuotePurpose.INITIAL,"plan",1L,500L,
+                    2592000L,"wuyong",AGENT,null,null,1800000000000L);
+        });
+        application.quote(ACTOR,"wuyong",KEY,Map.of("purpose","INITIAL"));
+        verifyNoInteractions(bindings,identities,reconciler);
+        verify(ledger,never()).reserve(any()); assertEquals(0,count());
+    }
+
+    @Test void reInvitationReusesPublicRuntimeAndCreatesNewRelationshipAtomically() {
+        releasedInvitation(); application.bind(ACTOR,"wuyong",KEY,confirmation());
+        assertEquals(4,count()); verify(runtimes,never()).insert(any());
+        var order=inOrder(renewal,ledger,bindings,identities,runtimes,reconciler);
+        order.verify(renewal).completedHandover(ACTOR.scope(),AGENT,"original-installation");
+        order.verify(ledger).reserve(any()); order.verify(bindings).insert(any());
+        order.verify(identities).provisionOpaqueIdentity(any(),anyString());
+        order.verify(runtimes).attachReleasedBinding(eq(23L),eq(17L),eq("Tenant-A"),anyLong());
+        order.verify(reconciler).wake();
+    }
+
+    @Test void incompleteHandoverRefusesQuoteAndReserveWithoutFunds() {
+        releasedInvitation();
+        when(rent.selectPlanForUpdate(anyString(),anyString(),anyString(),eq(1L))).thenReturn(
+                new EconomyHostingRentPlanEntity().setPlanId("plan").setPlanVersion(1L));
+        when(renewal.completedHandover(ACTOR.scope(),AGENT,"original-installation")).thenReturn(false);
+        assertEquals("HOSTING_RENT_HANDOVER_PENDING", assertThrows(HostingRentApplicationException.class,
+                () -> application.quote(ACTOR,"wuyong",KEY,Map.of("purpose","INITIAL"))).code());
+        assertEquals("HOSTING_RENT_HANDOVER_PENDING", assertThrows(HostingRentApplicationException.class,
+                () -> application.bind(ACTOR,"wuyong",KEY,confirmation())).code());
+        verifyNoInteractions(ledger,bindings,identities,reconciler); assertEquals(0,count());
+    }
+
+    @Test void staleNewInstanceQuoteCannotReplaceRetainedPublicInstance() {
+        var retained=releasedInvitation();
+        retained.setAgentId("agt_11111111111111111111111111111111");
+        when(renewal.completedHandover(ACTOR.scope(),retained.getAgentId(),"original-installation")).thenReturn(true);
+        assertEquals("HOSTING_RENT_QUOTE_STALE",assertThrows(HostingRentApplicationException.class,
+                () -> application.bind(ACTOR,"wuyong",KEY,confirmation())).code());
+        verifyNoInteractions(ledger,bindings,identities,reconciler);assertEquals(0,count());
+    }
+
+    @Test void lostReleasedRuntimeCasRollsBackNewReserveAndRelationship() {
+        releasedInvitation();
+        doReturn(0).when(runtimes).attachReleasedBinding(eq(23L),eq(17L),eq("Tenant-A"),anyLong());
+        assertThrows(HostingRentApplicationException.class,()->application.bind(ACTOR,"wuyong",KEY,confirmation()));
+        assertEquals(0,count()); verifyNoInteractions(reconciler); verify(runtimes,never()).insert(any());
+    }
+
+    @Test void boundOrAmbiguousPublicInstancesCannotBeReused() {
+        var retained=releasedInvitation(); retained.setBindingId(6L);
+        assertEquals("HOSTING_RENT_HANDOVER_PENDING",assertThrows(HostingRentApplicationException.class,
+                () -> application.bind(ACTOR,"wuyong",KEY,confirmation())).code());
+        verify(renewal,never()).completedHandover(any(),anyString(),anyString());
+        when(roots.lockPublicInstances("0","Client-A","wuyong")).thenReturn(List.of(retained,retained));
+        assertEquals("HOSTING_RENT_INSTANCE_CONFLICT",assertThrows(HostingRentApplicationException.class,
+                () -> application.bind(ACTOR,"wuyong",KEY,confirmation())).code());
+        verifyNoInteractions(ledger,bindings,identities,reconciler); assertEquals(0,count());
     }
 
     private void existingInvitation() {

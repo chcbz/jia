@@ -29,6 +29,9 @@ public interface AgentRuntimeDao extends IBaseDao<AgentRuntimeEntity> {
     }
     List<AgentRuntimeEntity> findCandidateRosterByOwner(String tenantId, String clientId, String jiacn);
 
+    /** Caller has locked and authorized the released public instance. */
+    int attachReleasedBinding(long runtimeId, long bindingId, String ownerJiacn, long attachedAt);
+
     int clearBindingAfterUnbind(long runtimeId, String agentId, long bindingId,
             String clientId, String ownerJiacn, long detachedAt);
 

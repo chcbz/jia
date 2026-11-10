@@ -62,6 +62,19 @@ public final class HostingRentRenewalServiceImpl implements HostingRentRenewalSe
         return leases.selectInitialIntent(scope.tenantId(),scope.clientId(),leaseId);
     }
 
+    @Override public boolean completedHandover(EconomyScope scope, String agentId, String installationId) {
+        gate.requireMutationAllowed(scope.tenantId(), scope.clientId());
+        if (installationId == null || installationId.isBlank()) return false;
+        var lease = leases.selectLatestLease(scope.tenantId(), scope.clientId(), agentId);
+        if (lease == null || !"CLOSED".equals(lease.getStatus()) || !agentId.equals(lease.getAgentId())
+                || lease.getExecutorStoppedAt() == null || lease.getHandoverId() == null) return false;
+        var initial = leases.selectInitialIntent(scope.tenantId(), scope.clientId(), lease.getLeaseId());
+        return initial != null && "ACTIVE".equals(initial.getStatus()) && initial.getRefundTransactionId() == null
+                && agentId.equals(initial.getAgentId()) && installationId.equals(initial.getRuntimeInstallationId())
+                && Objects.equals(lease.getPrincipalType(), initial.getPrincipalType())
+                && Objects.equals(lease.getPrincipalId(), initial.getPrincipalId());
+    }
+
     @Override public HandoverSnapshot lockHandover(EconomyScope scope, String initialIntentId, String leaseId) {
         gate.requireMutationAllowed(scope.tenantId(), scope.clientId());
         if (!org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())

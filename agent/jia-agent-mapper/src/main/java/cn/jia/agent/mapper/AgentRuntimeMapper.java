@@ -365,6 +365,14 @@ public interface AgentRuntimeMapper extends BaseMapper<AgentRuntimeEntity> {
             """)
     List<AgentRuntimeEntity> findMapVisibleByExactClient(@Param("tenantId") String tenantId, @Param("clientId") String clientId);
 
+    @Update("""
+            UPDATE agent_runtime SET binding_id=#{bindingId}, owner_jiacn=#{ownerJiacn},
+                status='offline', last_seen_at=#{attachedAt}, update_time=#{attachedAt}
+            WHERE id=#{runtimeId} AND binding_id IS NULL AND owner_jiacn IS NULL
+            """)
+    int attachReleasedBinding(@Param("runtimeId") long runtimeId, @Param("bindingId") long bindingId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("attachedAt") long attachedAt);
+
     // Release only the private relationship. Client/persona identify the retained
     // public instance; erasing them would force later admission to create another Agent.
     @Update("""

@@ -76,6 +76,11 @@ public class AgentRuntimeDaoImpl extends BaseDaoImpl<AgentRuntimeMapper, AgentRu
     }
 
     @Override
+    public int attachReleasedBinding(long runtimeId, long bindingId, String ownerJiacn, long attachedAt) {
+        return baseMapper.attachReleasedBinding(runtimeId, bindingId, ownerJiacn, attachedAt);
+    }
+
+    @Override
     public int clearBindingAfterUnbind(long runtimeId, String agentId, long bindingId,
             String clientId, String ownerJiacn, long detachedAt) {
         if (runtimeId <= 0 || bindingId <= 0 || detachedAt <= 0) {
