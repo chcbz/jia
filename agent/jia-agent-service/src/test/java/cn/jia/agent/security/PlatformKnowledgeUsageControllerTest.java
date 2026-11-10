@@ -23,6 +23,7 @@ class PlatformKnowledgeUsageControllerTest {
     @Test void originalNativeFenceProvidesScopeButReceiptNeverClaimsTaskSettlement() {
         var recorder = mock(PlatformKnowledgeUsageRecorder.class); var auth = mock(AgentRuntimeAuthenticationService.class);
         var principal = new AgentRuntimeAuthentication(new AgentRuntimeAuthentication.Scope("tenant", "client", "owner", "agent", "instance"));
+        principal.setDetails(new AgentRuntimeAuthenticationService.Proof(principal.getPrincipal(), "installation", "host", 1, "digest", 1, 1));
         when(auth.withNativeFence(eq(principal), any())).thenAnswer(invocation -> ((Supplier<?>)invocation.getArgument(1)).get());
         when(recorder.record(any(), eq("lease"), eq("handover"), any())).thenReturn(new UsageCostService.Receipt("attempt", 1, TokenUsageCost.Status.PENDING_USAGE, null, false));
         var event = new PlatformKnowledgeUsageRecorder.Evidence("0", "extract", PlatformKnowledgeUsageRecorder.Phase.STARTED, "platform", "gpt-6-luna", "standard", null);

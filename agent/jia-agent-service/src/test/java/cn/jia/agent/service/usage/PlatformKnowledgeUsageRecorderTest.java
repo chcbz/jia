@@ -58,7 +58,7 @@ class PlatformKnowledgeUsageRecorderTest {
         recorder.record(scope, "lease", "handover", evidence(RESPONDED));
         var actual = capture(); assertEquals(price, actual.price()); assertEquals(1, actual.expectedRevision());
         assertEquals(Map.of(INPUT, 80L, CACHED_INPUT, 20L, OUTPUT, 10L), actual.normalizedUsage().tokens());
-        assertEquals(new BigDecimal("0.000132"), price.cost(actual.normalizedUsage().tokens()));
+        assertEquals(new BigDecimal("0.000132"), cn.jia.economy.usage.TokenUsageCost.assess(actual.normalizedUsage(), price).costYuan());
         verifyNoInteractions(prices);
     }
     @Test void missingInitialPriceRemainsPendingInsteadOfUsingNewCurrentTariffs() {
