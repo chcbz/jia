@@ -26,7 +26,7 @@ class ChatBountyAssetFilenameTest {
         var jdbc = mock(JdbcTemplate.class);
         var projector = new ChatBountyAssetProjector(jdbc, mock(ChatDeliberationService.class),
                 mock(ChatDeliberationDao.class), mock(ChatConversationDao.class), mock(ChatMessageDao.class),
-                mock(PersonalWorkspaceExecutionService.class), mock(ChatConversationEventBroker.class));
+                mock(PersonalWorkspaceExecutionService.class), mock(ChatConversationEventBroker.class), new cn.jia.core.security.FixedTenantAdmissionPolicy("0",null));
         var owner = new PersonalWorkspaceExecutionService.OwnerScope("tenant", "client", "owner");
         assertTrue(projector.partsFor(owner, "42", List.of()).isEmpty());
         verifyNoInteractions(jdbc);
@@ -45,7 +45,7 @@ class ChatBountyAssetFilenameTest {
         var jdbc = mock(JdbcTemplate.class);
         var projector = new ChatBountyAssetProjector(jdbc, mock(ChatDeliberationService.class),
                 mock(ChatDeliberationDao.class), mock(ChatConversationDao.class), mock(ChatMessageDao.class),
-                mock(PersonalWorkspaceExecutionService.class), mock(ChatConversationEventBroker.class));
+                mock(PersonalWorkspaceExecutionService.class), mock(ChatConversationEventBroker.class), new cn.jia.core.security.FixedTenantAdmissionPolicy("0",null));
         var rs = mock(ResultSet.class);
         when(rs.getString(1)).thenReturn("12");
         when(rs.getString(2)).thenReturn("part-1");

@@ -24,7 +24,7 @@ class WorkspaceProjectionQueryMySqlTest extends SkillManagementMySqlFixture {
         jdbc.execute("CREATE TABLE chat_step_execution_link (tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),step_id VARCHAR(100),execution_id VARCHAR(100),state VARCHAR(30))");
         jdbc.execute("CREATE TABLE agent_personal_workspace_execution (tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),execution_id VARCHAR(100),execution_mode VARCHAR(30),execution_state VARCHAR(30),execution_protocol_version INT,KEY execution_scope(tenant_id,client_id,execution_id))");
         projector=new ChatBountyAssetProjector(jdbc,mock(ChatDeliberationService.class),mock(ChatDeliberationDao.class),
-                mock(ChatConversationDao.class),mock(ChatMessageDao.class),mock(PersonalWorkspaceExecutionService.class),mock(ChatConversationEventBroker.class));
+                mock(ChatConversationDao.class),mock(ChatMessageDao.class),mock(PersonalWorkspaceExecutionService.class),mock(ChatConversationEventBroker.class), new cn.jia.core.security.FixedTenantAdmissionPolicy("0",null));
     }
     @AfterEach void cleanup() {
         if(database!=null && database.matches("cyf_projection_[0-9a-f]{32}"))admin.execute("DROP DATABASE `"+database+"`");
@@ -54,4 +54,23 @@ class WorkspaceProjectionQueryMySqlTest extends SkillManagementMySqlFixture {
                 new WorkspaceExecutionProjectionHint("0","client","owner","exec ")))
             assertTrue(projector.pendingExecution(hint).isEmpty());
     }
+    @Test void recoveryPartitionsBeforeLimitAndExactHintCannotOverrideProcessScope() {
+        row("a-foreign","RESULT_COMMITTED",5); row("b-other-client","RESULT_COMMITTED",5);
+        row("c-local","RESULT_COMMITTED",5);
+        for (String table : List.of("chat_interaction_step", "chat_step_execution_link", "agent_personal_workspace_execution")) {
+            String key = table.equals("chat_interaction_step") ? "step_id" : "execution_id";
+            jdbc.update("UPDATE " + table + " SET tenant_id='other' WHERE " + key + "=?",
+                    key.equals("step_id") ? "step-a-foreign" : "a-foreign");
+            jdbc.update("UPDATE " + table + " SET client_id='other-client' WHERE " + key + "=?",
+                    key.equals("step_id") ? "step-b-other-client" : "b-other-client");
+        }
+        assertEquals("b-other-client",projector.pending(null,1).getFirst().executionId());
+        assertTrue(projector.pendingExecution(new WorkspaceExecutionProjectionHint("other","client","owner","a-foreign")).isEmpty());
+        projector=new ChatBountyAssetProjector(jdbc,mock(ChatDeliberationService.class),mock(ChatDeliberationDao.class),
+                mock(ChatConversationDao.class),mock(ChatMessageDao.class),mock(PersonalWorkspaceExecutionService.class),
+                mock(ChatConversationEventBroker.class),new cn.jia.core.security.FixedTenantAdmissionPolicy("0","client"));
+        assertEquals("c-local",projector.pending(null,1).getFirst().executionId());
+        assertTrue(projector.pendingExecution(new WorkspaceExecutionProjectionHint("0","other-client","owner","b-other-client")).isEmpty());
+    }
+
 }

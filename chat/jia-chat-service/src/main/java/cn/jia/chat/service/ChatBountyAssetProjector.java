@@ -33,6 +33,7 @@ import java.util.Set;
 public class ChatBountyAssetProjector {
     private static final Set<String> IMAGES = Set.of("image/png", "image/jpeg", "image/webp", "image/gif");
     private static final Set<String> AUDIO = Set.of("audio/mpeg", "audio/ogg", "audio/wav", "audio/mp4", "audio/webm");
+    private final cn.jia.core.security.FixedTenantAdmissionPolicy partition;
     private final JdbcTemplate jdbc;
     private final ChatDeliberationService requests;
     private final ChatDeliberationDao events;
@@ -43,7 +44,9 @@ public class ChatBountyAssetProjector {
 
     public ChatBountyAssetProjector(JdbcTemplate jdbc, ChatDeliberationService requests,
             ChatDeliberationDao events, ChatConversationDao conversations, ChatMessageDao messages,
-            PersonalWorkspaceExecutionService executions, ChatConversationEventBroker broker) {
+            PersonalWorkspaceExecutionService executions, ChatConversationEventBroker broker,
+            cn.jia.core.security.FixedTenantAdmissionPolicy partition) {
+        this.partition = Objects.requireNonNull(partition);
         this.jdbc = Objects.requireNonNull(jdbc);
         this.requests = Objects.requireNonNull(requests);
         this.events = Objects.requireNonNull(events);
@@ -82,6 +85,15 @@ public class ChatBountyAssetProjector {
     }
 
     private List<Candidate> pendingQuery(String suffix, Object... parameters) {
+        var args = new java.util.ArrayList<Object>();
+        args.add(partition.businessTenantId());
+        args.add(partition.businessTenantId());
+        String clientFilter = "";
+        if (partition.clientId() != null) {
+            clientFilter = " AND s.client_id=? AND BINARY s.client_id=BINARY ?";
+            args.add(partition.clientId()); args.add(partition.clientId());
+        }
+        java.util.Collections.addAll(args, parameters);
         return jdbc.query("""
                 SELECT s.tenant_id,s.owner_jiacn,s.client_id,s.request_id,s.step_id,l.execution_id
                 FROM chat_interaction_step s
@@ -90,10 +102,10 @@ public class ChatBountyAssetProjector {
                 JOIN agent_personal_workspace_execution e ON e.execution_id=l.execution_id
                   AND e.tenant_id=s.tenant_id AND e.client_id=s.client_id AND e.owner_jiacn=s.owner_jiacn
                   AND e.execution_state IN ('OUTPUT_COMMITTED','RESULT_COMMITTED','FAILED','INPUTS_REVOKED','CANCELLED') AND e.execution_mode='CONVERSATION'
-                WHERE e.execution_protocol_version<>4 AND s.kind='EXECUTE' AND l.state='RUNNING'
+                WHERE s.tenant_id=? AND BINARY s.tenant_id=BINARY ? AND e.execution_protocol_version<>4 AND s.kind='EXECUTE' AND l.state='RUNNING'
                   AND (s.state='RUNNING' OR (s.state=e.execution_state AND e.execution_state IN ('OUTPUT_COMMITTED','RESULT_COMMITTED')))
-                """ + suffix, (rs, n) -> new Candidate(rs.getString(1), rs.getString(2), rs.getString(3),
-                        rs.getString(4), rs.getString(5), rs.getString(6)), parameters);
+                """ + clientFilter + suffix, (rs, n) -> new Candidate(rs.getString(1), rs.getString(2), rs.getString(3),
+                        rs.getString(4), rs.getString(5), rs.getString(6)), args.toArray());
     }
 
     /** Task-root/grant and committed byte check precede the conversation lock and event insert.
