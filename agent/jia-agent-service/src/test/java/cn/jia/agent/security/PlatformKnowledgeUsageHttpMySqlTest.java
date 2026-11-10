@@ -90,6 +90,7 @@ class PlatformKnowledgeUsageHttpMySqlTest {
                     var builder = request(org.springframework.http.HttpMethod.valueOf(exchange.getRequestMethod()), exchange.getRequestURI()).content(bytes);
                     exchange.getRequestHeaders().forEach((key, values) -> builder.header(key, values.toArray()));
                     var result = mvc.perform(builder).andReturn().getResponse();
+                    System.out.println("KNOWLEDGE_HTTP " + exchange.getRequestURI().getPath() + " status=" + result.getStatus());
                     var body = new ObjectMapper().readTree(bytes);
                     var data = body.get("data");
                     if (exchange.getRequestURI().getPath().endsWith("knowledge-usage") && result.getStatus() == 200) {
@@ -104,6 +105,7 @@ class PlatformKnowledgeUsageHttpMySqlTest {
                     exchange.sendResponseHeaders(result.getStatus(), output.length); exchange.getResponseBody().write(output);
                 } catch (Throwable failure) {
                     serverError.compareAndSet(null, failure);
+                    failure.printStackTrace(); // synthetic loopback fixture only; retained diagnosis
                     try { exchange.sendResponseHeaders(500, -1); } catch (Exception ignored) { }
                 } finally { exchange.close(); }
             });
@@ -115,8 +117,9 @@ class PlatformKnowledgeUsageHttpMySqlTest {
                         "http://127.0.0.1:" + server.getAddress().getPort(), scratch.toString(),
                         AgentRuntimePersistentSessionFenceTest.AGENT, AgentRuntimePersistentSessionFenceTest.ID)
                         .redirectErrorStream(true).redirectOutput(log.toFile()).start();
-                assertEquals(0, node.waitFor(), () -> read(log));
+                int exit = node.waitFor();
                 assertNull(serverError.get(), () -> String.valueOf(serverError.get()));
+                assertEquals(0, exit, () -> read(log));
                 assertTrue(read(log).contains("\"providerCalls\":3"));
                 assertEquals(2, responses.get(), "one paid response, same receipt after lost ACK");
                 assertEquals(3L, db.jdbc().queryForObject("SELECT COUNT(*) FROM economy_usage_attempt", Long.class));
