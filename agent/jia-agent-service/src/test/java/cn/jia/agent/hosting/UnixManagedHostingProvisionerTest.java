@@ -279,9 +279,22 @@ class UnixManagedHostingProvisionerTest {
             assertEquals(ManagedHostingProvisioner.Outcome.UNKNOWN, real.prepareAndObserve(free).outcome());
             assertFalse(real.quiesce(initial, original, "stale-handover"));
             var current = candidates.get(free.operationId()); assertNotNull(current);
+            var pending = new ManagedHostingProvisioner.Preparation(initial.tenantId(), initial.clientId(), initial.ownerJiacn(),
+                    initial.agentId(), initial.intentId(), initial.leaseId(), initial.bindingId(), initial.reservedAt(),
+                    "pending-at-finish", free.requestedAt(), free.validUntil());
+            var pendingCandidate = UnixManagedHostingProvisioner.decodePrepared(pending,
+                    real.exchange(UnixManagedHostingProvisioner.request(pending, "prepare", null)));
+            assertNotNull(pendingCandidate); assertEquals(3, pendingCandidate.provisionGeneration());
+            var admitted = real.currentOperation(initial);
+            assertNotNull(admitted); assertEquals(free, admitted.preparation());
+            assertEquals(current.installationId(), admitted.candidate().installationId());
+            assertEquals(2, admitted.candidate().provisionGeneration());
+
             assertFalse(real.flushEvidence(free, current, "finish-real")); // no durable stop yet
             assertFalse(real.cleanup(free, current, "finish-real")); // stop/evidence not yet sufficient
             assertTrue(real.quiesce(free, current, "finish-real"));
+            assertThrows(java.io.IOException.class, () -> real.exchange(UnixManagedHostingProvisioner.request(pending, "ensure", pendingCandidate)));
+            assertEquals(admitted, real.currentOperation(initial));
             assertTrue(real.quiesce(free, current, "finish-real"));
             assertFalse(real.quiesce(free, current, "different-handover"));
             assertFalse(real.flushEvidence(initial, original, "finish-real"));
