@@ -53,4 +53,30 @@ class PlatformKnowledgeUsageControllerTest {
         assertEquals(401, unauthenticated.getStatus()); assertFalse(reached.get());
     }
 
+    @Test void nativeFailureStatusesUseOneCorrelatedEnvelopeWithoutCredentials() throws Exception {
+        for (int status : new int[]{401, 403, 503}) {
+            var auth = mock(AgentRuntimeAuthenticationService.class);
+            when(auth.authenticate(any(), anyBoolean())).thenThrow(new org.springframework.dao.DataAccessResourceFailureException("private database detail"));
+            var request = new MockHttpServletRequest(status == 403 ? "GET" : "POST", PATH);
+            request.addHeader("X-Request-Id", "request-" + status);
+            if (status == 503) {
+                request.addHeader("Authorization", "AgentRuntime rts1_" + "a".repeat(64));
+                request.addHeader("X-Agent-Id", "agent"); request.addHeader("X-Agent-Installation-Id", "rti_" + "b".repeat(32));
+                request.addHeader("X-Agent-Host-Id", "host"); request.addHeader("X-Agent-Runtime-Id", "instance");
+                request.addHeader("X-Agent-Session-Generation", "1");
+            }
+            var response = new org.springframework.mock.web.MockHttpServletResponse();
+            new AgentRuntimeAuthenticationFilter(auth).doFilter(request, response, (req, res) -> fail("denied request reached controller"));
+            assertEquals(status, response.getStatus());
+            var body = new tools.jackson.databind.ObjectMapper().readTree(response.getContentAsString());
+            assertEquals(6, body.size()); assertEquals(1, body.get("protocolVersion").asInt());
+            assertEquals("request-" + status, body.get("requestId").asString());
+            assertEquals(body.get("requestId").asString(), response.getHeader("X-Request-Id"));
+            assertEquals("AGENT_RUNTIME_UNAUTHENTICATED", body.get("code").asString());
+            assertTrue(body.get("data").isNull()); assertTrue(body.get("msg").isString());
+            assertFalse(response.getContentAsString().contains("private database"));
+            assertFalse(response.getContentAsString().contains("rts1_"));
+        }
+    }
+
 }

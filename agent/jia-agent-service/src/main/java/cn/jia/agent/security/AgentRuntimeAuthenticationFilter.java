@@ -1,5 +1,8 @@
 package cn.jia.agent.security;
 
+import cn.jia.core.entity.JsonResult;
+import cn.jia.core.filter.RequestIdFilter;
+import tools.jackson.databind.ObjectMapper;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
 import jakarta.servlet.FilterChain;
@@ -14,6 +17,7 @@ import java.util.Locale;
 
 /** Closed method/path lane. Runtime credentials cannot fall through to user/OAuth APIs. */
 public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter {
+    private static final ObjectMapper JSON = new ObjectMapper();
     private final AgentRuntimeAuthenticationService service;
     public AgentRuntimeAuthenticationFilter(AgentRuntimeAuthenticationService service) { this.service = service; }
 
@@ -98,13 +102,13 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
         final AgentRuntimeAuthentication authentication;
         try {
             if (!allowed(request) || request.getHeader("Origin") != null) {
-                reject(response, 403); return; // native-only; no browser credential exposure/CORS lane
+                reject(request, response, 403); return; // native-only; no browser credential exposure/CORS lane
             }
             boolean handshake = request.getRequestURI().equals(request.getContextPath() + "/ws/agent/channel");
             boolean ack = request.getRequestURI().startsWith(request.getContextPath() + "/agent/runtime/v1/commands/");
             authentication = service.authenticate(sessionHeaders(request), !handshake && !ack && !isEvidenceDelivery(request));
-        } catch (org.springframework.dao.DataAccessException unavailable) { reject(response, 503); return; }
-        catch (RuntimeException ignored) { reject(response, 401); return; }
+        } catch (org.springframework.dao.DataAccessException unavailable) { reject(request, response, 503); return; }
+        catch (RuntimeException ignored) { reject(request, response, 401); return; }
         var previous = SecurityContextHolder.getContext();
         var context = SecurityContextHolder.createEmptyContext();
         context.setAuthentication(authentication);
@@ -173,8 +177,11 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
         if (values.size() != 1) throw AgentRuntimeAuthenticationService.denied();
         return values.getFirst();
     }
-    private static void reject(HttpServletResponse response, int status) throws IOException {
-        response.setStatus(status); response.setContentType("application/json");
-        response.getWriter().write("{\"code\":\"AGENT_RUNTIME_UNAUTHENTICATED\"}");
+    private static void reject(HttpServletRequest request, HttpServletResponse response, int status) throws IOException {
+        var result = JsonResult.failure("AGENT_RUNTIME_UNAUTHENTICATED", "Runtime authentication failed");
+        result.setRequestId(RequestIdFilter.current(request));
+        response.setStatus(status); response.setContentType("application/json"); response.setCharacterEncoding("UTF-8");
+        response.setHeader(RequestIdFilter.HEADER_NAME, result.getRequestId());
+        response.getWriter().write(JSON.writeValueAsString(result));
     }
 }
