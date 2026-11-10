@@ -136,7 +136,7 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
         return observation;
     }
     static Map<String, Object> request(Preparation p, String method, Candidate candidate) {
-        if (!validPreparation(p) || !Set.of("prepare", "ensure", "observe", "quiesce", "evidence").contains(method)
+        if (!validPreparation(p) || !Set.of("prepare", "ensure", "observe", "quiesce", "evidence", "cleanup").contains(method)
                 || !"prepare".equals(method) && candidate == null) throw new IllegalArgumentException("Invalid hosting control request");
         Map<String, Object> request = association(p);
         request.put("protocol", PROTOCOL); request.put("method", method);
