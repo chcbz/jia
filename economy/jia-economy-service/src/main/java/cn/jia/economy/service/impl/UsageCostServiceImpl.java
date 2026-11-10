@@ -60,7 +60,7 @@ public class UsageCostServiceImpl implements UsageCostService {
                 .setSource(binding.source()).setSourceAttemptId(binding.sourceAttemptId()).setCreatedAt(now).setUpdatedAt(now);
         mapper.insertAttemptIfAbsent(attemptKey);
         var attempt = mapper.lockAttempt(attemptKey);
-        if (!binding.ownerJiacn().equals(attempt.getOwnerJiacn()) || !Objects.equals(binding.taskId(), attempt.getTaskId())
+        if (!Objects.equals(binding.ownerJiacn(), attempt.getOwnerJiacn()) || !Objects.equals(binding.taskId(), attempt.getTaskId())
                 || !binding.source().equals(attempt.getSource()) || !binding.sourceAttemptId().equals(attempt.getSourceAttemptId()))
             throw new UsageCostConflict(ATTEMPT_BINDING);
         var revision = new EconomyUsageRevisionEntity().setTenantId(scope.tenantId()).setClientId(scope.clientId())
@@ -107,7 +107,7 @@ public class UsageCostServiceImpl implements UsageCostService {
         var attempt = mapper.findAttempt(new EconomyUsageAttemptEntity().setTenantId(scope.tenantId())
                 .setClientId(scope.clientId()).setAttemptId(attemptId));
         if (attempt == null) return java.util.Optional.empty();
-        if (!binding.ownerJiacn().equals(attempt.getOwnerJiacn()) || !Objects.equals(binding.taskId(), attempt.getTaskId()))
+        if (!Objects.equals(binding.ownerJiacn(), attempt.getOwnerJiacn()) || !Objects.equals(binding.taskId(), attempt.getTaskId()))
             throw new UsageCostConflict(ATTEMPT_BINDING);
         var row = mapper.findReceipt(new EconomyUsageRevisionEntity().setTenantId(scope.tenantId())
                 .setClientId(scope.clientId()).setAttemptId(attemptId).setReceiptKey(digest(receiptId)));

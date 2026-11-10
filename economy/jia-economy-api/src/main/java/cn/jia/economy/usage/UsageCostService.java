@@ -9,14 +9,23 @@ import java.util.Objects;
  * No task lifecycle, wallet, provider call or current-price lookup is performed here.
  */
 public interface UsageCostService {
-    /** Null taskId is a real non-task invocation, not a synthetic task or a wallet charge. */
+    /** Null taskId is a real non-task invocation. Null ownerJiacn explicitly means a platform
+     * cost, never an anonymous user: trusted source adapters choose this binding, not HTTP input.
+     * Platform costs cannot belong to a user task. No synthetic platform account is required.
+     */
     record Binding(EconomyScope scope, String ownerJiacn, String taskId, String source, String sourceAttemptId) {
         public Binding {
             Objects.requireNonNull(scope, "scope");
-            for (String value : new String[]{ownerJiacn, source, sourceAttemptId})
+            for (String value : new String[]{source, sourceAttemptId})
                 if (value == null || value.isBlank()) throw new IllegalArgumentException("Cost attempt binding is required");
+            if (ownerJiacn != null && ownerJiacn.isBlank()) throw new IllegalArgumentException("Owner cannot be blank");
+            if (ownerJiacn == null && taskId != null) throw new IllegalArgumentException("Platform cost cannot belong to a user task");
             if (taskId != null && taskId.isBlank()) throw new IllegalArgumentException("Task identity cannot be blank");
         }
+    }
+    /** Explicit entry for platform maintenance; sourceAttemptId retains the source's Agent/batch identity. */
+    static Binding platformBinding(EconomyScope scope, String source, String sourceAttemptId) {
+        return new Binding(scope, null, null, source, sourceAttemptId);
     }
     /** expectedRevision=0 creates an attempt; later evidence/repricing is an explicit revision.
      * receiptId and rawUsageJson are stable source evidence, not a new id/timestamp on redelivery.

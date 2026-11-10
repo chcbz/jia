@@ -142,6 +142,49 @@ class UsageCostServiceMySqlTest {
         assertEquals(1, summary().attempts());
     }
 
+    @Test void platformKnowledgeCostsRemainSeparateAndCannotBecomeUserCosts() {
+        var binding = UsageCostService.platformBinding(SCOPE, "PUBLIC_KNOWLEDGE_EXTRACTION", "agent-1:handover-1");
+        var initial = observation(binding, "started", 0, null, null);
+        assertEquals(PENDING_USAGE, service.record(initial).status());
+        assertTrue(service.record(initial).replay());
+        var pendingPrice = observation(binding, "usage", 1, usage(123456), null);
+        assertEquals(PENDING_PRICE, service.record(pendingPrice).status());
+        var terminal = priced(binding, "priced", 2, 123456);
+        assertEquals(new BigDecimal("0.123456"), service.record(terminal).costYuan());
+        assertEquals(terminal, service.observation(binding, "priced").orElseThrow());
+        assertTrue(service.record(terminal).replay());
+        assertNull(jdbc.queryForObject("SELECT owner_jiacn FROM economy_usage_attempt", String.class));
+        assertNull(jdbc.queryForObject("SELECT task_id FROM economy_usage_attempt", String.class));
+        assertEquals(0, count("economy_task_cost"));
+        assertEquals(3, count("economy_usage_revision"));
+        var user = new Binding(SCOPE, "original-owner", null, binding.source(), binding.sourceAttemptId());
+        conflict(ATTEMPT_BINDING, () -> service.record(priced(user, "reassign", 3, 1)));
+        conflict(ATTEMPT_BINDING, () -> service.observation(user, "priced"));
+        var userTask = new Binding(SCOPE, "original-owner", "original-task", binding.source(), binding.sourceAttemptId());
+        conflict(ATTEMPT_BINDING, () -> service.record(priced(userTask, "reassign", 3, 1)));
+        assertEquals(0, count("economy_task_cost"));
+        service.record(priced(BINDING, "original-user-cost", 0, 10));
+        var fakePlatform = UsageCostService.platformBinding(SCOPE, BINDING.source(), BINDING.sourceAttemptId());
+        conflict(ATTEMPT_BINDING, () -> service.record(priced(fakePlatform, "reassign", 1, 1)));
+        conflict(ATTEMPT_BINDING, () -> service.observation(fakePlatform, "original-user-cost"));
+        assertEquals(new BigDecimal("0.000010"), summary().costYuan());
+        assertThrows(IllegalArgumentException.class, () -> new Binding(SCOPE, null, "task", "source", "attempt"));
+        assertThrows(IllegalArgumentException.class, () -> new Binding(SCOPE, "", null, "source", "attempt"));
+    }
+
+    @Test void explicitPlatformMigrationPreservesExistingUserReceipts() {
+        service.record(priced(BINDING, "before-migration", 0, 10));
+        jdbc.execute("ALTER TABLE economy_usage_attempt MODIFY COLUMN owner_jiacn VARCHAR(100) NOT NULL");
+        var migration = new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator(
+                new org.springframework.core.io.ClassPathResource("db/migration-platform-usage-cost-20261110.sql"));
+        migration.execute(jdbc.getDataSource());
+        migration.execute(jdbc.getDataSource());
+        assertTrue(service.record(priced(BINDING, "before-migration", 0, 10)).replay());
+        var platform = UsageCostService.platformBinding(SCOPE, "PUBLIC_KNOWLEDGE_EXTRACTION", "agent:batch");
+        assertEquals(new BigDecimal("0.000020"), service.record(priced(platform, "after-migration", 0, 20)).costYuan());
+        assertEquals(new BigDecimal("0.000010"), summary().costYuan());
+    }
+
     @Test void nativeStartedAndTerminalReceiptsKeepOneUnknownAttemptAcrossLostAcks() {
         var binding = new Binding(SCOPE, "owner", "task", "NATIVE_EXECUTION_EVIDENCE", "exec");
         var started = new Observation(binding, "started", 0, "{\"phase\":\"STARTED\",\"usageEvidence\":null}", null, null, 0);

@@ -42,3 +42,10 @@ The native endpoint records execution evidence as `PENDING_USAGE` with no guesse
 The same Runtime-only endpoint now requires `phase=STARTED|TERMINAL`. STARTED may not carry usage: its purpose is durable unknown-cost discovery, not a claim that an upstream request was accepted. The controller owns this protocol validation (400 for missing/unknown phase or started usage); `NativeExecutionUsageCostRecorder` binds the authenticated historical owner and maps started/terminal to expected revisions 0/1. The existing cost ledger alone owns transaction ordering, immutable receipts and replay/conflict (409), avoiding duplicated concurrency logic. Both observations remain PENDING_USAGE until actual provider evidence is independently verified. Terminal-first cannot create an orphan attempt; lost ACK retries are stable and one execution yields one evidence attempt. Regression: recorder/controller tests and `UsageCostServiceMySqlTest.nativeStartedAndTerminalReceiptsKeepOneUnknownAttemptAcrossLostAcks`.
 
 The Runtime writes its existing native-start-attempt before runTurn, retaining the then-requested model. Safe discovery delivers STARTED before TERMINAL, independently of business receipts, including no-terminal crashes. Recovery of a known completed/failed/interrupted turn saves unknown cost even without usage; it does not run another model turn. These are local pending + asynchronous HTTP evidence, not synchronous pre-call server acknowledgement or exact per-provider billing coverage.
+
+## 2026-11-10 平台知识提取成本（候选，未迁移生产）
+- 内部可信成本入口`UsageCostService.platformBinding`使用空owner、空task表示平台承担，不创建虚拟用户/事项，不触发钱包或事项费用聚合。非空owner仍是用户成本；空owner不能绑定事项，空字符串不代表平台。
+- 同一source/sourceAttemptId一旦入账，平台/用户归属与task不能改变；记录和读取均检查原绑定。继续复用既有幂等、独立事务、原始usage、价格快照和待核算状态，不增加业务热路径查询。
+- 普通调用的身份由各自原可信适配器取得，不能允许HTTP输入选择平台归属。知识提取适配器尚待接通，sourceAttemptId须绑定原Agent/提取批次，原用户执行迟到成本不得走平台入口。
+- 新表允许usage attempt owner为空；已安装表仅显式执行`db/migration-platform-usage-cost-20261110.sql`，不在启动自动改表。迁移不改已有owner/金额/receipt hash；task summary owner继续非空。
+- 回归入口：`UsageCostServiceMySqlTest`平台费用隔离/双向归属篡改/缺usage与单价/重复回执/迁移保留原事实；`EconomyUsageCostSchemaTest`验证DDL。完成状态以handoff测试记录为准。

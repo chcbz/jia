@@ -1,9 +1,10 @@
+-- NULL usage owner means platform-paid; user task summaries still require an owner.
 -- Independent RMB cost records; no wallet references, business CHECKs, triggers or destructive migration.
 CREATE TABLE IF NOT EXISTS economy_usage_attempt (
     tenant_id VARCHAR(50) NOT NULL,
     client_id VARCHAR(50) NOT NULL,
     attempt_id CHAR(64) NOT NULL,
-    owner_jiacn VARCHAR(100) NOT NULL,
+    owner_jiacn VARCHAR(100) DEFAULT NULL,
     task_id VARCHAR(100) DEFAULT NULL,
     source VARCHAR(100) NOT NULL,
     source_attempt_id LONGTEXT NOT NULL,

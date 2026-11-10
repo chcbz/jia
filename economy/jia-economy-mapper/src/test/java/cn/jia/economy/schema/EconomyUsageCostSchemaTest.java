@@ -14,6 +14,8 @@ class EconomyUsageCostSchemaTest {
         assertEquals(3, ddl.split("decimal\\(30,6\\)", -1).length - 1);
         assertTrue(ddl.contains("unique key uk_usage_revision_receipt"));
         assertEquals(1, ddl.split("task_id varchar\\(100\\) default null", -1).length - 1);
+        assertEquals(1, ddl.split("owner_jiacn varchar\\(100\\) default null", -1).length - 1);
+        assertEquals(1, ddl.split("owner_jiacn varchar\\(100\\) not null", -1).length - 1);
         assertTrue(ddl.contains("foreign key (tenant_id, client_id, attempt_id)"));
         for (String forbidden : new String[]{"check (", "create trigger", "double", "float", "amount_wen", "economy_account", "drop table"})
             assertFalse(ddl.contains(forbidden), forbidden);

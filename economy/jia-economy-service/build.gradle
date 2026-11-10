@@ -57,3 +57,32 @@ gradle.projectsEvaluated {
     configurations.testCompileClasspath.shouldResolveConsistentlyWith(applicationRuntime)
     configurations.testRuntimeClasspath.shouldResolveConsistentlyWith(applicationRuntime)
 }
+
+// Actual MySQL usage journal regression, independent of unrelated HTTP fixture compilation.
+def usageCostRegressionSourceSet = sourceSets.create('usageCostRegression') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/economy/config/EconomyMySqlTestFixture.java'
+        include 'cn/jia/economy/service/impl/UsageCostServiceMySqlTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(usageCostRegressionSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(usageCostRegressionSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('usageCostRegression', Test) {
+    maxParallelForks = 1
+    maxHeapSize = '256m'
+    jvmArgs '-XX:MaxMetaspaceSize=160m', '-Xss256k'
+    group = 'verification'
+    description = 'Runs the opt-in real MySQL usage cost journal regressions.'
+    dependsOn tasks.named(usageCostRegressionSourceSet.classesTaskName)
+    testClassesDirs = usageCostRegressionSourceSet.output.classesDirs
+    classpath = usageCostRegressionSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
