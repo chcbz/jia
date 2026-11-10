@@ -43,17 +43,17 @@ public interface EconomyHostingRentMapper {
 
     @Insert("""
             INSERT INTO economy_hosting_rent_quote(
-                quote_id,quote_purpose,plan_id,plan_version,amount_wen,period_seconds,
+                quote_id,quote_purpose,plan_id,plan_version,amount_wen,recurring_amount_wen,period_seconds,
                 principal_type,principal_id,persona_code,agent_id,lease_id,expected_lease_version,
                 idempotency_key,request_hash,expires_at,tenant_id,client_id,create_time)
-            VALUES(#{quoteId},#{quotePurpose},#{planId},#{planVersion},#{amountWen},#{periodSeconds},
+            VALUES(#{quoteId},#{quotePurpose},#{planId},#{planVersion},#{amountWen},#{recurringAmountWen},#{periodSeconds},
                 #{principalType},#{principalId},#{personaCode},#{agentId},#{leaseId},#{expectedLeaseVersion},
                 #{idempotencyKey},#{requestHash},#{expiresAt},#{tenantId},#{clientId},#{createTime})
             """)
     int insertQuote(EconomyHostingRentQuoteEntity quote);
 
     @Select("""
-            SELECT id,quote_id,quote_purpose,plan_id,plan_version,amount_wen,period_seconds,
+            SELECT id,quote_id,quote_purpose,plan_id,plan_version,amount_wen,recurring_amount_wen,period_seconds,
                    principal_type,principal_id,persona_code,agent_id,lease_id,expected_lease_version,
                    idempotency_key,request_hash,expires_at,tenant_id,client_id,create_time
             FROM economy_hosting_rent_quote
@@ -73,7 +73,7 @@ public interface EconomyHostingRentMapper {
             @Param("idempotencyKey") byte[] idempotencyKey);
 
     @Select("""
-            SELECT id,quote_id,quote_purpose,plan_id,plan_version,amount_wen,period_seconds,
+            SELECT id,quote_id,quote_purpose,plan_id,plan_version,amount_wen,recurring_amount_wen,period_seconds,
                    principal_type,principal_id,persona_code,agent_id,lease_id,expected_lease_version,
                    idempotency_key,request_hash,expires_at,tenant_id,client_id,create_time
             FROM economy_hosting_rent_quote
@@ -334,7 +334,7 @@ public interface EconomyHostingRentMapper {
     @Update("""
             UPDATE economy_hosting_lease SET paid_from=#{paidFrom},paid_through=#{paidThrough},
                 latest_intent_id=#{intentId},plan_id=#{quote.planId},plan_version=#{quote.planVersion},
-                amount_wen=#{quote.amountWen},period_seconds=#{quote.periodSeconds},
+                amount_wen=#{quote.recurringAmountWen},period_seconds=#{quote.periodSeconds},
                 version=version+1,update_time=#{now}
             WHERE """ + EXACT_SCOPE + """
               AND id=#{lease.id} AND lease_id=#{lease.leaseId} AND status='ACTIVE' AND live_slot=1

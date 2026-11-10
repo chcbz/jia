@@ -170,6 +170,64 @@ class HostingRentLedgerServiceRealTransactionTest {
     }
 
     @Test
+    void frozenFirstInvoiceCapturesOneOffFeeButNextLeasePeriodUsesOnlyRecurringAmount() {
+        var frozen = firstFeeInvoice();
+        jdbc.update("UPDATE economy_account SET balance_wen=balance_wen+150 WHERE account_id='wallet-user'");
+        var confirmation = reserve(frozen.getQuoteId(), "00000000-0000-0000-0000-000000000202");
+        var held = service.reserve(confirmation);
+        assertEquals(V1_AMOUNT_WEN + 150, held.amountWen());
+        assertEquals(V1_AMOUNT_WEN, hostingMapper.selectLeaseForUpdate(TENANT, CLIENT, held.leaseId()).getAmountWen());
+        service.confirmProvisioningSucceeded(new HostingRentOutcomeCommand(scope(), principal(), held.intentId(), 1, "ready-first-fee"));
+        var capture = settlement(held.intentId(), 2, "00000000-0000-0000-0000-000000000203", HASH_CAPTURE);
+        assertEquals(V1_AMOUNT_WEN + 150, service.capture(capture).amountWen());
+        assertEquals(V1_AMOUNT_WEN + 150, service.capture(capture).amountWen());
+        assertEquals(held, service.reserve(confirmation));
+        var next = service.quote(renewalQuote(held.leaseId(), "agent-first-fee", 2, 1, 204));
+        assertEquals(V1_AMOUNT_WEN, next.amountWen());
+        var renewal = reserve(next.quoteId(), "00000000-0000-0000-0000-000000000205");
+        var renewed = service.renew(renewal);
+        assertEquals(renewed, service.renew(renewal));
+        assertEquals(V1_AMOUNT_WEN, renewed.amountWen());
+        assertEquals(V1_AMOUNT_WEN, hostingMapper.selectLeaseForUpdate(TENANT, CLIENT, held.leaseId()).getAmountWen());
+        assertEquals(0, balance("wallet-user"));
+        assertEquals(2 * V1_AMOUNT_WEN + 150, balance("system_hosting_rent"));
+        assertEquals(4, count("economy_transaction"));
+        assertEquals(0L, jdbc.queryForObject("SELECT SUM(signed_amount_wen) FROM economy_entry", Long.class));
+    }
+
+    @Test
+    void firstInvoiceRequiresFullBalanceAndNoEffectRefundRestoresFullInvoice() {
+        var frozen = firstFeeInvoice();
+        jdbc.update("UPDATE economy_account SET balance_wen=? WHERE account_id='wallet-user'", V1_AMOUNT_WEN);
+        var confirmation = reserve(frozen.getQuoteId(), "00000000-0000-0000-0000-000000000202");
+        assertThrows(EconomyPostingException.class, () -> service.reserve(confirmation));
+        assertEquals(0, count("economy_transaction")); assertEquals(0, count("economy_hosting_lease"));
+        assertEquals(V1_AMOUNT_WEN, balance("wallet-user"));
+        jdbc.update("UPDATE economy_account SET balance_wen=balance_wen+150 WHERE account_id='wallet-user'");
+        var held = service.reserve(confirmation);
+        service.confirmProvisioningFailedNoEffect(new HostingRentOutcomeCommand(scope(), principal(), held.intentId(), 1, "no-effect-first-fee"));
+        var refund = settlement(held.intentId(), 2, "00000000-0000-0000-0000-000000000206", HASH_REFUND);
+        var restored = service.refund(refund);
+        assertEquals(V1_AMOUNT_WEN + 150, restored.amountWen());
+        assertEquals(restored, service.refund(refund));
+        assertEquals(V1_AMOUNT_WEN + 150, balance("wallet-user"));
+        assertEquals(0, balanceLike("hosting_esc_%"));
+        assertEquals(0L, jdbc.queryForObject("SELECT SUM(signed_amount_wen) FROM economy_entry", Long.class));
+    }
+
+    private cn.jia.economy.entity.EconomyHostingRentQuoteEntity firstFeeInvoice() {
+        var quote = service.quote(initialQuote("agent-first-fee", "persona-renew", "plan-test", 1));
+        var frozen = hostingMapper.selectQuoteForUpdate(TENANT, CLIENT, quote.quoteId());
+        assertEquals(V1_AMOUNT_WEN, frozen.getRecurringAmountWen());
+        // Separately frozen invoice: exercises the money boundary, not Runtime skill discovery/pricing.
+        // Never update the original immutable quote to fabricate a new price.
+        frozen.setId(null).setQuoteId("hrq-with-first-fee").setAmountWen(V1_AMOUNT_WEN + 150)
+                .setIdempotencyKey("00000000-0000-0000-0000-000000000201".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        assertEquals(1, hostingMapper.insertQuote(frozen));
+        return frozen;
+    }
+
+    @Test
     void runtimeLinkMetadataCasPreservesOriginalReserveAndSettlementVersionWithoutAnotherCharge() {
         var reserveCommand = reserve(service.quote(initialQuote("agent-runtime", "persona-runtime", "plan-test", 1)).quoteId(),
                 "00000000-0000-0000-0000-000000000092");
@@ -805,7 +863,7 @@ class HostingRentLedgerServiceRealTransactionTest {
                 "CREATE TABLE economy_escrow(id BIGINT AUTO_INCREMENT PRIMARY KEY,escrow_id VARCHAR(100),business_type VARCHAR(32),business_id VARCHAR(100),payer_account_id VARCHAR(100),escrow_account_id VARCHAR(100),currency VARCHAR(16),gross_wen BIGINT,captured_wen BIGINT,refunded_wen BIGINT,status VARCHAR(24),version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,update_time BIGINT,UNIQUE(tenant_id,client_id,escrow_id),UNIQUE(tenant_id,client_id,business_type,business_id),UNIQUE(tenant_id,client_id,escrow_account_id))",
                 "CREATE TABLE economy_escrow_funding_lot(id BIGINT AUTO_INCREMENT PRIMARY KEY,escrow_id VARCHAR(100),funding_sequence INT,reserve_transaction_id VARCHAR(100),payer_account_id VARCHAR(100),amount_wen BIGINT,escrow_gross_after_wen BIGINT,escrow_version_after BIGINT,currency VARCHAR(16),tenant_id VARCHAR(50),client_id VARCHAR(50),created_at BIGINT,UNIQUE(tenant_id,client_id,escrow_id,funding_sequence),UNIQUE(tenant_id,client_id,reserve_transaction_id))",
                 "CREATE TABLE economy_hosting_rent_plan(id BIGINT AUTO_INCREMENT PRIMARY KEY,plan_id VARCHAR(100),plan_version BIGINT,amount_wen BIGINT,period_seconds BIGINT,quote_ttl_seconds BIGINT,currency VARCHAR(16),status VARCHAR(16),tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,UNIQUE(tenant_id,client_id,plan_id,plan_version))",
-                "CREATE TABLE economy_hosting_rent_quote(id BIGINT AUTO_INCREMENT PRIMARY KEY,quote_id VARCHAR(100),quote_purpose VARCHAR(16),plan_id VARCHAR(100),plan_version BIGINT,amount_wen BIGINT,period_seconds BIGINT,principal_type VARCHAR(20),principal_id VARCHAR(100),persona_code VARCHAR(100),agent_id VARCHAR(100),lease_id VARCHAR(100),expected_lease_version BIGINT,idempotency_key VARBINARY(36),request_hash BINARY(32),expires_at BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,UNIQUE(tenant_id,client_id,quote_id),UNIQUE(tenant_id,client_id,principal_type,principal_id,idempotency_key))",
+                "CREATE TABLE economy_hosting_rent_quote(id BIGINT AUTO_INCREMENT PRIMARY KEY,quote_id VARCHAR(100),quote_purpose VARCHAR(16),plan_id VARCHAR(100),plan_version BIGINT,amount_wen BIGINT,recurring_amount_wen BIGINT NOT NULL,period_seconds BIGINT,principal_type VARCHAR(20),principal_id VARCHAR(100),persona_code VARCHAR(100),agent_id VARCHAR(100),lease_id VARCHAR(100),expected_lease_version BIGINT,idempotency_key VARBINARY(36),request_hash BINARY(32),expires_at BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,UNIQUE(tenant_id,client_id,quote_id),UNIQUE(tenant_id,client_id,principal_type,principal_id,idempotency_key))",
                 "CREATE TABLE economy_hosting_lease(id BIGINT AUTO_INCREMENT PRIMARY KEY,lease_id VARCHAR(100),principal_type VARCHAR(20),principal_id VARCHAR(100),persona_code VARCHAR(100),agent_id VARCHAR(100),binding_id VARCHAR(100),live_slot TINYINT DEFAULT 1,plan_id VARCHAR(100),plan_version BIGINT,amount_wen BIGINT,period_seconds BIGINT,status VARCHAR(24),paid_from BIGINT,paid_through BIGINT,locked_at BIGINT,latest_intent_id VARCHAR(100),version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,update_time BIGINT,UNIQUE(tenant_id,client_id,lease_id),UNIQUE(tenant_id,client_id,agent_id,live_slot),UNIQUE(tenant_id,client_id,latest_intent_id))",
                 "CREATE TABLE economy_hosting_provisioning_intent(id BIGINT AUTO_INCREMENT PRIMARY KEY,intent_id VARCHAR(100),lease_id VARCHAR(100),quote_id VARCHAR(100),quote_purpose VARCHAR(16),principal_type VARCHAR(20),principal_id VARCHAR(100),persona_code VARCHAR(100),agent_id VARCHAR(100),amount_wen BIGINT,period_seconds BIGINT,status VARCHAR(32),settlement_kind VARCHAR(16) NOT NULL DEFAULT 'PAID',reserve_idempotency_key VARBINARY(36),reserve_request_hash BINARY(32),reserve_transaction_id VARCHAR(100),reserved_at BIGINT,escrow_version BIGINT,capture_idempotency_key VARBINARY(36),capture_request_hash BINARY(32),capture_transaction_id VARCHAR(100),captured_at BIGINT,refund_idempotency_key VARBINARY(36),refund_request_hash BINARY(32),refund_transaction_id VARCHAR(100),refunded_at BIGINT,managed_api_key_id VARCHAR(100),runtime_installation_id VARCHAR(100),runtime_manifest_sha256 VARCHAR(64),runtime_provision_generation BIGINT NOT NULL DEFAULT 0,outcome_evidence_ref VARCHAR(100),service_ready_at BIGINT,paid_from BIGINT,paid_through BIGINT,version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,update_time BIGINT,UNIQUE(tenant_id,client_id,intent_id),UNIQUE(tenant_id,client_id,quote_id),UNIQUE(tenant_id,client_id,runtime_installation_id),UNIQUE(tenant_id,client_id,principal_type,principal_id,reserve_idempotency_key))"
         )) jdbc.execute(ddl);

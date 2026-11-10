@@ -158,6 +158,7 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
                 .setPlanId(plan.getPlanId())
                 .setPlanVersion(plan.getPlanVersion())
                 .setAmountWen(plan.getAmountWen())
+                .setRecurringAmountWen(plan.getAmountWen())
                 .setPeriodSeconds(plan.getPeriodSeconds())
                 .setPrincipalType(command.principal().type().name())
                 .setPrincipalId(command.principal().id())
@@ -243,7 +244,7 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
                 .setBindingId(null)
                 .setPlanId(quote.getPlanId())
                 .setPlanVersion(quote.getPlanVersion())
-                .setAmountWen(quote.getAmountWen())
+                .setAmountWen(quote.getRecurringAmountWen())
                 .setPeriodSeconds(quote.getPeriodSeconds())
                 .setStatus(HostingRentLeaseStatus.PROVISIONING.name())
                 .setPaidFrom(null)
@@ -617,6 +618,10 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
                 || !exact(quote.getPrincipalType(), command.principal().type().name())
                 || !exact(quote.getPrincipalId(), command.principal().id())
                 || quote.getAmountWen() == null || quote.getAmountWen() <= 0
+                || quote.getRecurringAmountWen() == null || quote.getRecurringAmountWen() <= 0
+                || quote.getAmountWen() < quote.getRecurringAmountWen()
+                || (HostingRentQuotePurpose.RENEWAL.name().equals(quote.getQuotePurpose())
+                    && !quote.getAmountWen().equals(quote.getRecurringAmountWen()))
                 || quote.getPeriodSeconds() == null || quote.getPeriodSeconds() <= 0
                 || quote.getExpiresAt() == null || quote.getRequestHash() == null
                 || quote.getAgentId() == null || quote.getPersonaCode() == null) {

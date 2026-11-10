@@ -277,6 +277,7 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
                 column("plan_id", "varchar(100)", false, null, ""),
                 column("plan_version", "bigint", false, null, ""),
                 column("amount_wen", "bigint", false, null, ""),
+                column("recurring_amount_wen", "bigint", false, null, ""),
                 column("period_seconds", "bigint", false, null, ""),
                 column("principal_type", "varchar(20)", false, null, ""),
                 column("principal_id", "varchar(100)", false, null, ""),

@@ -12,6 +12,7 @@ public class EconomyHostingRentQuoteEntity {
     private String planId;
     private Long planVersion;
     private Long amountWen;
+    private Long recurringAmountWen;
     private Long periodSeconds;
     private String principalType;
     private String principalId;
