@@ -21,6 +21,13 @@ public interface EconomyHostingRenewalMapper {
                @Param("previous") EconomyHostingLeaseEntity previous,
                @Param("next") EconomyHostingLeaseEntity next, @Param("now") long now);
 
+    @Update("UPDATE economy_hosting_lease SET status='CLOSED',live_slot=NULL,version=version+1,update_time=#{now}"
+            + " WHERE " + EconomyHostingRentMapper.EXACT_SCOPE
+            + " AND lease_id=#{lease.leaseId} AND OCTET_LENGTH(lease_id)=OCTET_LENGTH(#{lease.leaseId})"
+            + " AND version=#{lease.version} AND status='FINISHING' AND live_slot=1")
+    int closeAfterHandover(@Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("lease") EconomyHostingLeaseEntity lease, @Param("now") long now);
+
     @Select("SELECT * FROM economy_hosting_lease WHERE " + EconomyHostingRentMapper.EXACT_SCOPE
             + " AND principal_type='USER' AND principal_id=#{userId}"
             + " AND OCTET_LENGTH(principal_id)=OCTET_LENGTH(#{userId})"

@@ -57,6 +57,25 @@ public final class HostingRentRenewalServiceImpl implements HostingRentRenewalSe
                 && renewal.nowMillis() >= Math.addExact(lease.getLockedAt(), LOCK_RETENTION_MILLIS);
     }
 
+    @Override public Result completeHandover(EconomyScope scope, EconomyPrincipal owner, String leaseId,
+                                              String bindingId, String agentId) {
+        gate.requireMutationAllowed(scope.tenantId(), scope.clientId());
+        if (!org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())
+            throw new IllegalStateException("Handover completion requires the binding release transaction");
+        var lease = leases.selectLeaseForUpdate(scope.tenantId(), scope.clientId(), leaseId);
+        if (owner == null || owner.type() != EconomyPrincipalType.USER || lease == null
+                || !"USER".equals(lease.getPrincipalType()) || !Objects.equals(owner.id(), lease.getPrincipalId())
+                || !Objects.equals(bindingId, lease.getBindingId()) || !Objects.equals(agentId, lease.getAgentId()))
+            throw new HostingRentException(NOT_FOUND_OR_FORBIDDEN, "lease relationship not found");
+        if ("CLOSED".equals(lease.getStatus())) return result(lease, null);
+        if (!"FINISHING".equals(lease.getStatus()))
+            throw new HostingRentException(LEASE_CONFLICT, "lease is not finishing");
+        if (renewal.closeAfterHandover(scope.tenantId(), scope.clientId(), lease, renewal.nowMillis()) != 1)
+            throw new HostingRentException(LEASE_CONFLICT, "lease handover changed");
+        lease.setStatus("CLOSED");
+        return result(lease, null);
+    }
+
     @Override public Long reconcileUser(EconomyScope scope, String userId) {
         gate.requireMutationAllowed(scope.tenantId(), scope.clientId());
         long after = 0; String afterId = "";

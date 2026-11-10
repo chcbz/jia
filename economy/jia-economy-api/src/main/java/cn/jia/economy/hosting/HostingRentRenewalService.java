@@ -14,5 +14,8 @@ public interface HostingRentRenewalService {
     /** Caller holds task and binding roots in an active transaction. Lock the financial lease
      * until that transaction ends; only an irreversible, expired relationship may force settlement. */
     boolean lockExpiredFinishing(EconomyScope scope, String leaseId, String bindingId, String agentId);
+    /** Agent handover owner calls only after confirmed cleanup, in its original binding/revocation transaction.
+     * Releases the financial live slot, not the Agent instance; no refund or new payment. */
+    Result completeHandover(EconomyScope scope, EconomyPrincipal owner, String leaseId, String bindingId, String agentId);
     record Result(String status, Long paidThrough, Long lockedAt, String transactionId) { }
 }

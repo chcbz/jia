@@ -126,6 +126,61 @@ class HostingRentRenewalMySqlTest {
         wallet("tenant", "client", "user", 1000);
     }
     @AfterEach void dropSchema() { if (database != null) admin.execute("DROP DATABASE `" + database + "`"); }
+    private HostingRentRenewalService.Result complete(String id, String user, String binding, String agent) {
+        return new org.springframework.transaction.support.TransactionTemplate(manager).execute(tx ->
+                service.completeHandover(scope, new EconomyPrincipal(EconomyPrincipalType.USER, user), id, binding, agent));
+    }
+    @Test void finalHandoverReleasesOnlyOriginalLiveSlotAndNeverChangesPaidPeriodOrMoney() {
+        long through = now() - RETENTION;
+        seed("finish", "FINISHING", 500, through, through);
+        var original = lease("finish");
+        var first = complete("finish", "user", "binding-finish", "agent-finish");
+        assertEquals("CLOSED", first.status());
+        assertEquals(first, complete("finish", "user", "binding-finish", "agent-finish"));
+        var closed = lease("finish");
+        assertEquals(original.getVersion() + 1, closed.getVersion());
+        assertEquals(original.getPaidFrom(), closed.getPaidFrom());
+        assertEquals(original.getPaidThrough(), closed.getPaidThrough());
+        assertEquals(original.getLatestIntentId(), closed.getLatestIntentId());
+        assertNull(jdbc.queryForObject("SELECT live_slot FROM economy_hosting_lease WHERE lease_id='finish'", Integer.class));
+        assertEquals(1000, balance()); assertEquals(0, charges());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM economy_transaction", Integer.class));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM task_scheduled_work", Integer.class));
+        // Financial slot can be reused for the same Agent; historical ownership stays on the old row.
+        var next = leases.selectLeaseForUpdate("tenant", "client", "finish");
+        next.setId(null).setLeaseId("new-lease").setPrincipalId("next-user").setBindingId("new-binding")
+                .setLatestIntentId("next-intent").setStatus("PROVISIONING").setVersion(1L);
+        assertEquals(1, leases.insertLease(next));
+        assertEquals(first, complete("finish", "user", "binding-finish", "agent-finish"));
+        assertEquals("PROVISIONING", leases.selectLeaseForUpdate("tenant", "client", "new-lease").getStatus());
+        assertEquals("user", leases.selectLeaseForUpdate("tenant", "client", "finish").getPrincipalId());
+    }
+    @Test void finalHandoverRequiresCallerTransactionAndRollsBackWithRelationshipRelease() {
+        seed("finish", "FINISHING", 500, now(), null);
+        var owner = new EconomyPrincipal(EconomyPrincipalType.USER, "user");
+        assertThrows(IllegalStateException.class, () -> service.completeHandover(scope, owner, "finish", "binding-finish", "agent-finish"));
+        assertThrows(IllegalStateException.class, () -> new org.springframework.transaction.support.TransactionTemplate(manager)
+                .executeWithoutResult(tx -> {
+                    service.completeHandover(scope, owner, "finish", "binding-finish", "agent-finish");
+                    throw new IllegalStateException("binding release failed");
+                }));
+        assertEquals("FINISHING", lease("finish").getStatus());
+        assertEquals(1L, lease("finish").getVersion());
+        assertEquals(1, jdbc.queryForObject("SELECT live_slot FROM economy_hosting_lease WHERE lease_id='finish'", Integer.class));
+    }
+    @Test void finalHandoverRejectsChangedOwnerBindingAgentAndNonFinishingLease() {
+        seed("finish", "FINISHING", 500, now(), null);
+        for (String[] changed : List.of(new String[]{"other", "binding-finish", "agent-finish"},
+                new String[]{"user", "other", "agent-finish"}, new String[]{"user", "binding-finish", "other"}))
+            assertThrows(HostingRentException.class, () -> complete("finish", changed[0], changed[1], changed[2]));
+        seed("active", "ACTIVE", 500, now() + PERIOD, null);
+        assertThrows(HostingRentException.class, () -> complete("active", "user", "binding-active", "agent-active"));
+        assertEquals("FINISHING", lease("finish").getStatus()); assertEquals("ACTIVE", lease("active").getStatus());
+        complete("finish", "user", "binding-finish", "agent-finish");
+        assertThrows(HostingRentException.class, () -> complete("finish", "other", "binding-finish", "agent-finish"));
+        assertEquals(1000, balance()); assertEquals(0, charges());
+    }
+
     private void wallet(String tenant, String client, String user, long balance) {
         accounts.insertAccountIfAbsent(new EconomyAccountEntity().setAccountId("wallet-" + user)
                 .setOwnerType("USER").setOwnerId(user).setPurpose("AVAILABLE").setCurrency("WEN")
