@@ -42,6 +42,48 @@ public class HostingRentHandoverCompletion {
 
     @Transactional(rollbackFor = Exception.class)
     public void completeManaged(ManagedHostingProvisioner.CurrentOperation cleaned) {
+        var original=lockOriginal(cleaned);
+        if ("CLOSED".equals(original.lease().getStatus())) return;
+        var p=cleaned.preparation(); var candidate=cleaned.candidate();
+        var binding=original.binding(); var intent=original.intent(); var projection=original.projection();
+        long bindingId=binding.getId();
+        long now=System.currentTimeMillis();
+        runtime.revoke(p.tenantId(), p.clientId(), p.ownerJiacn(), candidate.installationId(), now);
+        if (intent.getManagedApiKeyId()!=null) {
+            var keyService=keys.getIfAvailable();
+            require(keyService!=null && keyService.disableManagedKey(intent.getManagedApiKeyId(), p.tenantId(),
+                    p.clientId(), p.ownerJiacn(), "hosting:"+p.intentId()));
+        }
+        renewal.completeHandover(new EconomyScope(p.tenantId(), p.clientId()),
+                new EconomyPrincipal(EconomyPrincipalType.USER, intent.getPrincipalId()), p.leaseId(), p.bindingId(), p.agentId());
+        binding.setStatus(AgentConstants.BINDING_STATUS_SUSPENDED);
+        require(bindings.updateById(binding)==1);
+        identities.suspendForBinding(p.tenantId(), p.clientId(), p.ownerJiacn(), bindingId);
+        require(runtimes.clearBindingAfterUnbind(projection.getId(), p.agentId(), bindingId,
+                p.clientId(), p.ownerJiacn(), now)==1);
+    }
+    /** Pre-stop business transaction, before external process control. Pending old tasks never permit a stop. */
+    @Transactional(rollbackFor = Exception.class)
+    public boolean prepareManagedStop(ManagedHostingProvisioner.CurrentOperation current) {
+        return !"CLOSED".equals(lockOriginal(current).lease().getStatus());
+    }
+
+    /** Called by the stop coordinator only after the exact original Runtime returned QUIESCED.
+     * Rechecks the original roots before publishing the skill activation fence. */
+    @Transactional(rollbackFor = Exception.class)
+    public void recordManagedStop(ManagedHostingProvisioner.CurrentOperation current) {
+        var original=lockOriginal(current);var p=current.preparation();
+        renewal.recordExecutorStopped(new EconomyScope(p.tenantId(),p.clientId()),
+                new EconomyPrincipal(EconomyPrincipalType.USER,original.intent().getPrincipalId()),
+                p.leaseId(),p.bindingId(),p.agentId(),p.leaseId());
+    }
+
+    private record Original(cn.jia.agent.entity.AgentPersonaBindingEntity binding,
+            cn.jia.economy.entity.EconomyHostingProvisioningIntentEntity intent,
+            cn.jia.economy.entity.EconomyHostingLeaseEntity lease,
+            cn.jia.agent.entity.AgentRuntimeEntity projection) { }
+
+    private Original lockOriginal(ManagedHostingProvisioner.CurrentOperation cleaned) {
         var p=cleaned.preparation(); var candidate=cleaned.candidate();
         scope.requireAdmitted(p.tenantId(), p.clientId());
         // Same root order as installation authorization: installation -> binding -> intent -> lease.
@@ -63,7 +105,7 @@ public class HostingRentHandoverCompletion {
                 && intent.getPrincipalId().equals(lease.getPrincipalId()) && p.agentId().equals(lease.getAgentId())
                 && p.bindingId().equals(lease.getBindingId()) && binding.getPersonaCode().equals(lease.getPersonaCode()));
         // Historical completion replay never revokes a later invitation's authorization or clears its projection.
-        if ("CLOSED".equals(lease.getStatus())) return;
+        if ("CLOSED".equals(lease.getStatus())) return new Original(binding, intent, lease, null);
         require("FINISHING".equals(lease.getStatus()) && Integer.valueOf(AgentConstants.BINDING_STATUS_ACTIVE).equals(binding.getStatus()));
         require(installation!=null && p.tenantId().equals(installation.getTenantId()) && p.clientId().equals(installation.getClientId())
                 && p.agentId().equals(installation.getCanonicalAgentId()) && candidate.manifestSha256().equals(installation.getManifestSha256()));
@@ -73,21 +115,9 @@ public class HostingRentHandoverCompletion {
                 && p.clientId().equals(projection.getClientId()) && p.ownerJiacn().equals(projection.getOwnerJiacn())
                 && candidate.installationId().equals(projection.getRuntimeInstallationId())
                 && candidate.hostId().equals(projection.getRuntimeHostId()));
-        long now=System.currentTimeMillis();
-        runtime.revoke(p.tenantId(), p.clientId(), p.ownerJiacn(), candidate.installationId(), now);
-        if (intent.getManagedApiKeyId()!=null) {
-            var keyService=keys.getIfAvailable();
-            require(keyService!=null && keyService.disableManagedKey(intent.getManagedApiKeyId(), p.tenantId(),
-                    p.clientId(), p.ownerJiacn(), "hosting:"+p.intentId()));
-        }
-        renewal.completeHandover(new EconomyScope(p.tenantId(), p.clientId()),
-                new EconomyPrincipal(EconomyPrincipalType.USER, intent.getPrincipalId()), p.leaseId(), p.bindingId(), p.agentId());
-        binding.setStatus(AgentConstants.BINDING_STATUS_SUSPENDED);
-        require(bindings.updateById(binding)==1);
-        identities.suspendForBinding(p.tenantId(), p.clientId(), p.ownerJiacn(), bindingId);
-        require(runtimes.clearBindingAfterUnbind(projection.getId(), p.agentId(), bindingId,
-                p.clientId(), p.ownerJiacn(), now)==1);
+        return new Original(binding,intent,lease,projection);
     }
+
     private static void require(boolean condition) {
         if (!condition) throw new IllegalStateException("Original hosting handover relationship changed or remains unfinished");
     }

@@ -73,6 +73,29 @@ class HostingRentHandoverCompletionTest {
     void effect(String name) {assertTrue(TransactionSynchronizationManager.isActualTransactionActive());jdbc.update("INSERT INTO effects VALUES(?)",name);}
     int effects() {return jdbc.queryForObject("SELECT COUNT(*) FROM effects",Integer.class);}
     @AfterEach void close() {jdbc.execute("DROP ALL OBJECTS");}
+    @Test void managedStopUsesOriginalTransactionAndDoesNotRevokeOrReleaseAnything() {
+        doAnswer(i->{effect("stopped");return null;}).when(renewal).recordExecutorStopped(any(),any(),eq("lease"),eq("7"),eq("agent"),eq("lease"));
+        assertTrue(service.prepareManagedStop(cleaned));assertEquals(0,effects());
+        service.recordManagedStop(cleaned);assertEquals(1,effects());assertEquals(1,binding.getStatus());
+        verify(renewal).recordExecutorStopped(any(),argThat(a->"old-payer".equals(a.id())),eq("lease"),eq("7"),eq("agent"),eq("lease"));
+        verify(renewal,never()).completeHandover(any(),any(),anyString(),anyString(),anyString());
+        verifyNoInteractions(runtime,identities,keys);
+    }
+    @Test void managedStopRechecksRelationshipAndPendingWorkBeforeRecordingFact() {
+        assertTrue(service.prepareManagedStop(cleaned));projection.setRuntimeHostId("other-host");
+        assertThrows(IllegalStateException.class,()->service.recordManagedStop(cleaned));
+        projection.setRuntimeHostId("host");
+        when(tasks.unfinishedPage("tenant","client","old-owner","agent",0)).thenReturn(List.of(new AgentTaskMetaEntity()));
+        assertThrows(IllegalStateException.class,()->service.prepareManagedStop(cleaned));
+        verify(renewal,never()).recordExecutorStopped(any(),any(),anyString(),anyString(),anyString(),anyString());
+        assertEquals(0,effects());
+    }
+    @Test void stopFactFailureRollsBackWithoutRevokingOriginalEvidenceIdentity() {
+        doAnswer(i->{effect("stopped");throw new IllegalStateException("stop fact failed");}).when(renewal)
+                .recordExecutorStopped(any(),any(),anyString(),anyString(),anyString(),anyString());
+        assertThrows(IllegalStateException.class,()->service.recordManagedStop(cleaned));assertEquals(0,effects());
+        verifyNoInteractions(runtime,identities,keys);
+    }
     @Test void closesOriginalRelationshipInOneTransactionUsingInstallationFirstOrder() {
         service.completeManaged(cleaned);assertEquals(5,effects());assertEquals(0,binding.getStatus());
         var order=inOrder(installations,bindings,runtime,renewal,identities,runtimes);
