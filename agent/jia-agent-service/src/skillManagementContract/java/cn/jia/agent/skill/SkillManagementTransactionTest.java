@@ -690,7 +690,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
     }
     @Test void internalUndispatchedSettlementDoesNotRequireOriginalUserToRemainLoggedIn() {
         var c=install();var handover=stoppedHandover();
-        when(ownerResolver.requireOwner(any())).thenThrow(new HostingRentApplicationException(403,"HOSTING_RENT_OWNER_UNPROVEN"));
+        doThrow(new HostingRentApplicationException(403,"HOSTING_RENT_OWNER_UNPROVEN")).when(ownerResolver).requireOwner(any());
         assertTrue(service.cancelUndispatchedForHandover(handover,text(c,"skillChangeId")));assertEquals(100_000_000L,wallet());
         assertThrows(HostingRentApplicationException.class,()->service.quote(ACTOR,"new",quoteData(),false));
     }
@@ -733,7 +733,8 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         var message=new AgentInboxMessage(AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,"0",ACTOR.clientId(),
                 (String)row.get("message_id"),(String)row.get("event_id"),(String)row.get("command_id"),
                 ((Number)row.get("delivery_id")).longValue(),(byte[])row.get("wire_payload"));
-        assertThrows(IllegalArgumentException.class,()->inbox.claim(message,"fixture",System.currentTimeMillis(),60000));
+        var conflict=assertThrows(AgentInboxIdentityConflictException.class,()->inbox.claim(message,"fixture",System.currentTimeMillis(),60000));
+        assertTrue(conflict.getMessage().contains("WIRE_CANONICAL_PROVENANCE_INVALID"));
         verifyNoInteractions(inboxDao);assertEquals(0,jdbc.queryForObject("SELECT attempt_count FROM agent_outbox_event",Integer.class));
     }
 
