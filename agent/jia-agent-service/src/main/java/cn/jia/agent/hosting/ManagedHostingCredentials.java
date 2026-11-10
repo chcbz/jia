@@ -123,9 +123,14 @@ public final class ManagedHostingCredentials {
                 || !preparation.agentId().equals(intent.getAgentId())
                 || !preparation.leaseId().equals(intent.getLeaseId())
                 || !Objects.equals(preparation.reservedAt(), intent.getReservedAt())
-                || intent.getManagedApiKeyId() == null || intent.getManagedApiKeyId().isBlank()
                 || intent.getCaptureTransactionId() != null || intent.getRefundTransactionId() != null
-                || intent.getServiceReadyAt() != null) throw unavailable();
+                || intent.getServiceReadyAt() != null
+                || intent.getRuntimeInstallationId() != null || intent.getRuntimeManifestSha256() != null
+                || !Long.valueOf(0).equals(intent.getRuntimeProvisionGeneration())) throw unavailable();
+        // A persisted pre-candidate rejection has nothing to revoke. An issued Runtime
+        // association cannot use this path without its own proven revocation protocol.
+        if (intent.getManagedApiKeyId() == null) return;
+        if (intent.getManagedApiKeyId().isBlank()) throw unavailable();
         ApiKeyService service = keys.getIfAvailable();
         if (service == null || !service.disableManagedKey(intent.getManagedApiKeyId(),
                 preparation.tenantId(), preparation.clientId(), preparation.ownerJiacn(),

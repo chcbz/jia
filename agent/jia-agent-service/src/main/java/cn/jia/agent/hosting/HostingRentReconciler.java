@@ -285,8 +285,8 @@ public final class HostingRentReconciler implements ScheduledJobHandler {
                         || !Long.valueOf(1).equals(current.getRuntimeProvisionGeneration())) return;
                 ledger.capture(command);
             } else {
-                // The posting/projections and exact managed-key revocation share this REQUIRED transaction.
-                // A missing, stale, cross-scope or already-disabled association rolls back the refund.
+                // Posting and credential disposition share this REQUIRED transaction: either
+                // no credential was issued, or the exact historical key is revoked.
                 ledger.refund(command);
                 credentials.disableForRefund(checked.preparation(), current);
             }

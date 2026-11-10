@@ -42,6 +42,7 @@ class HostingRentRenewalMySqlTest {
     private static JdbcTemplate admin;
     private String database;
     private JdbcTemplate jdbc;
+    private cn.jia.agent.dao.AgentPersonaBindingDao identityBindings;
     private cn.jia.agent.mapper.AgentRuntimeMapper runtimeProjection;
     private cn.jia.agent.mapper.AgentExternalServicePolicyMapper externalIdentities;
     private cn.jia.agent.mapper.AgentHostingRentBindingMapper admissionRoots;
@@ -231,6 +232,7 @@ class HostingRentRenewalMySqlTest {
         ReflectionTestUtils.setField(registry,"baseMapper",template.getMapper(cn.jia.agent.mapper.AgentIdentityRegistryMapper.class));
         ReflectionTestUtils.setField(aliases,"baseMapper",template.getMapper(cn.jia.agent.mapper.AgentIdentityAliasMapper.class));
         ReflectionTestUtils.setField(bindings,"baseMapper",template.getMapper(cn.jia.agent.mapper.AgentPersonaBindingMapper.class));
+        identityBindings = bindings;
         return new cn.jia.agent.service.impl.AgentIdentityServiceImpl(registry, aliases, bindings);
     }
 
@@ -545,19 +547,77 @@ class HostingRentRenewalMySqlTest {
         assertNoInitialProvisionReservation();
     }
 
-    @Test void confirmedInventoryNoEffectReturnsEntireFirstInvoiceWithoutStartingLease() {
-        new cn.jia.economy.config.EconomyHostingRentSchemaInitializer(jdbc).afterPropertiesSet();
-        var ledger=new HostingRentLedgerServiceImpl(leases,accounts,posting,manager);
-        var initial=initialProvisionCommand(ledger,3);
-        var reserved=ledger.reserve(initial);assertEquals(350,balance());
-        // Trusted Runtime proof acceptance is separately exercised by the actual Java->UDS suite.
-        ledger.confirmProvisioningFailedNoEffect(new HostingRentOutcomeCommand(scope,initial.principal(),reserved.intentId(),1,"inventory-rejected-proof"));
-        var command=new HostingRentSettlementCommand(scope,initial.principal(),
-                "00000000-0000-0000-0000-000000000203",new byte[32],reserved.intentId(),2);
-        var refunded=ledger.refund(command);assertEquals(refunded,ledger.refund(command));
-        assertEquals(1000,balance());
-        var lease=leases.selectLatestLease("tenant","client","agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-        assertEquals("REFUNDED",lease.getStatus());assertNull(lease.getPaidFrom());assertNull(lease.getPaidThrough());
+    @Test void confirmedInventoryNoEffectReturnsEntireFirstInvoiceWithoutStartingLease() throws Exception {
+        var fixture = initialRefundFixture(ManagedHostingProvisioner.Outcome.FAILED_NO_EFFECT);
+        assertEquals(350, balance());
+        fixture.reconciler().reconcileOne(fixture.intent(), fixture.provider());
+        fixture.reconciler().reconcileOne(fixture.intent(), fixture.provider()); // stale delivery cannot refund twice
+        assertEquals(1000, balance());
+        var lease = leases.selectLatestLease("tenant", "client", fixture.intent().getAgentId());
+        assertEquals("REFUNDED", lease.getStatus()); assertNull(lease.getPaidFrom()); assertNull(lease.getPaidThrough());
+        assertEquals("REFUNDED", leases.selectIntent("tenant", "client", fixture.intent().getIntentId()).getStatus());
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM economy_transaction WHERE business_type='REFUND_HOSTING_RENT'", Integer.class));
+        assertEquals(0L, jdbc.queryForObject("SELECT SUM(signed_amount_wen) FROM economy_entry", Long.class));
+        verify(fixture.provider()).prepareAndObserve(any());
+        verifyNoInteractions(fixture.keys());
+    }
+
+    @Test void issuedRuntimeAssociationRollsBackActualRefundAndLeavesEscrowReserved() throws Exception {
+        var fixture = initialRefundFixture(ManagedHostingProvisioner.Outcome.FAILED_NO_EFFECT);
+        jdbc.update("""
+                UPDATE economy_hosting_provisioning_intent
+                SET runtime_installation_id='rti_0123456789abcdef0123456789abcdef',
+                    runtime_manifest_sha256=?,runtime_provision_generation=1 WHERE intent_id=?
+                """, "a".repeat(64), fixture.intent().getIntentId());
+        assertThrows(IllegalStateException.class, () -> fixture.reconciler().reconcileOne(fixture.intent(), fixture.provider()));
+        assertEquals(350, balance());
+        assertEquals("FAILED_NO_EFFECT", leases.selectIntent("tenant", "client", fixture.intent().getIntentId()).getStatus());
+        assertEquals("PROVISIONING", leases.selectLatestLease("tenant", "client", fixture.intent().getAgentId()).getStatus());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM economy_transaction WHERE business_type='REFUND_HOSTING_RENT'", Integer.class));
+        verifyNoInteractions(fixture.keys());
+    }
+
+    @Test void unknownInventoryOutcomeCannotReleaseFirstInvoice() throws Exception {
+        var fixture = initialRefundFixture(ManagedHostingProvisioner.Outcome.UNKNOWN);
+        fixture.reconciler().reconcileOne(fixture.intent(), fixture.provider());
+        assertEquals(350, balance());
+        assertEquals("PROVISIONING_UNKNOWN", leases.selectIntent("tenant", "client", fixture.intent().getIntentId()).getStatus());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM economy_transaction WHERE business_type='REFUND_HOSTING_RENT'", Integer.class));
+        verifyNoInteractions(fixture.keys());
+    }
+
+    private record RefundFixture(HostingRentReconciler reconciler, ManagedHostingProvisioner provider,
+                                 EconomyHostingProvisioningIntentEntity intent, cn.jia.oauth.service.ApiKeyService keys) { }
+    private RefundFixture initialRefundFixture(ManagedHostingProvisioner.Outcome outcome) throws Exception {
+        var identities = identityFixture();
+        String agent = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var identity = inviteIdentity(identities, "owner", agent);
+        jdbc.update("UPDATE agent_persona_binding SET persona_code='public-persona' WHERE id=?", identity.getBindingId());
+        var ledger = new HostingRentLedgerServiceImpl(leases, accounts, posting, manager);
+        var reserved = ledger.reserve(initialProvisionCommand(ledger, 3));
+        assertEquals(1, leases.attachBinding("tenant", "client", reserved.leaseId(), identity.getBindingId().toString()));
+        var beans = new org.springframework.beans.factory.support.StaticListableBeanFactory();
+        beans.addBean("schedules", schedules);
+        var keys = mock(cn.jia.oauth.service.ApiKeyService.class); beans.addBean("keys", keys);
+        var owners = mock(HostingRentOwnerResolver.class);
+        when(owners.requireOwner(new HostingRentHttp.Actor("user", "tenant", "client", "owner"))).thenReturn("owner");
+        var credentials = new ManagedHostingCredentials(beans.getBeanProvider(cn.jia.oauth.service.ApiKeyService.class),
+                leases, owners, identities, identityBindings, manager, mock(cn.jia.agent.service.AgentRuntimeV1Service.class));
+        var provider = mock(ManagedHostingProvisioner.class);
+        // Transport proof decoding has actual Java->UDS tests; only external Runtime I/O is synthetic here.
+        // Reconciliation, identity/binding reads, credential disposition, ledger and SQL transaction are real.
+        when(provider.prepareAndObserve(any())).thenAnswer(call -> {
+            ManagedHostingProvisioner.Preparation p = call.getArgument(0);
+            assertFalse(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive());
+            assertEquals(inventory(3).inventorySha256(), p.quotedInventory().inventorySha256());
+            return new ManagedHostingProvisioner.Observation(p, outcome, "inventory-rejected-proof");
+        });
+        var gate = new EconomyPreviewGate(new EconomyPreviewProperties(true,
+                List.of(new EconomyPreviewProperties.AllowedScope("tenant", "client"))));
+        var reconciler = new HostingRentReconciler(new cn.jia.agent.config.AgentHostingRentProperties(true, "1", "500", "2592000"),
+                gate, leases, ledger, identities, owners, beans.getBeanProvider(ManagedHostingProvisioner.class), credentials,
+                manager, identityBindings, policy, true, beans.getBeanProvider(ScheduleService.class));
+        return new RefundFixture(reconciler, provider, leases.selectIntent("tenant", "client", reserved.intentId()), keys);
     }
 
     private HostingRentReserveCommand initialProvisionCommand(HostingRentLedgerService ledger) {

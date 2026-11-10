@@ -210,10 +210,37 @@ class ManagedHostingCredentialsTest {
         assertEquals(originalExpiry + 2592000000L, lease.getPaidThrough());
         verifyNoInteractions(keys);
     }
+    private EconomyHostingProvisioningIntentEntity unissuedFailure() {
+        return new EconomyHostingProvisioningIntentEntity().setId(1L).setIntentId(p.intentId()).setQuotePurpose("INITIAL")
+                .setPrincipalType("USER").setTenantId(p.tenantId()).setClientId(p.clientId()).setAgentId(p.agentId())
+                .setLeaseId(p.leaseId()).setReservedAt(p.reservedAt()).setStatus("FAILED_NO_EFFECT").setRuntimeProvisionGeneration(0L);
+    }
+    @Test void unissuedFailureNeedsNoKeyProviderButStillRequiresTransactionAndExactAssociation() {
+        var failed = unissuedFailure();
+        assertThrows(IllegalStateException.class, () -> service.disableForRefund(p, failed));
+        new TransactionTemplate(manager).executeWithoutResult(tx -> service.disableForRefund(p, failed));
+        failed.setClientId("other");
+        assertThrows(IllegalStateException.class, () -> new TransactionTemplate(manager)
+                .executeWithoutResult(tx -> service.disableForRefund(p, failed)));
+        verifyNoInteractions(keys, runtime);
+    }
+    @Test void noEffectProofCannotHideIssuedOrIncompleteRuntimeAssociation() {
+        for (var failed : java.util.List.of(
+                unissuedFailure().setRuntimeInstallationId(candidate.installationId()),
+                unissuedFailure().setRuntimeManifestSha256(candidate.manifestSha256()),
+                unissuedFailure().setRuntimeProvisionGeneration(1L),
+                unissuedFailure().setRuntimeProvisionGeneration(null),
+                unissuedFailure().setManagedApiKeyId(""),
+                unissuedFailure().setStatus("PROVISIONING_UNKNOWN"))) {
+            assertThrows(IllegalStateException.class, () -> new TransactionTemplate(manager)
+                    .executeWithoutResult(tx -> service.disableForRefund(p, failed)));
+        }
+        verifyNoInteractions(keys, runtime);
+    }
     @Test void legacyAuditRefundRevokesOnlyExactExistingReferenceAndRequiresTransaction() {
         var failed = new EconomyHostingProvisioningIntentEntity().setId(1L).setIntentId(p.intentId()).setQuotePurpose("INITIAL")
                 .setPrincipalType("USER").setTenantId(p.tenantId()).setClientId(p.clientId()).setAgentId(p.agentId())
-                .setLeaseId(p.leaseId()).setReservedAt(p.reservedAt()).setStatus("FAILED_NO_EFFECT").setManagedApiKeyId("old-key-id");
+                .setLeaseId(p.leaseId()).setReservedAt(p.reservedAt()).setStatus("FAILED_NO_EFFECT").setRuntimeProvisionGeneration(0L).setManagedApiKeyId("old-key-id");
         assertThrows(IllegalStateException.class, () -> service.disableForRefund(p, failed));
         when(keys.disableManagedKey("old-key-id", "0", "Client-A", "Owner-A", "hosting:hri-original")).thenReturn(true);
         new TransactionTemplate(manager).executeWithoutResult(status -> service.disableForRefund(p, failed));
