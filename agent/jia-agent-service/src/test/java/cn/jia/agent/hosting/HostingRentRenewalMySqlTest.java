@@ -455,6 +455,98 @@ class HostingRentRenewalMySqlTest {
         assertEquals(1000, balance()); assertEquals(0, charges());
     }
 
+    /** Real reservation + durable provisioning key share the caller transaction, not an after-commit callback. */
+    @Test void initialProvisionScheduleCommitsWithFundsAndReplayDoesNotReserveTwice() {
+        var ledger = new HostingRentLedgerServiceImpl(leases, accounts, posting, manager);
+        var command = initialProvisionCommand(ledger);
+        var reconciler = provisioningScheduler(ledger);
+        var transaction = new org.springframework.transaction.support.TransactionTemplate(manager);
+        var receipt = transaction.execute(status -> {
+            var reserved = ledger.reserve(command);
+            reconciler.wakeInitial("client", reserved.intentId());
+            assertEquals(500, balance());
+            assertEquals(1, provisionSchedules());
+            return reserved;
+        });
+        transaction.executeWithoutResult(status -> {
+            assertEquals(receipt.intentId(), ledger.reserve(command).intentId());
+            reconciler.wakeInitial("client", receipt.intentId());
+        });
+        assertEquals(500, balance());
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM economy_hosting_provisioning_intent", Integer.class));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM economy_transaction WHERE business_type='RESERVE_HOSTING_RENT'", Integer.class));
+        assertEquals(1, provisionSchedules());
+        var due = schedules.claimDue("", 10, 60000);
+        assertEquals(1, due.size());
+        assertEquals(new ScheduleKey("client", HostingRentReconciler.HANDLER, "initial:" + receipt.intentId(), ""), due.getFirst().key());
+        assertTrue(schedules.succeed(due.getFirst()));
+        assertNull(schedules.nextWake(""));
+    }
+
+    @Test void initialProvisionScheduleAndReservationRollbackTogether() {
+        var ledger = new HostingRentLedgerServiceImpl(leases, accounts, posting, manager);
+        var command = initialProvisionCommand(ledger);
+        var reconciler = provisioningScheduler(ledger);
+        var failure = assertThrows(IllegalStateException.class, () ->
+                new org.springframework.transaction.support.TransactionTemplate(manager).executeWithoutResult(status -> {
+                    var reserved = ledger.reserve(command);
+                    reconciler.wakeInitial("client", reserved.intentId());
+                    assertEquals(1, provisionSchedules());
+                    throw new IllegalStateException("caller rollback after durable signal");
+                }));
+        assertEquals("caller rollback after durable signal", failure.getMessage());
+        assertNoInitialProvisionReservation();
+        assertEquals(0, provisionSchedules());
+        assertNull(schedules.nextWake(""));
+    }
+
+    @Test void initialProvisionScheduleSqlFailureCannotLeaveFundsReserved() {
+        var ledger = new HostingRentLedgerServiceImpl(leases, accounts, posting, manager);
+        var command = initialProvisionCommand(ledger);
+        var reconciler = provisioningScheduler(ledger);
+        // Owned fixture only: simulate missing migration before the business transaction starts.
+        jdbc.execute("DROP TABLE task_scheduled_work");
+        assertThrows(org.springframework.dao.DataAccessException.class, () ->
+                new org.springframework.transaction.support.TransactionTemplate(manager).executeWithoutResult(status -> {
+                    var reserved = ledger.reserve(command);
+                    reconciler.wakeInitial("client", reserved.intentId());
+                }));
+        assertNoInitialProvisionReservation();
+    }
+
+    private HostingRentReserveCommand initialProvisionCommand(HostingRentLedgerService ledger) {
+        leases.insertPlanVersion(new EconomyHostingRentPlanEntity().setPlanId("hosted").setPlanVersion(1L)
+                .setAmountWen(500L).setPeriodSeconds(PERIOD / 1000).setQuoteTtlSeconds(300L)
+                .setCurrency("WEN").setStatus("ACTIVE").setTenantId("tenant").setClientId("client").setCreateTime(now()));
+        var principal = new EconomyPrincipal(EconomyPrincipalType.USER, "user");
+        var quote = ledger.quote(new HostingRentQuoteCommand(scope, principal,
+                "00000000-0000-0000-0000-000000000091", new byte[32], HostingRentQuotePurpose.INITIAL,
+                "hosted", 1L, "public-persona", "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", null, null));
+        return new HostingRentReserveCommand(scope, principal,
+                "00000000-0000-0000-0000-000000000092", new byte[32], quote.quoteId());
+    }
+
+    private HostingRentReconciler provisioningScheduler(HostingRentLedgerService ledger) {
+        var beans = new org.springframework.beans.factory.support.StaticListableBeanFactory();
+        beans.addBean("schedules", schedules);
+        var gate = new EconomyPreviewGate(new EconomyPreviewProperties(true,
+                List.of(new EconomyPreviewProperties.AllowedScope("tenant", "client"))));
+        return new HostingRentReconciler(new cn.jia.agent.config.AgentHostingRentProperties(true, "1", "500", "2592000"),
+                gate, leases, ledger, mock(cn.jia.agent.service.AgentIdentityService.class), mock(HostingRentOwnerResolver.class),
+                beans.getBeanProvider(ManagedHostingProvisioner.class), mock(ManagedHostingCredentials.class), manager,
+                mock(cn.jia.agent.dao.AgentPersonaBindingDao.class), policy, true, beans.getBeanProvider(ScheduleService.class));
+    }
+    private int provisionSchedules() {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM task_scheduled_work WHERE handler=?", Integer.class, HostingRentReconciler.HANDLER);
+    }
+    private void assertNoInitialProvisionReservation() {
+        assertEquals(1000, balance());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM economy_hosting_lease", Integer.class));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM economy_hosting_provisioning_intent", Integer.class));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM economy_transaction", Integer.class));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM economy_escrow", Integer.class));
+    }
+
     private void wallet(String tenant, String client, String user, long balance) {
         accounts.insertAccountIfAbsent(new EconomyAccountEntity().setAccountId("wallet-" + user)
                 .setOwnerType("USER").setOwnerId(user).setPurpose("AVAILABLE").setCurrency("WEN")
