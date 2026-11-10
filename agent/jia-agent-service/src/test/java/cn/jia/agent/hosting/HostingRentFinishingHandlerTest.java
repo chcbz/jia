@@ -39,6 +39,27 @@ class HostingRentFinishingHandlerTest {
         when(skills.settleHandoverChanges(current)).thenReturn(true);
         when(runtime.cleanup(initial,candidate,"lease")).thenReturn(true);
     }
+    @Test void springRegistersDurableFinishingHandlerOnlyWhenRentSchedulingEnabled() throws Exception {
+        for(boolean enabled:new boolean[]{true,false}) {
+            try(var context=new org.springframework.context.annotation.AnnotationConfigApplicationContext()) {
+                context.getEnvironment().getPropertySources().addFirst(new org.springframework.core.env.MapPropertySource("fixture",
+                        java.util.Map.of("agent.hosting-rent.auto-renew-enabled",Boolean.toString(enabled))));
+                context.registerBean(FixedTenantAdmissionPolicy.class,()->new FixedTenantAdmissionPolicy("tenant","client"));
+                context.registerBean(HostingRentFinishingMapper.class,()->discovery);
+                context.registerBean(HostingRentRenewalService.class,()->renewal);
+                context.registerBean(HostingRentTaskSettlement.class,()->tasks);
+                context.registerBean(HostingRentManagedStop.class,()->stop);
+                context.registerBean(ManagedHostingProvisioner.class,()->runtime);
+                context.registerBean(SkillManagementService.class,()->skills);
+                context.registerBean(HostingRentHandoverCompletion.class,()->completion);
+                context.register(HostingRentFinishingHandler.class,cn.jia.task.config.JobAutoConfiguration.class);context.refresh();
+                context.getBean("jobHandlerInitializer",org.springframework.boot.CommandLineRunner.class).run();
+                var registered=context.getBean(cn.jia.task.job.JobRegistry.class).getHandler(HostingRentLeaseWakeup.FINISH);
+                if(enabled)assertSame(context.getBean(HostingRentFinishingHandler.class),registered);else assertNull(registered);
+            }
+        }
+        verifyNoInteractions(discovery,renewal,tasks,stop,runtime,skills,completion);
+    }
     @Test void finalReleaseFollowsTaskStopEvidenceFinancialAndPrivateCleanupInOrder() {
         ready();handler.executeScheduled(invocation);assertEquals(HostingRentLeaseWakeup.FINISH,handler.getName());
         var order=inOrder(tasks,stop,runtime,skills,completion);

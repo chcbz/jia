@@ -246,7 +246,6 @@ public final class SkillManagementService {
         require(hint!=null && p.agentId().equals(hint.getAgentId()) && p.ownerJiacn().equals(hint.getOwnerJiacn())
                 && candidate.installationId().equals(hint.getRuntimeInstallationId())
                 && candidate.hostId().equals(hint.getRuntimeHostId()),409,"SKILL_DELIVERY_FENCED");
-        if(positionChange(hint))return false; // native position commands have a different dispatch authority
         var a=new HostingRentHttp.Actor(hint.getActorId(),hint.getTenantId(),hint.getClientId(),hint.getOwnerJiacn());
         enabled(a);
         return Boolean.TRUE.equals(tx.execute(t->{
@@ -258,6 +257,7 @@ public final class SkillManagementService {
             require(state!=null,409,"SKILL_STATE_CONFLICT");
             var c=db.lockChange(a.tenantId(),a.clientId(),changeId);var value=dto(c);
             var cmd=db.lockCommand(a.tenantId(),a.clientId(),c.getCommandId());
+            if(cmd==null)return false; // discovery retains held funds whose original command is unavailable
             if("CANCELLED".equals(cmd.getState()))return true;
             if("RESULT".equals(cmd.getState()) && cmd.getEvidenceJson()!=null) {
                 // FAILED_RETRYABLE is the existing business fact for a validated non-switch result.
@@ -268,6 +268,7 @@ public final class SkillManagementService {
                 if("FAILED_FINAL".equals(value.get("status"))
                         && "ENTITLEMENT_TERMINATED".equals(value.get("reasonCode")))return true;
             }
+            if(positionChange(c))return false; // only marketplace commands have the pristine-outbox proof
             if(!"PENDING".equals(cmd.getState()) || !state.getSkillRevision().toString().equals(value.get("skillRevision")))return false;
             var data=decode(cmd.getDataJson(),"CommandData");
             if("READ".equals(data.get("phase")) || !writer.getObject().neverDispatched(c,cmd))return false;

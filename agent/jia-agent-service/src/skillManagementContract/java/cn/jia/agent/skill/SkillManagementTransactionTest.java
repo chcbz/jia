@@ -694,6 +694,69 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         assertTrue(service.settleStoppedChangeForHandover(handover,text(c,"skillChangeId")));assertEquals(100_000_000L,wallet());
         assertThrows(HostingRentApplicationException.class,()->service.quote(ACTOR,"new",quoteData(),false));
     }
+    /** Actual native command/candidate/result SQL. Only position policy persistence and native identity are fixtures. */
+    private Map<String,Object> nativePositionInstall() {
+        var grant=new cn.jia.agent.position.PositionSkillState.Installation("grant-fixture",AGENT,runtime.getBindingId(),"repo-test",
+                true,true,1,cn.jia.agent.position.PositionSkillState.InstallState.INSTALL_PENDING,null,null,null,null,null,null);
+        var skill=new cn.jia.agent.position.PositionSkillState.Skill("repo-test",cn.jia.agent.position.PositionSkillState.SkillType.POSITION,"spv_repo_test_1_0_0");
+        var policy=new cn.jia.agent.position.PositionSkillPolicy(new cn.jia.agent.position.PositionSkillState(1,Map.of("repo-test",skill),
+                Map.of(),Map.of(),Map.of(grant.id(),grant)),()->UUID.randomUUID().toString());
+        when(positionService.currentState(any())).thenAnswer(i->policy.state());
+        when(positionService.runtimeState(any(),eq(AGENT),any())).thenAnswer(i->{
+            java.util.function.Function<cn.jia.agent.position.PositionSkillPolicy,Object> action=i.getArgument(2);
+            return tx.execute(t->action.apply(policy));
+        });
+        service.setPositionProvider(provider(positionService));
+        var version=market.selectApprovedProductVersion("0",ACTOR.clientId(),skill.productVersionId());
+        var description=packages.describe(version);
+        var input=new cn.jia.agent.position.PositionSkillRuntimeService.Prepared(grant,skill,description,packages.manifest(description));
+        var wire=tx.execute(t->service.reconcilePosition(proof(),input));
+        String changeId=text(object(wire.get("data")),"skillChangeId");
+        assertEquals(0,count("economy_skill_order"));assertEquals(0,count("agent_outbox_event"));
+        return read(db.findChange("0",ACTOR.clientId(),changeId).getDtoJson().getBytes(java.nio.charset.StandardCharsets.UTF_8),"SkillChange");
+    }
+    @Test void originalFailedPositionResultTerminatesWithoutOrderOrWalletMutation() {
+        var c=nativePositionInstall();report(c,"FAILED","DEPENDENCY_MISSING");var stopped=stoppedHandover();
+        var before=businessSnapshot();String receipt=db.findCommand("0",ACTOR.clientId(),text(command(c),"commandId")).getEvidenceJson();
+        assertTrue(service.settleHandoverChanges(stopped));
+        assertEquals(100_000_000L,wallet());assertEquals(0,count("economy_skill_order"));
+        var after=businessSnapshot();
+        for(String table:List.of("economy_transaction","economy_entry","agent_skill_installation","agent_skill_entitlement","agent_skill_management_result"))
+            assertEquals(before.get(table),after.get(table),table);
+        assertEquals(receipt,db.findCommand("0",ACTOR.clientId(),text(command(c),"commandId")).getEvidenceJson());
+        assertEquals("FAILED_FINAL",current(c).get("status"));assertEquals("NONE",current(c).get("fundingStatus"));
+        assertTrue(service.settleHandoverChanges(stopped));assertEquals(after,businessSnapshot());
+    }
+    @Test void nativePositionPendingCannotBorrowMarketplaceNeverDispatchedProof() {
+        var c=nativePositionInstall();var stopped=stoppedHandover();var before=businessSnapshot();
+        assertFalse(service.settleHandoverChanges(stopped));assertEquals(before,businessSnapshot());
+        assertEquals("PENDING",db.findCommand("0",ACTOR.clientId(),text(command(c),"commandId")).getState());
+    }
+    @Test void originalUnknownPositionResultRemainsUnresolvedAfterStop() {
+        var c=nativePositionInstall();report(c,"UNKNOWN","RECEIPT_UNKNOWN");var stopped=stoppedHandover();var before=businessSnapshot();
+        assertFalse(service.settleHandoverChanges(stopped));assertEquals(before,businessSnapshot());assertEquals(100_000_000L,wallet());
+    }
+    @Test void missingOriginalCommandCannotDisappearFromHeldFundingDiscovery() {
+        var c=install();var stopped=stoppedHandover();jdbc.update("DELETE FROM agent_skill_change_command");var before=businessSnapshot();
+        assertFalse(service.settleHandoverChanges(stopped));assertEquals(before,businessSnapshot());assertEquals(99_999_950L,wallet());
+    }
+    @Test void handoverDiscoveryPagesPastOneHundredAndFiltersOriginalRelationBeforeLimit() {
+        var c=install();var stopped=stoppedHandover();var p=stopped.preparation();var candidate=stopped.candidate();
+        var original=db.findChange(p.tenantId(),p.clientId(),text(c,"skillChangeId"));
+        // Discovery-only fixtures: identical timestamp forces use of the change_id tie breaker.
+        Set<String> expected=new HashSet<>();expected.add(original.getChangeId());
+        for(int i=0;i<102;i++) {
+            String id=String.format("page-%03d",i);boolean matching=i<100;
+            jdbc.update("INSERT INTO agent_skill_change (tenant_id,client_id,change_id,agent_id,skill_key,actor_id,owner_jiacn,version,dto_json,permissions_json,runtime_installation_id,runtime_host_id,entitlement_id,command_id,created_at,updated_at) SELECT tenant_id,client_id,?,agent_id,skill_key,actor_id,?,version,dto_json,permissions_json,runtime_installation_id,runtime_host_id,entitlement_id,command_id,created_at,updated_at FROM agent_skill_change WHERE change_id=?",
+                    id,matching?p.ownerJiacn():"other-owner",original.getChangeId());
+            if(matching)expected.add(id);
+        }
+        var first=db.handoverPendingPage(p.tenantId(),p.clientId(),p.agentId(),p.ownerJiacn(),candidate.installationId(),candidate.hostId(),0,"");
+        assertEquals(100,first.size());var last=first.getLast();
+        var second=db.handoverPendingPage(p.tenantId(),p.clientId(),p.agentId(),p.ownerJiacn(),candidate.installationId(),candidate.hostId(),last.getCreatedAt(),last.getChangeId());
+        assertEquals(1,second.size());Set<String> found=new HashSet<>();first.forEach(x->found.add(x.getChangeId()));second.forEach(x->found.add(x.getChangeId()));
+        assertEquals(expected,found);
+    }
     @Test void handoverDiscoverySettlesOnlyOriginalPendingFeesAndStopsQueryingTerminalChanges() {
         var c=install();report(c,"FAILED","DEPENDENCY_MISSING");var handover=stoppedHandover();
         var p=handover.preparation();var candidate=handover.candidate();
