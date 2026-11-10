@@ -10,12 +10,9 @@ import org.springframework.transaction.CannotCreateTransactionException;
 
 import java.sql.SQLException;
 import java.sql.SQLTransientConnectionException;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
 import java.util.ArrayList;
 import java.util.List;
 import cn.jia.agent.entity.AgentTaskBountyBootstrapWakeup;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -27,7 +24,9 @@ class ChatBountyBootstrapRelayRecoveryTest {
     private final AgentTaskBountyBootstrapOutboxService outbox = mock(AgentTaskBountyBootstrapOutboxService.class);
     private final ChatBountyBootstrapAdmissionService admission = mock(ChatBountyBootstrapAdmissionService.class);
     private final ChatTypedDeliberationContextService contexts = mock(ChatTypedDeliberationContextService.class);
-    private final ScheduledExecutorService scheduler = mock(ScheduledExecutorService.class);
+    private final cn.jia.task.scheduling.ScheduleService scheduler = mock(cn.jia.task.scheduling.ScheduleService.class);
+    private final org.springframework.transaction.PlatformTransactionManager transactions = mock(org.springframework.transaction.PlatformTransactionManager.class);
+    private final cn.jia.task.scheduling.ScheduleKey key = new cn.jia.task.scheduling.ScheduleKey("",ChatBountyBootstrapRelay.HANDLER,"recovery","node-a");
     private final AtomicLong now = new AtomicLong(1_000L);
     private ChatBountyBootstrapRelay relay;
     private Runnable tick;
@@ -36,13 +35,18 @@ class ChatBountyBootstrapRelayRecoveryTest {
 
     @BeforeEach void start() {
         when(contexts.bootstrapReadiness()).thenReturn(Readiness.READY);
+        when(transactions.getTransaction(any())).thenReturn(new org.springframework.transaction.support.SimpleTransactionStatus());
         doAnswer(call -> {
-            callbacks.add(call.getArgument(0));
-            delays.add(call.getArgument(1));
-            return mock(ScheduledFuture.class);
-        }).when(scheduler).schedule(any(Runnable.class), anyLong(), eq(TimeUnit.MILLISECONDS));
-        relay = new ChatBountyBootstrapRelay(outbox, admission, contexts, () -> scheduler, now::get);
+            assertEquals(key,call.getArgument(0));
+            callbacks.add(() -> relay.executeScheduled(new cn.jia.task.scheduling.ScheduledInvocation("0",key,1)));
+            delays.add((Long)call.getArgument(1)-now.get());
+            return null;
+        }).when(scheduler).signal(any(), anyLong());
+        relay = new ChatBountyBootstrapRelay(outbox, admission, contexts, scheduler, transactions,
+                new cn.jia.core.security.FixedTenantAdmissionPolicy("0",null), "node-a", now::get);
         relay.start();
+        verifyNoInteractions(scheduler, outbox);
+        relay.onApplicationReady(null);
         assertEquals(List.of(0L), delays);
         tick = () -> callbacks.get(callbacks.size() - 1).run();
     }
@@ -64,7 +68,7 @@ class ChatBountyBootstrapRelayRecoveryTest {
         verify(outbox, times(3)).claimNextAvailable(anyString(), anyLong());
         assertTrue(relay.isRunning());
         verifyNoInteractions(admission); // Never bypass lease acquisition with a direct dispatch.
-        verify(scheduler, never()).shutdown();
+        verify(scheduler, never()).cancel(any());
     }
 
     @Test void successfulClaimPollResetsRecoveryDelay() {
@@ -110,7 +114,7 @@ class ChatBountyBootstrapRelayRecoveryTest {
                 new DataAccessResourceFailureException("schema missing", new SQLException("missing table", "42S02")));
         tick.run(); tick.run();
         assertFalse(relay.isRunning());
-        verify(scheduler).shutdown();
+        verify(scheduler, never()).cancel(any());
         verifyNoInteractions(admission);
     }
 
@@ -134,7 +138,7 @@ class ChatBountyBootstrapRelayRecoveryTest {
     @Test void explicitLifecycleRestartDoesNotInheritOldBackoff() {
         when(outbox.claimNextAvailable(anyString(), anyLong()))
                 .thenThrow(new TransientDataAccessResourceException("DB restarting")).thenReturn(null);
-        tick.run(); relay.stop(); relay.start();
+        tick.run(); relay.stop(); relay.start(); relay.onApplicationReady(null);
         tick.run();
         verify(outbox, times(2)).claimNextAvailable(anyString(), anyLong());
         assertTrue(relay.isRunning());
@@ -143,15 +147,14 @@ class ChatBountyBootstrapRelayRecoveryTest {
     @Test void emptyQueueSleepsAndCommittedHintWakesWithoutWaitingForRecovery() {
         tick.run();
         assertEquals(5_000L, delays.get(delays.size() - 1));
-        Runnable staleRecovery = callbacks.get(callbacks.size() - 1);
         now.set(1_100);
         relay.onWorkAvailable(new AgentTaskBountyBootstrapWakeup(now.get()));
         assertEquals(0L, delays.get(delays.size() - 1));
-        staleRecovery.run(); // A cancelled timer may already have been queued.
+        // Claim fencing/cancelled wake races now belong to task, not a second local timer.
         verify(outbox, times(1)).claimNextAvailable(anyString(), anyLong());
         tick.run();
         verify(outbox, times(2)).claimNextAvailable(anyString(), anyLong());
-        verify(scheduler, never()).scheduleWithFixedDelay(any(), anyLong(), anyLong(), any());
+        verify(scheduler, never()).reschedule(any(),anyLong());
     }
 
     @Test void notificationStormCoalescesAndInFlightHintIsNotLost() {
@@ -176,16 +179,36 @@ class ChatBountyBootstrapRelayRecoveryTest {
         assertEquals(5_000L, delays.get(delays.size() - 1));
     }
 
-    @Test void stoppedAndReplacedLifecycleRejectsOldCallbacksAndHints() {
+    @Test void stoppedLifecycleRejectsCallbacksAndHintsThenExplicitRestartResumes() {
         Runnable old = callbacks.get(0);
         relay.stop();
         int before = callbacks.size();
         relay.onWorkAvailable(new AgentTaskBountyBootstrapWakeup(now.get()));
         assertEquals(before, callbacks.size());
-        relay.start(); old.run();
-        verifyNoInteractions(outbox);
+        old.run(); verifyNoInteractions(outbox);
+        relay.start(); relay.onApplicationReady(null);
         tick.run();
         verify(outbox).claimNextAvailable(anyString(), anyLong());
+    }
+
+    @Test void initializingSchemaNeverConsumesBusinessClaim() {
+        when(contexts.bootstrapReadiness()).thenReturn(Readiness.INITIALIZING);
+        tick.run();
+        verifyNoInteractions(outbox,admission);
+        assertEquals(500L,delays.getLast());
+        when(contexts.bootstrapReadiness()).thenReturn(Readiness.READY);
+        now.addAndGet(500);tick.run();
+        verify(outbox).claimNextAvailable(anyString(),anyLong());
+    }
+
+    @Test void afterCommitHintUsesIndependentTransactionBeforeReportingScheduled() {
+        tick.run();
+        relay.onWorkAvailable(new AgentTaskBountyBootstrapWakeup(now.get()));
+        var definition=org.mockito.ArgumentCaptor.forClass(org.springframework.transaction.TransactionDefinition.class);
+        verify(transactions).getTransaction(definition.capture());
+        assertEquals(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW,
+                definition.getValue().getPropagationBehavior());
+        verify(transactions).commit(any());
     }
 
 }

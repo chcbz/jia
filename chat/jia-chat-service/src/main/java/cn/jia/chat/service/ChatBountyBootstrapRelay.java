@@ -11,6 +11,16 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.SmartLifecycle;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
+import cn.jia.task.scheduling.ScheduleKey;
+import cn.jia.task.scheduling.ScheduleService;
+import cn.jia.task.scheduling.ScheduledInvocation;
+import cn.jia.task.scheduling.ScheduledJobHandler;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
@@ -22,12 +32,7 @@ import java.util.IdentityHashMap;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Supplier;
 import java.util.function.LongSupplier;
 import org.springframework.dao.TransientDataAccessException;
 
@@ -38,12 +43,15 @@ import org.springframework.dao.TransientDataAccessException;
  */
 @Slf4j
 @Component
-@ConditionalOnProperty(prefix = "chat.bounty-bootstrap", name = "enabled", havingValue = "true")
-public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable {
+@ConditionalOnProperty(name = {"chat.bounty-bootstrap.enabled", "cyf.task.scheduling.enabled"}, havingValue = "true")
+public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable, ScheduledJobHandler {
+    public static final String HANDLER = "chat.bounty-bootstrap";
     private final AgentTaskBountyBootstrapOutboxService outbox;
     private final ChatBountyBootstrapAdmissionService admission;
     private final ChatTypedDeliberationContextService contexts;
-    private final Supplier<ScheduledExecutorService> schedulerFactory;
+    private final ScheduleService schedules;
+    private final ScheduleKey scheduleKey;
+    private final TransactionTemplate notificationTransaction;
     // Reuse the outbox recovery backoff range: delay claim attempts, never expire user work.
     static final long CLAIM_RETRY_BASE_MILLIS = 1_000L;
     static final long CLAIM_RETRY_MAX_MILLIS = 300_000L;
@@ -53,13 +61,12 @@ public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable {
     private final String consumerId = "mmd-chat-" + UUID.randomUUID();
     private final AtomicBoolean running = new AtomicBoolean();
     private final AtomicBoolean polling = new AtomicBoolean();
-    private volatile ScheduledExecutorService scheduler;
     // Same discovery scale as the existing execution relay; only missed notifications wait for it.
     static final long RECOVERY_SCAN_MILLIS = 5_000L;
-    private ScheduledFuture<?> pendingWake;
     private long scheduledAt = Long.MAX_VALUE;
     private long requestedAt = Long.MAX_VALUE;
-    private long wakeGeneration;
+    private volatile long lifecycleGeneration;
+    private boolean ready;
     private boolean claimedWork;
 
     private volatile String previousFailure;
@@ -67,77 +74,79 @@ public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable {
 
     @Autowired
     public ChatBountyBootstrapRelay(AgentTaskBountyBootstrapOutboxService outbox,
-            ChatBountyBootstrapAdmissionService admission, ChatTypedDeliberationContextService contexts) {
-        this(outbox, admission, contexts, () -> new ScheduledThreadPoolExecutor(1, r -> {
-            Thread thread = new Thread(r, "chat-bounty-bootstrap");
-            thread.setDaemon(true);
-            return thread;
-        }));
+            ChatBountyBootstrapAdmissionService admission, ChatTypedDeliberationContextService contexts,
+            ScheduleService schedules, PlatformTransactionManager manager, FixedTenantAdmissionPolicy scope,
+            @Value("${cyf.task.scheduling.node-id}") String node) {
+        this(outbox, admission, contexts, schedules, manager, scope, node, System::currentTimeMillis);
     }
 
     ChatBountyBootstrapRelay(AgentTaskBountyBootstrapOutboxService outbox,
             ChatBountyBootstrapAdmissionService admission, ChatTypedDeliberationContextService contexts,
-            Supplier<ScheduledExecutorService> schedulerFactory) {
-        this(outbox, admission, contexts, schedulerFactory, System::currentTimeMillis);
-    }
-
-    ChatBountyBootstrapRelay(AgentTaskBountyBootstrapOutboxService outbox,
-            ChatBountyBootstrapAdmissionService admission, ChatTypedDeliberationContextService contexts,
-            Supplier<ScheduledExecutorService> schedulerFactory, LongSupplier clock) {
+            ScheduleService schedules, PlatformTransactionManager manager, FixedTenantAdmissionPolicy scope,
+            String node, LongSupplier clock) {
+        if (node == null || node.isBlank())
+            throw new IllegalArgumentException("Bootstrap recovery requires a scheduler node identity");
         this.clock = Objects.requireNonNull(clock);
         this.outbox = Objects.requireNonNull(outbox);
         this.admission = Objects.requireNonNull(admission);
         this.contexts = Objects.requireNonNull(contexts);
-        this.schedulerFactory = Objects.requireNonNull(schedulerFactory);
+        this.schedules = Objects.requireNonNull(schedules);
+        this.scheduleKey = new ScheduleKey(scope.clientId() == null ? "" : scope.clientId(), HANDLER, "recovery", node);
+        this.notificationTransaction = new TransactionTemplate(manager);
+        // Hints originate in Spring afterCommit: REQUIRED would reuse the already committed resource.
+        // A missed hint remains recoverable by the persistent node wake and original business outbox.
+        this.notificationTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
+
+    @Override public String getName() { return HANDLER; }
 
     @Override public synchronized void start() {
         if (contexts.bootstrapReadiness() == Readiness.DISABLED
                 || !running.compareAndSet(false, true)) return;
+        ++lifecycleGeneration;
+        ready = false;
         previousFailure = null;
         sameFailureCount = 0;
         claimRetryNotBefore = 0;
         claimRetryDelay = CLAIM_RETRY_BASE_MILLIS;
-        try {
-            ScheduledExecutorService active = Objects.requireNonNull(schedulerFactory.get());
-            if (active instanceof ScheduledThreadPoolExecutor executor) executor.setRemoveOnCancelPolicy(true);
-            scheduler = active;
-            scheduleWake(active, clock.getAsLong());
-        } catch (RuntimeException | Error failure) {
-            stop();
-            throw failure;
-        }
+        requestedAt = scheduledAt = Long.MAX_VALUE;
+    }
+
+    @EventListener public synchronized void onApplicationReady(ApplicationReadyEvent event) {
+        if (!running.get() || ready) return;
+        arm(clock.getAsLong(), false);
+        ready = true;
     }
 
     @EventListener
     public synchronized void onWorkAvailable(AgentTaskBountyBootstrapWakeup hint) {
-        if (!running.get() || scheduler == null) return;
+        if (!running.get() || !ready) return;
         long at = Math.max(Math.max(clock.getAsLong(), hint.availableAt()), claimRetryNotBefore);
         requestedAt = Math.min(requestedAt, at);
-        if (!polling.get()) scheduleWake(scheduler, at);
+        if (!polling.get()) arm(at, true);
     }
 
-    // Caller holds this monitor. An earlier notification replaces, rather than adds to, the timer.
-    private void scheduleWake(ScheduledExecutorService owner, long at) {
-        if (!running.get() || scheduler != owner || at >= scheduledAt) return;
-        if (pendingWake != null) pendingWake.cancel(false);
-        long generation = ++wakeGeneration;
+    // Local coalescing avoids a SQL write per identical hint; the durable key owns the actual deadline.
+    private void arm(long at, boolean afterCommitHint) {
+        if (!running.get() || at >= scheduledAt) return;
+        if (afterCommitHint) notificationTransaction.executeWithoutResult(status -> schedules.signal(scheduleKey, at));
+        else schedules.signal(scheduleKey, at);
         scheduledAt = at;
-        pendingWake = owner.schedule(() -> {
-            synchronized (this) {
-                if (scheduler != owner || generation != wakeGeneration || !running.get()) return;
-                pendingWake = null;
-                scheduledAt = Long.MAX_VALUE;
-                if (polling.get()) {
-                    // A prior lifecycle or an explicit diagnostic pass still owns the claim guard.
-                    scheduleWake(owner, clock.getAsLong() + 500L);
-                    return;
-                }
-                // Consume only notifications due for this pass. Future retries must survive it.
-                if (requestedAt <= clock.getAsLong()) requestedAt = Long.MAX_VALUE;
+    }
+
+    @Override public void executeScheduled(ScheduledInvocation invocation) {
+        final long generation;
+        synchronized (this) {
+            if (!running.get()) return;
+            generation = lifecycleGeneration;
+            scheduledAt = Long.MAX_VALUE;
+            if (!ready || polling.get()) {
+                arm(clock.getAsLong() + 500L, false);
+                return;
             }
-            safePoll(owner);
-        }, Math.max(0, at - clock.getAsLong()), TimeUnit.MILLISECONDS);
+            if (requestedAt <= clock.getAsLong()) requestedAt = Long.MAX_VALUE;
+        }
+        safePoll(generation);
     }
 
     /** One persistent claim per poll, so a retry never spins on the same row in one loop. */
@@ -234,14 +243,14 @@ public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable {
         }
     }
 
-    private void safePoll(ScheduledExecutorService owner) {
-        if (!running.get() || scheduler != owner || !polling.compareAndSet(false, true)) return;
+    private void safePoll(long generation) {
+        if (!running.get() || lifecycleGeneration != generation || !polling.compareAndSet(false, true)) return;
         try {
-            if (!running.get() || scheduler != owner) return;
+            if (!running.get() || lifecycleGeneration != generation) return;
             claimedWork = false;
             if (pollWhenReady()) {
                 synchronized (this) {
-                    if (scheduler != owner) return;
+                    if (lifecycleGeneration != generation) return;
                     previousFailure = null;
                     sameFailureCount = 0;
                 }
@@ -250,7 +259,7 @@ public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable {
             // Never silently busy-loop an unchanged DB/schema/fence failure. The claim lease
             // remains authoritative and can be safely reclaimed after an operator fixes it.
             synchronized (this) {
-                if (scheduler != owner) return; // an old lifecycle cannot stop its replacement
+                if (lifecycleGeneration != generation) return; // an old lifecycle cannot stop its replacement
                 String signature = failure.getClass().getName() + ":" + failure.getMessage();
                 sameFailureCount = Objects.equals(signature, previousFailure) ? sameFailureCount + 1 : 1;
                 previousFailure = signature;
@@ -263,13 +272,13 @@ public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable {
         } finally {
             synchronized (this) {
                 polling.set(false);
-                if (running.get() && scheduler == owner) {
+                if (running.get() && lifecycleGeneration == generation) {
                     long now = clock.getAsLong();
                     long next = claimedWork ? now : now + RECOVERY_SCAN_MILLIS;
                     if (contexts.bootstrapReadiness() == Readiness.INITIALIZING) next = now + 500L;
                     next = Math.min(next, requestedAt);
                     if (claimRetryNotBefore > now) next = claimRetryNotBefore;
-                    scheduleWake(owner, next);
+                    arm(next, false);
                 }
             }
         }
@@ -277,13 +286,11 @@ public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable {
 
     @Override public synchronized void stop() {
         running.set(false);
-        ScheduledExecutorService active = scheduler;
-        scheduler = null;
-        ++wakeGeneration;
-        if (pendingWake != null) pendingWake.cancel(false);
-        pendingWake = null;
+        ready = false;
+        ++lifecycleGeneration;
         requestedAt = scheduledAt = Long.MAX_VALUE;
-        if (active != null) active.shutdown();
+        // Do not delete durable node work or interrupt an already accepted business transaction.
+        // A restarted process resumes the original business outbox through the same key.
     }
     @Override public boolean isRunning() { return running.get(); }
     @Override public void close() { stop(); }
