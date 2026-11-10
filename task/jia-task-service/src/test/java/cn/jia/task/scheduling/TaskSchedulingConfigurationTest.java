@@ -19,6 +19,7 @@ class TaskSchedulingConfigurationTest {
         context.getEnvironment().getPropertySources().addFirst(new MapPropertySource("test", properties));
         context.registerBean(FixedTenantAdmissionPolicy.class, () -> new FixedTenantAdmissionPolicy("tenant", null));
         context.registerBean(ScheduledWorkMapper.class, () -> mock(ScheduledWorkMapper.class));
+        context.registerBean(cn.jia.task.mapper.CronScheduleMapper.class, () -> mock(cn.jia.task.mapper.CronScheduleMapper.class));
         context.registerBean(PlatformTransactionManager.class, () -> mock(PlatformTransactionManager.class));
         context.registerBean(RedissonClient.class, () -> redis);
         context.registerBean(JobRegistry.class, JobRegistry::new);
@@ -28,6 +29,7 @@ class TaskSchedulingConfigurationTest {
         var redis = mock(RedissonClient.class);
         try (var context = context(Map.of(), redis)) {
             assertTrue(context.getBeansOfType(ScheduleService.class).isEmpty());
+            assertTrue(context.getBeansOfType(CronScheduleService.class).isEmpty());
             assertTrue(context.getBeansOfType(TaskSchedulingRuntime.class).isEmpty());
             verifyNoInteractions(redis);
         }
@@ -37,6 +39,8 @@ class TaskSchedulingConfigurationTest {
         try (var context = context(Map.of("cyf.task.scheduling.enabled", "true",
                 "cyf.security.fixed-tenant.enabled", "true"), redis)) {
             assertEquals(1, context.getBeansOfType(ScheduleService.class).size());
+            assertEquals(1, context.getBeansOfType(CronScheduleService.class).size());
+            verifyNoInteractions(context.getBean(cn.jia.task.mapper.CronScheduleMapper.class));
             assertTrue(context.getBeansOfType(TaskSchedulingRuntime.class).isEmpty());
             verifyNoInteractions(redis);
         }

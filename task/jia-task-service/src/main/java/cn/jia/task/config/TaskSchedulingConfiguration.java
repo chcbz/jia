@@ -3,6 +3,8 @@ package cn.jia.task.config;
 import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import cn.jia.task.job.JobRegistry;
 import cn.jia.task.mapper.ScheduledWorkMapper;
+import cn.jia.task.mapper.CronScheduleMapper;
+import cn.jia.task.scheduling.CronScheduleDispatcher;
 import cn.jia.task.scheduling.RedisScheduleWakeup;
 import cn.jia.task.scheduling.ScheduledWorkStore;
 import cn.jia.task.scheduling.TaskSchedulingRuntime;
@@ -21,6 +23,13 @@ public class TaskSchedulingConfiguration {
     public ScheduledWorkStore scheduledWorkStore(ScheduledWorkMapper mapper, FixedTenantAdmissionPolicy scope,
             PlatformTransactionManager transactions, RedissonClient redis) {
         return new ScheduledWorkStore(mapper, scope, transactions, new RedisScheduleWakeup(redis, scope));
+    }
+
+    @Bean
+    public CronScheduleDispatcher cronScheduleDispatcher(CronScheduleMapper mapper, ScheduledWorkMapper clock,
+            ScheduledWorkStore store, FixedTenantAdmissionPolicy scope, JobRegistry registry,
+            PlatformTransactionManager transactions) {
+        return new CronScheduleDispatcher(mapper, clock, store, scope, registry, transactions);
     }
 
     @Bean(destroyMethod = "close")

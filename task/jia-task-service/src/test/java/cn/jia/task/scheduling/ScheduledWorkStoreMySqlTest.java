@@ -39,6 +39,7 @@ class ScheduledWorkStoreMySqlTest {
     private JdbcTemplate jdbc;
     private DataSourceTransactionManager manager;
     private ScheduledWorkMapper mapper;
+    private cn.jia.task.mapper.CronScheduleMapper cronMapper;
     private ScheduledWorkStore store;
     private static final ScheduleKey KEY = new ScheduleKey("client", "rent", "user", "");
 
@@ -85,7 +86,8 @@ class ScheduledWorkStoreMySqlTest {
         admin.execute("CREATE DATABASE `" + database + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin");
         source = new DriverManagerDataSource(baseUrl.replace("/mysql?", "/" + database + "?"), "root", "");
         jdbc = new JdbcTemplate(source);
-        new ResourceDatabasePopulator(new ClassPathResource("db/task-scheduled-work-v1.sql")).execute(source);
+        new ResourceDatabasePopulator(new ClassPathResource("db/task-scheduled-work-v1.sql"),
+                new ClassPathResource("db/task-cron-schedule-v1.sql")).execute(source);
         manager = new DataSourceTransactionManager(source);
         mapper = mapper(new FixedTenantAdmissionPolicy("tenant", null));
         store = store("tenant", null);
@@ -93,11 +95,14 @@ class ScheduledWorkStoreMySqlTest {
     private ScheduledWorkMapper mapper(FixedTenantAdmissionPolicy policy) throws Exception {
         var configuration = new MybatisConfiguration();
         configuration.addMapper(ScheduledWorkMapper.class);
+        configuration.addMapper(cn.jia.task.mapper.CronScheduleMapper.class);
         var factory = new MybatisSqlSessionFactoryBean();
         factory.setDataSource(source); factory.setConfiguration(configuration);
         // Include the actual task interceptor: new SQL explicitly owns partitioning, not HTTP context.
         factory.setPlugins(new TaskTenantConfiguration().taskPlanTenantInterceptor(policy));
-        return new SqlSessionTemplate(factory.getObject()).getMapper(ScheduledWorkMapper.class);
+        var sessions=new SqlSessionTemplate(factory.getObject());
+        cronMapper=sessions.getMapper(cn.jia.task.mapper.CronScheduleMapper.class);
+        return sessions.getMapper(ScheduledWorkMapper.class);
     }
     private ScheduledWorkStore store(String tenant, String client) throws Exception {
         var policy = new FixedTenantAdmissionPolicy(tenant, client);
@@ -315,6 +320,63 @@ class ScheduledWorkStoreMySqlTest {
             assertEquals(0, calls.get()); assertNull(row().getClaimToken());
             assertTrue(store.nextDelay("") > 0);
         }
+    }
+
+    private CronScheduleDispatcher cron() {
+        var registry=new cn.jia.task.job.JobRegistry();
+        registry.register(new ScheduledJobHandler() {
+            public String getName() {return "hourly";}
+            public void executeScheduled(ScheduledInvocation invocation) { }
+        });
+        return new CronScheduleDispatcher(cronMapper,mapper,store,new FixedTenantAdmissionPolicy("tenant",null),registry,manager);
+    }
+    private CronSchedule cronDefinition() {
+        return new CronSchedule("client","hourly","","0 0 * * * *","UTC",CronSchedule.Misfire.COALESCE);
+    }
+    private ScheduledInvocation cronInvocation() {
+        return new ScheduledInvocation("tenant",new ScheduleKey("client",CronScheduleDispatcher.HANDLER,"hourly",""),1);
+    }
+    private long makeCronOverdue() {
+        long due=mapper.nowMillis()-7200000;
+        jdbc.update("UPDATE task_cron_schedule SET next_fire_at=?",due);return due;
+    }
+    @Test void cronRestartAndRepeatedWakeCannotMintAnotherOccurrence() {
+        var cron=cron();cron.register(cronDefinition());long due=makeCronOverdue();
+        cron.register(cronDefinition());
+        assertEquals(due,jdbc.queryForObject("SELECT next_fire_at FROM task_cron_schedule",Long.class));
+        cron.executeScheduled(cronInvocation());cron.executeScheduled(cronInvocation());
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM task_scheduled_work WHERE handler='hourly'",Integer.class));
+        var leased=store.claimDue("",10,60000).stream().filter(work->work.key().handler().equals("hourly")).findFirst().orElseThrow();
+        assertEquals("cron:"+due,leased.key().businessKey());assertTrue(store.succeed(leased));
+        assertTrue(jdbc.queryForObject("SELECT next_fire_at FROM task_cron_schedule",Long.class)>mapper.nowMillis());
+    }
+    @Test void cronCursorAndOccurrenceRollbackWithOuterBusinessTransaction() {
+        var cron=cron();cron.register(cronDefinition());long due=makeCronOverdue();
+        assertThrows(IllegalStateException.class,()->new TransactionTemplate(manager).executeWithoutResult(status->{
+            cron.executeScheduled(cronInvocation());throw new IllegalStateException("rollback");
+        }));
+        assertEquals(due,jdbc.queryForObject("SELECT next_fire_at FROM task_cron_schedule",Long.class));
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM task_scheduled_work WHERE handler='hourly'",Integer.class));
+        cron.executeScheduled(cronInvocation());
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM task_scheduled_work WHERE handler='hourly'",Integer.class));
+    }
+    @Test void cronTwoOwnersReconcileOnlyOneOriginalOccurrence() throws Exception {
+        var cron=cron();cron.register(cronDefinition());makeCronOverdue();var start=new CountDownLatch(1);
+        try(var executor=Executors.newFixedThreadPool(2)) {
+            Callable<Void> task=()->{start.await();cron.executeScheduled(cronInvocation());return null;};
+            var first=executor.submit(task);var second=executor.submit(task);start.countDown();
+            first.get(10,TimeUnit.SECONDS);second.get(10,TimeUnit.SECONDS);
+        }
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM task_scheduled_work WHERE handler='hourly'",Integer.class));
+        assertEquals(1L,jdbc.queryForObject("SELECT requested_revision FROM task_scheduled_work WHERE handler='hourly'",Long.class));
+    }
+    @Test void cronCancellationRetainsAcceptedWorkAndRejectsForeignScope() {
+        var cron=cron();cron.register(cronDefinition());makeCronOverdue();cron.executeScheduled(cronInvocation());
+        assertThrows(IllegalArgumentException.class,()->cron.executeScheduled(new ScheduledInvocation("foreign",cronInvocation().key(),1)));
+        cron.cancel("client","hourly","");cron.executeScheduled(cronInvocation());
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM task_scheduled_work WHERE handler='hourly' AND due_at IS NOT NULL",Integer.class));
+        assertFalse(jdbc.queryForObject("SELECT enabled FROM task_cron_schedule",Boolean.class));
+        assertNull(jdbc.queryForObject("SELECT due_at FROM task_scheduled_work WHERE handler='task.cron-dispatch'",Long.class));
     }
 
 }
