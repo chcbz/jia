@@ -959,6 +959,7 @@ tasks.withType(org.gradle.api.tasks.testing.Test).configureEach {
 def skillManagementContractSourceSet = sourceSets.create('skillManagementContract') {
     java.setSrcDirs(['src/skillManagementContract/java', 'src/test/java'])
     java.include 'cn/jia/agent/skill/SkillManagement*.java'
+    java.include 'cn/jia/agent/skill/SkillInstallRecoveryServiceTest.java'
     java.include 'cn/jia/agent/skill/SkillExecutionSchemaMySqlTest.java'
     java.include 'cn/jia/agent/skill/SkillTransportStorageAssertions.java'
     resources.setSrcDirs(['src/skillManagementContract/resources'])
@@ -982,6 +983,8 @@ dependencies {
     add(skillManagementContractSourceSet.implementationConfigurationName, 'org.springframework.security:spring-security-oauth2-resource-server')
     add(skillManagementContractSourceSet.implementationConfigurationName, 'org.springframework.security:spring-security-oauth2-jose')
     add(skillManagementContractSourceSet.implementationConfigurationName, project(':oauth:jia-oauth-api'))
+    add(skillManagementContractSourceSet.implementationConfigurationName, project(':task:jia-task-service'))
+    add(skillManagementContractSourceSet.implementationConfigurationName, project(':task:jia-task-mapper'))
     add(skillManagementContractSourceSet.runtimeOnlyConfigurationName, 'org.junit.platform:junit-platform-launcher:6.0.1')
     add(skillManagementContractSourceSet.runtimeOnlyConfigurationName, libs.mysql)
     add(skillManagementContractSourceSet.runtimeOnlyConfigurationName, 'com.jayway.jsonpath:json-path')
@@ -989,7 +992,7 @@ dependencies {
 tasks.register('skillManagementContract', Test) {
     group = 'verification'
     description = 'Strict SM-C1 wire, actual HTTP adapter and private MySQL transactions; never production DB.'
-    filter { includeTestsMatching 'cn.jia.agent.skill.SkillManagement*' }
+    filter { includeTestsMatching 'cn.jia.agent.skill.SkillManagement*'; includeTestsMatching 'cn.jia.agent.skill.SkillInstallRecoveryServiceTest' }
     dependsOn tasks.named(skillManagementContractSourceSet.classesTaskName)
     testClassesDirs = skillManagementContractSourceSet.output.classesDirs
     classpath = skillManagementContractSourceSet.runtimeClasspath

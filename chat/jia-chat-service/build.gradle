@@ -40,6 +40,9 @@ dependencies {
 //	implementation 'org.springframework:spring-aspects'
 	testImplementation project(':common:jia-common-test')
 	testImplementation project(':agent:jia-agent-service')
+    // Shared real skill transaction fixture includes its durable task rows.
+    testImplementation project(':task:jia-task-service')
+    testImplementation project(':task:jia-task-mapper')
 	testImplementation project(':agent:jia-agent-mapper')
 	testImplementation project(':oauth:jia-oauth-api')
     // Exercise the actual browser JWT chain for the private profile GET, not a mocked principal only.

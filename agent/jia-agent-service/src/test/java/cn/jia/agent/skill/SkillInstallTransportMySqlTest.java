@@ -26,6 +26,17 @@ import static org.mockito.ArgumentMatchers.*;
  * is separately covered by real marketplace transactions; this fixture never represents an order. */
 @EnabledIfEnvironmentVariable(named="CYF_SKILL_MYSQL_URL",matches="jdbc:mysql://127\\.0\\.0\\.1:[0-9]+/.*")
 class SkillInstallTransportMySqlTest {
+    private org.springframework.beans.factory.ObjectProvider<cn.jia.task.scheduling.ScheduleService> scheduleProvider() {
+        var beans=new org.springframework.beans.factory.support.StaticListableBeanFactory();
+        beans.addBean("schedules",mock(cn.jia.task.scheduling.ScheduleService.class));
+        return beans.getBeanProvider(cn.jia.task.scheduling.ScheduleService.class);
+    }
+    private void dispatchPendingSkills() {
+        for(var row:mapper.pending("0",null,0))
+            recovery.executeScheduled(new cn.jia.task.scheduling.ScheduledInvocation("0",
+                    SkillInstallRecoveryService.key(row),1));
+    }
+
     private JdbcTemplate admin,jdbc;
     private String db;
     private TransactionTemplate tx;
@@ -58,8 +69,8 @@ class SkillInstallTransportMySqlTest {
         commands=sql.getMapper(AgentCommandTransportMapper.class);mapper=sql.getMapper(AgentSkillInstallRecoveryMapper.class);
         var manager=new DataSourceTransactionManager(ds);tx=new TransactionTemplate(manager);
         var preview=new EconomyPreviewGate(new EconomyPreviewProperties(true,List.of(new EconomyPreviewProperties.AllowedScope("0","Client-A"))));
-        writer=new SkillInstallCommandWriter(new AgentCommandTransportDaoImpl(commands));dispatch=mock(SkillInstallDispatchService.class);
-        recovery=new SkillInstallRecoveryService(mapper,new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class)),dispatch,manager,new FixedTenantAdmissionPolicy("0", null));
+        writer=new SkillInstallCommandWriter(new AgentCommandTransportDaoImpl(commands),scheduleProvider());dispatch=mock(SkillInstallDispatchService.class);
+        recovery=new SkillInstallRecoveryService(mapper,new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class)),dispatch,manager,new FixedTenantAdmissionPolicy("0", null),scheduleProvider());
         long now=System.currentTimeMillis();
         change=new cn.jia.agent.entity.skill.SkillChangeEntity().setChangeId("change-fixture")
                 .setAgentId("agt_fixture").setOwnerJiacn("Owner-A");
@@ -100,14 +111,14 @@ class SkillInstallTransportMySqlTest {
             assertEquals("Owner-A",call.getArgument(2));assertEquals("Client-A",call.getArgument(1));
             assertArrayEquals(wire,call.getArgument(6));return AgentRawCommandDispatchResult.sent(1,1);
         });
-        recovery.recover();assertEquals("SENT",jdbc.queryForObject("SELECT status FROM agent_command_delivery",String.class));
+        dispatchPendingSkills();assertEquals("SENT",jdbc.queryForObject("SELECT status FROM agent_command_delivery",String.class));
         assertEquals("SENT",jdbc.queryForObject("SELECT status FROM agent_outbox_event",String.class));
         assertEquals("NONE",jdbc.queryForObject("SELECT publisher_confirm_status FROM agent_outbox_event",String.class));
         assertNull(jdbc.queryForObject("SELECT confirmed_at FROM agent_outbox_event",Long.class));
         assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM agent_consumer_inbox",Integer.class));
     }
     @Test void claimCasCannotOverwriteLeaseOrCrossCaseScope() {
-        pending();long now=System.currentTimeMillis();var d=mapper.candidates("0",null,now,now-60000).getFirst();
+        pending();long now=System.currentTimeMillis();var d=mapper.pending("0",null,0).getFirst();
         assertEquals(1,mapper.claimDelivery(d,"owner-1",now+60000,now));
         assertEquals(0,mapper.claimDelivery(d,"owner-2",now+60000,now));
         d.setVersion(d.getVersion()+1).setStatus("CONSUMED");

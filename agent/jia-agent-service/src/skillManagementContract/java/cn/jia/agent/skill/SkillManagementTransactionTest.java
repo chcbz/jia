@@ -1,6 +1,8 @@
 package cn.jia.agent.skill;
 
 import cn.jia.core.security.FixedTenantAdmissionPolicy;
+import cn.jia.task.scheduling.*;
+import cn.jia.task.mapper.ScheduledWorkMapper;
 import cn.jia.agent.dao.*;
 import cn.jia.agent.dao.impl.*;
 import cn.jia.agent.entity.*;
@@ -68,19 +70,21 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
     private AgentSkillInstallRecoveryMapper recoveryMapper;
     private AgentCommandRecoveryDao recoveryDao;
     private SkillInstallDispatchService dispatch;
+    private ScheduledWorkStore schedules;
 
     @BeforeEach protected void setup() throws Exception {
         database="cyf_sm_"+UUID.randomUUID().toString().replace("-","");
         admin.execute("CREATE DATABASE `"+database+"` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin");
         var ds=source(database);jdbc=new JdbcTemplate(ds);manager=new DataSourceTransactionManager(ds);tx=new TransactionTemplate(manager);
         for(String resource:List.of("db/economy-v0-foundation.sql","db/economy-v0-skill-marketplace.sql","db/economy-v0-skill-application.sql",
-                "db/agent-command-transport-schema.sql","db/economy-skill-management-sm-c1.sql","db/agent-skill-execution-v1.sql"))
+                "db/task-scheduled-work-v1.sql","db/agent-command-transport-schema.sql","db/economy-skill-management-sm-c1.sql","db/agent-skill-execution-v1.sql"))
             new ResourceDatabasePopulator(new ClassPathResource(resource)).execute(ds);
         var config=new org.apache.ibatis.session.Configuration();config.setMapUnderscoreToCamelCase(true);
-        for(Class<?> type:List.of(SkillCatalogMapper.class,SkillInstallationMapper.class,SkillTradeMapper.class,EconomyLedgerMapper.class,
+        for(Class<?> type:List.of(ScheduledWorkMapper.class,SkillCatalogMapper.class,SkillInstallationMapper.class,SkillTradeMapper.class,EconomyLedgerMapper.class,
                 SkillManagementMapper.class,SkillExecutionMapper.class,AgentCommandTransportMapper.class,AgentCommandRecoveryMapper.class,AgentSkillInstallRecoveryMapper.class,AgentOutboxRelayMapper.class))config.addMapper(type);
         var factory=new SqlSessionFactoryBean();factory.setDataSource(ds);factory.setConfiguration(config);
         sql=new SqlSessionTemplate(Objects.requireNonNull(factory.getObject()));
+        schedules=new ScheduledWorkStore(sql.getMapper(ScheduledWorkMapper.class),new FixedTenantAdmissionPolicy("0",null),manager);
         taskAttachments=new SkillExecutionDaoImpl(sql.getMapper(SkillExecutionMapper.class));
         market=sql.getMapper(SkillCatalogMapper.class);app=sql.getMapper(SkillInstallationMapper.class);
         db=sql.getMapper(SkillManagementMapper.class);var ledger=sql.getMapper(EconomyLedgerMapper.class);
@@ -108,7 +112,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         when(agents.requireApiKeyOwnedAgent(ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
         when(agents.requireOwnedAgentCapabilities(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
         versions=new SkillAgentVersions(app,runtimes,provider(agents),owner,manager);
-        var commands=new AgentCommandTransportDaoImpl(sql.getMapper(AgentCommandTransportMapper.class));writer=spy(new SkillInstallCommandWriter(commands));
+        var commands=new AgentCommandTransportDaoImpl(sql.getMapper(AgentCommandTransportMapper.class));writer=spy(new SkillInstallCommandWriter(commands,provider(schedules)));
         // Provision this fixture's private store explicitly; production never creates it at startup.
         Path packageRoot=Files.createDirectory(scratch.resolve(database+"-packages"),
                 java.nio.file.attribute.PosixFilePermissions.asFileAttribute(
@@ -127,7 +131,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         dispatch=new SkillInstallDispatchService(app,market,marketplace,versions,authentication,commands,provider(sessions),manager);dispatch.setManagement(service);
         recoveryMapper=sql.getMapper(AgentSkillInstallRecoveryMapper.class);
         recoveryDao=new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class));
-        recovery=new SkillInstallRecoveryService(recoveryMapper,recoveryDao,dispatch,manager,new FixedTenantAdmissionPolicy("0", null));
+        recovery=new SkillInstallRecoveryService(recoveryMapper,recoveryDao,dispatch,manager,new FixedTenantAdmissionPolicy("0", null),provider(schedules));
         for(var p:new PlatformSkillPackageCatalog().products()) {
             market.insertProduct(new SkillProductEntity().setProductId(p.productId()).setSellerType("SYSTEM").setSellerId("SKILL_STORE").setName(p.name()).setDescription(p.description())
                 .setStatus("DRAFT").setVersion(1L).setTenantId("0").setClientId(ACTOR.clientId()).setCreateTime(1L).setUpdateTime(1L));
@@ -656,7 +660,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         assertEquals(2,count("agent_skill_change_command"));assertEquals("REFUNDED",current(c).get("fundingStatus"));
     }
     @Test void claimedOriginalNeverRefundsMerelyBecauseCommandIsStillPending() {
-        var c=install();long now=System.currentTimeMillis();var hint=recoveryMapper.candidates("0",null,now,now-60000).getFirst();
+        var c=install();long now=System.currentTimeMillis();var hint=recoveryMapper.pending("0",null,0).getFirst();
         tx.executeWithoutResult(t->{
             var d=recoveryDao.lockDelivery("0",ACTOR.clientId(),hint.getId());
             var o=recoveryDao.lockActiveOutboxes("0",ACTOR.clientId(),d.getId(),d.getActiveMessageId()).getFirst();
@@ -672,11 +676,11 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         assertEquals(99_999_950L,wallet());
     }
     @Test void staleRecoveryCandidateCannotDispatchAfterAtomicUndispatchedCancellation() {
-        var c=install();long now=System.currentTimeMillis();var stale=recoveryMapper.candidates("0",null,now,now-60000).getFirst();
+        var c=install();long now=System.currentTimeMillis();var stale=recoveryMapper.pending("0",null,0).getFirst();
         var handover=stoppedHandover();assertTrue(service.settleStoppedChangeForHandover(handover,text(c,"skillChangeId")));
         clearInvocations(sessions);recovery.recover(stale,now);
         verify(sessions,never()).dispatch(anyString(),anyString(),anyString(),any(),any());
-        assertTrue(recoveryMapper.candidates("0",null,Long.MAX_VALUE-1,Long.MAX_VALUE-1).isEmpty());
+        assertTrue(recoveryMapper.pending("0",null,0).isEmpty());
         assertTrue(service.settleStoppedChangeForHandover(handover,text(c,"skillChangeId")));assertEquals(100_000_000L,wallet());
     }
     @Test void cancellationRollbackPreservesFundsAndOriginalUnsentCommand() {
@@ -977,7 +981,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         var c=install();assertEquals("WAITING_AGENT",c.get("status"));assertEquals(99_999_950L,wallet());
         assertEquals(1,count("economy_skill_order"));assertEquals(1,count("agent_outbox_event"));
         var pkg=service.packageBytes(proof(),text(object(c.get("target")),"skillInstallationId"));assertTrue(pkg.length>0);
-        when(sessions.isReady(anyString(),anyString(),anyString(),any())).thenReturn(true);recovery.recover();
+        when(sessions.isReady(anyString(),anyString(),anyString(),any())).thenReturn(true);runSkillSchedules();
         verify(sessions).dispatch(eq("0"),eq(ACTOR.clientId()),eq(AGENT),any(),any());
         report(c,"PREPARED",null);c=current(c);assertEquals("ACTIVATING",c.get("status"));assertEquals("ACTIVATE",command(c).get("phase"));
         assertEquals(2,count("agent_outbox_event"));
@@ -1095,17 +1099,48 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         for(String table:List.of("agent_skill_agent_version","agent_skill_managed_state","agent_outbox_event"))assertEquals(0,count(table));
         assertThrows(RuntimeException.class,()->service.skills(new HostingRentHttp.Actor("other","0",ACTOR.clientId(),"other-owner"),AGENT,false));
     }
+    private void runSkillSchedules() {
+        for(var work:schedules.claimDue("",100,60000)) {
+            recovery.executeScheduled(new ScheduledInvocation("0",work.key(),work.claim().revision()));
+            assertTrue(schedules.succeed(work));
+        }
+    }
+    @Test void nativeScheduleAndFundsCommitTogetherAndCallbackKeepsOriginalWire() {
+        var c=install();
+        assertEquals(1,count("task_scheduled_work"));
+        assertEquals(99_999_950L,wallet());
+        byte[] original=jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event",byte[].class);
+        runSkillSchedules();
+        assertArrayEquals(original,jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event",byte[].class));
+        assertEquals("SENT",jdbc.queryForObject("SELECT status FROM agent_command_delivery",String.class));
+        assertNotNull(schedules.nextWake(""));
+        assertTrue(schedules.claimDue("",100,60000).isEmpty());
+        assertEquals(99_999_950L,wallet());assertEquals(1,count("agent_command_delivery"));
+    }
+    @Test void nativeScheduleRollsBackWithFailedSkillOrder() {
+        assertThrows(IllegalStateException.class,()->tx.executeWithoutResult(status->{
+            install();assertEquals(1,count("task_scheduled_work"));throw new IllegalStateException("abort caller");
+        }));
+        assertEquals(100_000_000L,wallet());assertEquals(0,count("task_scheduled_work"));
+        assertEquals(0,count("agent_command_delivery"));assertEquals(0,count("agent_outbox_event"));
+    }
+    @Test void nativeScheduleSqlFailureCannotLeavePaidOrderOrWire() {
+        jdbc.execute("DROP TABLE task_scheduled_work");
+        assertThrows(org.springframework.dao.DataAccessException.class,()->install());
+        assertEquals(100_000_000L,wallet());assertEquals(0,count("agent_command_delivery"));
+        assertEquals(0,count("agent_outbox_event"));assertEquals(0,count("agent_skill_change"));
+    }
     @Test void nativeRecoveryDiscoveryFiltersProcessScopeInSql() {
         install();long now=System.currentTimeMillis();
-        assertFalse(recoveryMapper.candidates(ACTOR.tenantId(),ACTOR.clientId(),now,now-60000).isEmpty());
-        assertTrue(recoveryMapper.candidates("tenant-blue",ACTOR.clientId(),now,now-60000).isEmpty());
-        assertTrue(recoveryMapper.candidates(ACTOR.tenantId(),"foreign-client",now,now-60000).isEmpty());
-        assertTrue(recoveryMapper.candidates(ACTOR.tenantId(),ACTOR.clientId().toUpperCase(Locale.ROOT),now,now-60000).isEmpty());
+        assertFalse(recoveryMapper.pending(ACTOR.tenantId(),ACTOR.clientId(),0).isEmpty());
+        assertTrue(recoveryMapper.pending("tenant-blue",ACTOR.clientId(),0).isEmpty());
+        assertTrue(recoveryMapper.pending(ACTOR.tenantId(),"foreign-client",0).isEmpty());
+        assertTrue(recoveryMapper.pending(ACTOR.tenantId(),ACTOR.clientId().toUpperCase(Locale.ROOT),0).isEmpty());
         assertEquals(1,count("agent_skill_agent_version"));
         assertEquals(ACTOR.tenantId(),jdbc.queryForObject("SELECT tenant_id FROM agent_skill_agent_version",String.class));
     }
     @Test void nativeRecoveryClaimAndFinishCasRejectWrongLeaseAndCaseChangedScope() {
-        install();long now=System.currentTimeMillis();var d=recoveryMapper.candidates("0",null,now,now-60000).getFirst();
+        install();long now=System.currentTimeMillis();var d=recoveryMapper.pending("0",null,0).getFirst();
         tx.executeWithoutResult(status->{
             assertEquals(1,recoveryMapper.claimDelivery(d,"lease-A",now+60000,now));
             assertEquals(0,recoveryMapper.claimDelivery(d,"lease-B",now+60000,now));
@@ -1127,11 +1162,11 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         });
         assertEquals("lease-A",jdbc.queryForObject("SELECT lease_owner FROM agent_command_delivery",String.class));
         assertEquals("lease-A",jdbc.queryForObject("SELECT lease_owner FROM agent_outbox_event",String.class));
-        assertTrue(recoveryMapper.candidates("0",null,now,now-60000).isEmpty());
+        assertEquals(now+60000,SkillInstallRecoveryService.nextAttempt(recoveryMapper.pending("0",null,0).getFirst()));
     }
     @Test void nativeRecoveryRespectsLiveLeaseThenReclaimsExpiredLeaseWithoutMintingWireOrRabbitWork() {
         var c=install();byte[] wire=jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event",byte[].class);
-        long now=System.currentTimeMillis();var d=recoveryMapper.candidates("0",null,now,now-60000).getFirst();
+        long now=System.currentTimeMillis();var d=recoveryMapper.pending("0",null,0).getFirst();
         jdbc.update("UPDATE agent_command_delivery SET status='CONSUMED',lease_owner='prior',lease_until=?,update_time=?",now+60000,now-70000);
         jdbc.update("UPDATE agent_outbox_event SET status='CLAIMED',lease_owner='prior',lease_until=?,update_time=?",now+60000,now-70000);
         var before=businessSnapshot();recovery.recover(d,now);assertEquals(before,businessSnapshot());
@@ -1153,16 +1188,16 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         assertEquals(c.get("attempt"),current(c).get("attempt"));
     }
     @Test void nativeRecoveryOutboxClaimCasLossRollsBackDeliveryLease() {
-        install();long now=System.currentTimeMillis();var hint=recoveryMapper.candidates("0",null,now,now-60000).getFirst();
+        install();long now=System.currentTimeMillis();var hint=recoveryMapper.pending("0",null,0).getFirst();
         var before=businessSnapshot();var failing=spy(recoveryMapper);
         doReturn(0).when(failing).claimOutbox(any(),anyString(),anyLong(),anyLong());
         var gate=new EconomyPreviewGate(new EconomyPreviewProperties(true,List.of(new EconomyPreviewProperties.AllowedScope("0",ACTOR.clientId()))));
-        var fixture=new SkillInstallRecoveryService(failing,recoveryDao,dispatch,manager,new FixedTenantAdmissionPolicy("0", null));
+        var fixture=new SkillInstallRecoveryService(failing,recoveryDao,dispatch,manager,new FixedTenantAdmissionPolicy("0", null),provider(schedules));
         assertThrows(SkillMarketplaceException.class,()->fixture.recover(hint,now));
         assertEquals(before,businessSnapshot());verify(sessions,never()).dispatch(anyString(),anyString(),anyString(),any(),any());
     }
     @Test void nativeAckRacingSenderCannotLetOldCompletionOverwriteReclaimedLease() {
-        var c=install();long now=System.currentTimeMillis();var hint=recoveryMapper.candidates("0",null,now,now-60000).getFirst();
+        var c=install();long now=System.currentTimeMillis();var hint=recoveryMapper.pending("0",null,0).getFirst();
         var afterReclaim=new java.util.concurrent.atomic.AtomicReference<Map<String,Object>>();
         when(sessions.dispatch(anyString(),anyString(),anyString(),any(),any())).thenAnswer(call->{
             assertFalse(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive());
@@ -1181,7 +1216,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         assertEquals("new-owner",jdbc.queryForObject("SELECT lease_owner FROM agent_outbox_event",String.class));
     }
     @Test void preparedResultRacingSendCompletionPreservesNewPhaseAndImmutableOriginalWire() {
-        var c=install();long now=System.currentTimeMillis();var hint=recoveryMapper.candidates("0",null,now,now-60000).getFirst();
+        var c=install();long now=System.currentTimeMillis();var hint=recoveryMapper.pending("0",null,0).getFirst();
         byte[] original=jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event",byte[].class);
         when(sessions.dispatch(anyString(),anyString(),anyString(),any(),any())).thenAnswer(call->{
             service.acknowledge(proof(),acknowledgement(c));report(c,"PREPARED",null);return AgentRawCommandDispatchResult.sent(1,1);

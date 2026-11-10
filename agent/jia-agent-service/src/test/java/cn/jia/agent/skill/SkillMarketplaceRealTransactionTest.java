@@ -50,6 +50,17 @@ import static org.mockito.ArgumentMatchers.*;
  * No sockets, broker, runner, or provisioning. Runtime/owner/key adapters are explicit trusted fixtures.
  * Paid terminal selectors require W06's centralized CAPTURE_SKILL/REFUND_SKILL primitive integration. */
 public class SkillMarketplaceRealTransactionTest {
+    private org.springframework.beans.factory.ObjectProvider<cn.jia.task.scheduling.ScheduleService> scheduleProvider() {
+        var beans=new org.springframework.beans.factory.support.StaticListableBeanFactory();
+        beans.addBean("schedules",mock(cn.jia.task.scheduling.ScheduleService.class));
+        return beans.getBeanProvider(cn.jia.task.scheduling.ScheduleService.class);
+    }
+    private void dispatchPendingSkills() {
+        for(var row:recoveryMapper.pending("0",null,0))
+            recovery.executeScheduled(new cn.jia.task.scheduling.ScheduledInvocation("0",
+                    SkillInstallRecoveryService.key(row),1));
+    }
+
     cn.jia.agent.position.PositionSkillService positionService;
     private static final HostingRentHttp.Actor ACTOR=new HostingRentHttp.Actor("payer-sub","0","Client-A","Tenant-A");
     private static final String AGENT="agt_00000000000000000000000000000001";
@@ -167,7 +178,7 @@ public class SkillMarketplaceRealTransactionTest {
         when(agents.requireOwnedAgentCapabilities(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
         versions=new SkillAgentVersions(app,runtimes,provider(agents),owner,manager);
         var commands=new AgentCommandTransportDaoImpl(sql.getMapper(AgentCommandTransportMapper.class));
-        var writer=new SkillInstallCommandWriter(commands);
+        var writer=new SkillInstallCommandWriter(commands,scheduleProvider());
         var packages=new SkillPackages(packageRoot); keys=mock(ApiKeyService.class);
         key=new OauthApiKeyEntity();key.setId("key-1");key.setJiacn(ACTOR.ownerJiacn());key.setClientId(ACTOR.clientId());key.setTenantId(ACTOR.tenantId());key.setStatus(1);
         when(keys.get("key-1")).thenReturn(key);
@@ -182,7 +193,7 @@ public class SkillMarketplaceRealTransactionTest {
         service=new SkillMarketplaceService(market,app,trade,versions,runtimes,provider(writer),provider(packages),provider(authentication),provider(sessions),manager,positionService);
         dispatch=new SkillInstallDispatchService(app,market,service,versions,authentication,commands,provider(sessions),manager);
         recoveryMapper=sql.getMapper(AgentSkillInstallRecoveryMapper.class);
-        recovery=new SkillInstallRecoveryService(recoveryMapper,new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class)),dispatch,manager,new FixedTenantAdmissionPolicy("0", null));
+        recovery=new SkillInstallRecoveryService(recoveryMapper,new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class)),dispatch,manager,new FixedTenantAdmissionPolicy("0", null),scheduleProvider());
         ackCommands=spy(new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class)));
         nativeAcks=new SkillInstallAckService(app,market,ackCommands,recoveryMapper,authentication,service,manager);
         commandsForResults=commands;transactionManagerForResults=manager;
@@ -243,7 +254,7 @@ public class SkillMarketplaceRealTransactionTest {
     }
     private void drainNative() {
         when(sessions.dispatch(anyString(),anyString(),anyString(),any(),any())).thenReturn(AgentRawCommandDispatchResult.sent(1,1));
-        recovery.recover();
+        dispatchPendingSkills();
     }
     @Test void legacyPurchaseCannotBypassPositionLifecycleAsAdmin() {
         var skill=new cn.jia.agent.position.PositionSkillState.Skill("repo-test",cn.jia.agent.position.PositionSkillState.SkillType.POSITION,"spv_repo_test_1_0_0");

@@ -4,8 +4,7 @@ import org.apache.ibatis.annotations.*;
 import java.util.List;
 /** Native WS discovery and lease/CAS only; no new table, command identity, attempt or refund. */
 public interface AgentSkillInstallRecoveryMapper {
-    @Select("""
-        <script>
+    String PENDING = """
         SELECT d.* FROM agent_command_delivery d JOIN agent_skill_change_command c
           ON CAST(c.tenant_id AS BINARY)=CAST(d.tenant_id AS BINARY)
           AND CAST(c.client_id AS BINARY)=CAST(d.client_id AS BINARY)
@@ -21,16 +20,16 @@ public interface AgentSkillInstallRecoveryMapper {
           AND d.command_type IN ('SKILL_INSTALL','SKILL_SET_ENABLED','SKILL_RECONCILE') AND c.state IN ('PENDING','RECEIVED')
           AND CAST(JSON_UNQUOTE(JSON_EXTRACT(c.data_json,'$.skillRevision')) AS UNSIGNED)=s.skill_revision
           AND d.status IN ('PENDING','WAITING_AGENT','SENT','RETRY','CONSUMED')
-          AND (d.next_retry_at IS NULL OR d.next_retry_at&lt;=#{now})
-          AND (d.lease_until IS NULL OR d.lease_until&lt;=#{now})
-          AND (d.status='PENDING' OR d.update_time&lt;#{before})
           AND EXISTS (SELECT 1 FROM agent_outbox_event o WHERE o.delivery_id=d.id
             AND CAST(o.destination AS BINARY)=CAST('agent.skill-install.ws.v1' AS BINARY))
-        ORDER BY d.update_time,d.id LIMIT 25
-        </script>
-        """)
-    List<AgentCommandDeliveryEntity> candidates(@Param("tenantId") String tenantId,@Param("clientId") String clientId,
-                                               @Param("now") long now,@Param("before") long before);
+        """;
+    /** Startup catch-up includes future retries and live claims, with stable keyset pagination. */
+    @Select("<script>" + PENDING + " AND d.id&gt;#{afterId} ORDER BY d.id LIMIT 100 </script>")
+    List<AgentCommandDeliveryEntity> pending(@Param("tenantId") String tenantId,@Param("clientId") String clientId,
+                                           @Param("afterId") long afterId);
+    @Select("<script>" + PENDING + " AND d.id=#{id} </script>")
+    AgentCommandDeliveryEntity findPending(@Param("tenantId") String tenantId,@Param("clientId") String clientId,
+                                          @Param("id") long id);
     @Update("""
         UPDATE agent_command_delivery SET status='CONSUMED',lease_owner=#{owner},lease_until=#{until},
           next_retry_at=NULL,last_error='SKILL_WS_IN_FLIGHT',version=version+1,update_time=#{now}

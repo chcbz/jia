@@ -1,5 +1,6 @@
 package cn.jia.agent.skill;
 import cn.jia.core.security.FixedTenantAdmissionPolicy;
+import cn.jia.task.scheduling.*;
 import cn.jia.agent.dao.AgentCommandRecoveryDao;
 import cn.jia.agent.mapper.AgentSkillInstallRecoveryMapper;
 import cn.jia.agent.entity.*;
@@ -12,12 +13,17 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 class SkillInstallRecoveryServiceTest {
+    private final ScheduleService schedules=mock(ScheduleService.class);
+    private org.springframework.beans.factory.ObjectProvider<ScheduleService> scheduleProvider() {
+        var beans=new org.springframework.beans.factory.support.StaticListableBeanFactory();
+        beans.addBean("schedules",schedules);return beans.getBeanProvider(ScheduleService.class);
+    }
     private final long now=System.currentTimeMillis();
     private final AgentSkillInstallRecoveryMapper mapper=mock(AgentSkillInstallRecoveryMapper.class);
     private final AgentCommandRecoveryDao dao=mock(AgentCommandRecoveryDao.class);
     private final SkillInstallDispatchService dispatch=mock(SkillInstallDispatchService.class);
     private final EconomyPreviewGate preview=new EconomyPreviewGate(new EconomyPreviewProperties(true,List.of(new EconomyPreviewProperties.AllowedScope("0","c"))));
-    private final SkillInstallRecoveryService service=new SkillInstallRecoveryService(mapper,dao,dispatch,mock(PlatformTransactionManager.class),new FixedTenantAdmissionPolicy("0", null));
+    private final SkillInstallRecoveryService service=new SkillInstallRecoveryService(mapper,dao,dispatch,mock(PlatformTransactionManager.class),new FixedTenantAdmissionPolicy("0", null),scheduleProvider());
     private AgentCommandDeliveryEntity d;
     private AgentOutboxEventEntity o;
     void fixture() { fixture("0"); }
@@ -74,24 +80,59 @@ class SkillInstallRecoveryServiceTest {
         d.setLeaseUntil(null).setNextRetryAt(now+100);service.recover(d,now);
         verifyNoInteractions(dispatch);verify(mapper,never()).claimDelivery(any(),anyString(),anyLong(),anyLong());
     }
-    @Test void scanRequiresConfiguredProcessScope() {
-        fixture();d.setTenantId("different-tenant");when(mapper.candidates(eq("0"),isNull(),anyLong(),anyLong())).thenReturn(List.of(d));service.recover();
-        verifyNoInteractions(dao,dispatch);
+    @Test void scheduledCallbackRequiresConfiguredProcessScope() {
+        assertThrows(RuntimeException.class,()->service.executeScheduled(new ScheduledInvocation("foreign",
+                new ScheduleKey("c",SkillInstallRecoveryService.HANDLER,"1",""),1)));
+        verifyNoInteractions(mapper,dao,dispatch,schedules);
     }
     @Test void configuredPartitionIsPassedToDiscoveryBeforeLimit() {
-        var policy=new FixedTenantAdmissionPolicy("tenant-blue", "c");
-        var scoped=new SkillInstallRecoveryService(mapper,dao,dispatch,mock(PlatformTransactionManager.class),policy);
-        when(mapper.candidates(eq("tenant-blue"),eq("c"),anyLong(),anyLong())).thenReturn(List.of());
-        scoped.recover();
-        verify(mapper).candidates(eq("tenant-blue"),eq("c"),anyLong(),anyLong());
-        verifyNoMoreInteractions(mapper);verifyNoInteractions(dao,dispatch);
+        var scoped=new SkillInstallRecoveryService(mapper,dao,dispatch,mock(PlatformTransactionManager.class),
+                new FixedTenantAdmissionPolicy("tenant-blue", "c"),scheduleProvider());
+        when(mapper.pending("tenant-blue","c",0)).thenReturn(List.of());
+        scoped.schedulePending();
+        verify(mapper).pending("tenant-blue","c",0);
+        verifyNoMoreInteractions(mapper);verifyNoInteractions(dao,dispatch,schedules);
+    }
+    @Test void startupIncludesFutureClaimsAndPagesWithoutRedispatching() {
+        fixture();var page=new ArrayList<AgentCommandDeliveryEntity>();
+        for(long id=1;id<=100;id++) {
+            var row=new AgentCommandDeliveryEntity().setStatus("PENDING").setLeaseUntil(now+60000);
+            row.setId(id);row.setClientId("c");page.add(row);
+        }
+        when(mapper.pending("0",null,0)).thenReturn(page);
+        when(mapper.pending("0",null,100)).thenReturn(List.of());
+        service.schedulePending();
+        verify(schedules,times(100)).signal(any(),eq(now+60000));
+        verify(mapper).pending("0",null,100);verifyNoInteractions(dao,dispatch);
+    }
+    @Test void terminalCallbackDoesNotScanOrReschedule() {
+        service.executeScheduled(invocation());
+        verify(mapper).findPending("0","c",1L);verifyNoMoreInteractions(mapper);
+        verifyNoInteractions(dao,dispatch,schedules);
+    }
+    @Test void futureRetryReschedulesItsDeadlineWithoutClaiming() {
+        fixture();d.setNextRetryAt(now+60000);
+        when(mapper.findPending("0","c",1L)).thenReturn(d);
+        service.executeScheduled(invocation());
+        verify(schedules).reschedule(SkillInstallRecoveryService.key(d),now+60000);
+        verifyNoInteractions(dao,dispatch);
+    }
+    @Test void liveOutboxLeaseDoesNotBecomeAnImmediateRetryLoop() {
+        fixture();o.setLeaseUntil(now+60000);
+        when(mapper.findPending("0","c",1L)).thenReturn(d);
+        service.executeScheduled(invocation());
+        verify(schedules).reschedule(SkillInstallRecoveryService.key(d),now+60000);
+        verifyNoInteractions(dispatch);
+    }
+    private ScheduledInvocation invocation() {
+        return new ScheduledInvocation("0",new ScheduleKey("c",SkillInstallRecoveryService.HANDLER,"1",""),1);
     }
     @Test void nonNumericTenantRecoversOriginalWireWithoutTenantZeroGate() {
         fixture("tenant-blue");
         var gate=new EconomyPreviewGate(new EconomyPreviewProperties(true,
                 List.of(new EconomyPreviewProperties.AllowedScope("tenant-blue","c"))));
         var scoped=new SkillInstallRecoveryService(mapper,dao,dispatch,mock(PlatformTransactionManager.class),
-                new FixedTenantAdmissionPolicy("tenant-blue", "c"));
+                new FixedTenantAdmissionPolicy("tenant-blue", "c"),scheduleProvider());
         when(mapper.claimDelivery(eq(d),anyString(),anyLong(),anyLong())).thenReturn(1);
         when(mapper.claimOutbox(eq(o),anyString(),anyLong(),anyLong())).thenReturn(1);
         when(dispatch.dispatch(anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),any())).thenAnswer(call->{

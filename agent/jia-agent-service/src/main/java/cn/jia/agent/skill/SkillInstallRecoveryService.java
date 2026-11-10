@@ -4,7 +4,11 @@ import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import cn.jia.agent.mapper.AgentSkillInstallRecoveryMapper;
 import cn.jia.agent.entity.*;
 import cn.jia.agent.service.impl.AgentCommandCanonicalCodec;
-import org.springframework.scheduling.annotation.Scheduled;
+import cn.jia.task.scheduling.*;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -12,11 +16,13 @@ import java.util.*;
 import static cn.jia.agent.skill.SkillMarketplaceException.require;
 import static cn.jia.agent.skill.SkillMarketplaceService.one;
 
-/** The existing bounded recovery scheduler drains ORIGINAL committed outbox bytes over WS.
+/** Unified durable callbacks drain ORIGINAL committed outbox bytes over WS.
  * No broker ACK is fabricated. Same-message replay is safe only through the real Runtime
  * installation idempotence. Original live orders remain recoverable without an artificial task-invitation deadline. */
 @Service
-public final class SkillInstallRecoveryService {
+public final class SkillInstallRecoveryService implements ScheduledJobHandler {
+    public static final String HANDLER = "skill.native-delivery";
+    private final ObjectProvider<ScheduleService> schedules;
     private final AgentSkillInstallRecoveryMapper mapper;
     private final AgentCommandRecoveryDao dao;
     private final SkillInstallDispatchService dispatch;
@@ -24,23 +30,45 @@ public final class SkillInstallRecoveryService {
     private final FixedTenantAdmissionPolicy processScope;
     public SkillInstallRecoveryService(AgentSkillInstallRecoveryMapper mapper,AgentCommandRecoveryDao dao,
             SkillInstallDispatchService dispatch,PlatformTransactionManager manager,
-            FixedTenantAdmissionPolicy processScope) {
+            FixedTenantAdmissionPolicy processScope, ObjectProvider<ScheduleService> schedules) {
         this.mapper=mapper;this.dao=dao;this.dispatch=dispatch;tx=new TransactionTemplate(manager);
-        this.processScope=processScope;
+        this.processScope=processScope;this.schedules=schedules;
     }
-    @Scheduled(fixedDelayString="${economy.skill.marketplace.recovery-delay-ms:5000}")
-    public void recover() {
-        long now=System.currentTimeMillis();
-        for(var candidate:mapper.candidates(processScope.businessTenantId(),processScope.clientId(),now,now-60000)) {
-            try { recover(candidate,now); } catch(RuntimeException rejected) {
-                org.slf4j.LoggerFactory.getLogger(getClass()).warn("Skill same-wire WS recovery deferred: {}",
-                        rejected instanceof SkillMarketplaceException known ? known.code() : "SKILL_STATE_UNAVAILABLE");
-            }
+    @Override public String getName() { return HANDLER; }
+    @EventListener(ApplicationReadyEvent.class)
+    public void schedulePending() {
+        long cursor=0;
+        while(true) {
+            var page=mapper.pending(processScope.businessTenantId(),processScope.clientId(),cursor);
+            for(var row:page) schedules.getObject().signal(key(row),nextAttempt(row));
+            if(page.size()<100)return;
+            cursor=page.getLast().getId();
         }
     }
-    void recover(AgentCommandDeliveryEntity hint,long now) {
+    @Override public void executeScheduled(ScheduledInvocation invocation) {
+        processScope.requireAdmitted(invocation.tenantId(),invocation.key().clientId());
+        if(TransactionSynchronizationManager.isActualTransactionActive())
+            throw new IllegalStateException("Skill transport I/O must be outside the scheduler transaction");
+        long id=Long.parseLong(invocation.key().businessKey());
+        var row=mapper.findPending(invocation.tenantId(),invocation.key().clientId(),id);
+        if(row==null)return; // terminal/replaced command; no recurring empty scan
+        long now=System.currentTimeMillis();
+        long deferredUntil=nextAttempt(row)<=now?recover(row,now):0;
+        row=mapper.findPending(invocation.tenantId(),invocation.key().clientId(),id);
+        if(row!=null)schedules.getObject().reschedule(key(row),Math.max(nextAttempt(row),deferredUntil));
+    }
+    static ScheduleKey key(AgentCommandDeliveryEntity row) {
+        return new ScheduleKey(row.getClientId(),HANDLER,Long.toString(row.getId()),"");
+    }
+    static long nextAttempt(AgentCommandDeliveryEntity row) {
+        long due="PENDING".equals(row.getStatus())?0:Math.addExact(row.getUpdateTime(),60000L);
+        if(row.getNextRetryAt()!=null)due=Math.max(due,row.getNextRetryAt());
+        if(row.getLeaseUntil()!=null)due=Math.max(due,row.getLeaseUntil());
+        return due;
+    }
+    long recover(AgentCommandDeliveryEntity hint,long now) {
         if(!processScope.businessTenantId().equals(hint.getTenantId())
-                || processScope.clientId()!=null&&!processScope.clientId().equals(hint.getClientId())) return;
+                || processScope.clientId()!=null&&!processScope.clientId().equals(hint.getClientId())) return 0;
         String owner="skill-ws-"+UUID.randomUUID();
         Claim claim=tx.execute(s->{
             var d=dao.lockDelivery(hint.getTenantId(),hint.getClientId(),hint.getId());
@@ -49,20 +77,20 @@ public final class SkillInstallRecoveryService {
                     && hint.getCommandId().equals(d.getCommandId()) && hint.getTargetAgentId().equals(d.getTargetAgentId())
                     && hint.getTaskId().equals(d.getTaskId()) && Set.of("SKILL_INSTALL","SKILL_SET_ENABLED","SKILL_RECONCILE").contains(d.getCommandType())
                     && d.getExpiresAt()!=null,409,"SKILL_DELIVERY_FENCED");
-            if(d.getLeaseUntil()!=null && d.getLeaseUntil()>now) return null;
-            if(d.getNextRetryAt()!=null && d.getNextRetryAt()>now) return null;
+            if(d.getLeaseUntil()!=null && d.getLeaseUntil()>now) return Claim.deferred(d.getLeaseUntil());
+            if(d.getNextRetryAt()!=null && d.getNextRetryAt()>now) return Claim.deferred(d.getNextRetryAt());
             require(Set.of("PENDING","SENT","WAITING_AGENT","RETRY","CONSUMED").contains(d.getStatus()),409,"SKILL_DELIVERY_FENCED");
-            if(!"PENDING".equals(d.getStatus()) && d.getUpdateTime()>now-60000) return null;
+            if(!"PENDING".equals(d.getStatus()) && d.getUpdateTime()>now-60000) return Claim.deferred(d.getUpdateTime()+60000);
             var rows=dao.lockActiveOutboxes(d.getTenantId(),d.getClientId(),d.getId(),d.getActiveMessageId());
             require(rows!=null && rows.size()==1,409,"SKILL_DELIVERY_FENCED");var o=rows.getFirst();
             validate(d,o);
-            if(o.getLeaseUntil()!=null && o.getLeaseUntil()>now) return null;
+            if(o.getLeaseUntil()!=null && o.getLeaseUntil()>now) return Claim.deferred(o.getLeaseUntil());
             require(Set.of("PENDING","SENT","RETRY","CLAIMED").contains(o.getStatus()),409,"SKILL_DELIVERY_FENCED");
             long until=now+60000;
             one(mapper.claimDelivery(d,owner,until,now));one(mapper.claimOutbox(o,owner,until,now));
-            return new Claim(d,o.getId(),owner,o.getWirePayload().clone());
+            return new Claim(d,o.getId(),owner,o.getWirePayload().clone(),0);
         });
-        if(claim==null) return;
+        if(claim.delivery()==null) return claim.retryAt();
         AgentRawCommandDispatchResult result;
         var d=claim.delivery();
         try { result=dispatch.dispatch(d.getTenantId(),d.getClientId(),d.getOwnerJiacn(),d.getTaskId(),d.getTargetAgentId(),d.getCommandId(),claim.wire()); }
@@ -81,6 +109,7 @@ public final class SkillInstallRecoveryService {
             one(mapper.finishDelivery(current,claim.owner(),status,retry,error,finish));
             one(mapper.finishOutbox(o,claim.owner(),status,retry,error,finish));return null;
         });
+        return 0;
     }
     static void validate(AgentCommandDeliveryEntity d,AgentOutboxEventEntity o) {
         require(SkillInstallCommandWriter.DESTINATION.equals(o.getDestination())
@@ -101,5 +130,7 @@ public final class SkillInstallRecoveryService {
                 && d.getActiveMessageId().equals(wire.get("messageId")) && d.getActiveAttempt().equals(data.get("attempt"))
                 && SkillManagementCodec.json(data).equals(SkillManagementCodec.json(wire.get("data"))),409,"SKILL_DELIVERY_FENCED");
     }
-    private record Claim(AgentCommandDeliveryEntity delivery,Long outboxId,String owner,byte[] wire) {}
+    private record Claim(AgentCommandDeliveryEntity delivery,Long outboxId,String owner,byte[] wire,long retryAt) {
+        static Claim deferred(long at) { return new Claim(null,null,null,null,at); }
+    }
 }
