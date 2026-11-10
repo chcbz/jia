@@ -13,4 +13,8 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
  */
 public interface KefuMsgTypeMapper extends BaseMapper<KefuMsgTypeEntity> {
 
+    KefuMsgTypeEntity selectScheduledMsgType(
+            @org.apache.ibatis.annotations.Param("tenantId") String tenantId,
+            @org.apache.ibatis.annotations.Param("clientId") String clientId,
+            @org.apache.ibatis.annotations.Param("typeCode") String typeCode);
 }

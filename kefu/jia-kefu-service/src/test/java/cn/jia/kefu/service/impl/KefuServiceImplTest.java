@@ -94,7 +94,7 @@ class KefuServiceImplTest extends BaseMockTest {
         when(redisService.get(any())).thenReturn(null);
         MpTemplateEntity mpTemplateEntity = new MpTemplateEntity();
         mpTemplateEntity.setTemplateId("templateId");
-        mpTemplateEntity.setAppid("appId");
+        mpTemplateEntity.setAppid("appid");
         when(mpTemplateService.get(anyString())).thenReturn(mpTemplateEntity);
         WxMpTemplateMsgService wxMpTemplateMsgService = mock(WxMpTemplateMsgService.class);
         when(wxMpTemplateMsgService.sendTemplateMsg(any())).thenReturn("success");

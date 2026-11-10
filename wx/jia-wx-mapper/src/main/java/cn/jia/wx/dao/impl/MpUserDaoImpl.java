@@ -19,6 +19,14 @@ import java.util.List;
  */
 @Named
 public class MpUserDaoImpl extends BaseDaoImpl<MpUserMapper, MpUserEntity> implements MpUserDao {
+    @jakarta.inject.Inject
+    private cn.jia.core.security.FixedTenantAdmissionPolicy processScope;
+
+    @Override
+    public List<MpUserEntity> selectScheduledRecipients(String clientId, String jiacn) {
+        return baseMapper.selectScheduledRecipients(processScope.tenantForClient(clientId), clientId, jiacn);
+    }
+
     @Override
     public List<MpUserEntity> selectByAppIdAndOpenIdExact(String appid, String openId) {
         return baseMapper.selectByAppIdAndOpenIdExact(appid, openId);

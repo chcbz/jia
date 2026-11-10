@@ -18,5 +18,7 @@ public interface MpUserDao extends IBaseDao<MpUserEntity> {
 
     List<MpUserEntity> selectByAppIdAndOpenIdExact(String appid, String openId);
 
+    List<MpUserEntity> selectScheduledRecipients(String clientId, String jiacn);
+
     int touchLastActive(long id, long lastActiveTime);
 }

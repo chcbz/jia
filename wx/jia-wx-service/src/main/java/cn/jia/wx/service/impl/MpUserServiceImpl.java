@@ -107,6 +107,13 @@ public class MpUserServiceImpl extends BaseServiceImpl<MpUserDao, MpUserEntity> 
 	}
 
 	@Override
+	public MpUserEntity findScheduledRecipient(String clientId, String jiacn) {
+		List<MpUserEntity> users = baseDao.selectScheduledRecipients(clientId, jiacn);
+		if (users.size() > 1) throw new IllegalStateException("Ambiguous scheduled WeChat recipient");
+		return users.isEmpty() ? null : users.getFirst();
+	}
+
+	@Override
 	public int touchLastActive(long id, long lastActiveTime) {
 		if (id <= 0 || lastActiveTime <= 0) {
 			throw new IllegalArgumentException("WeChat user id and last-active time are required");

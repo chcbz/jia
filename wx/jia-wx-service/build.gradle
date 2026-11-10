@@ -29,6 +29,7 @@ def scheduledNoticeSourceSet = sourceSets.create('scheduledNoticeRegression') {
     java.include 'cn/jia/wx/schedule/WxScheduledNoticeKeyTest.java'
     java.include 'cn/jia/wx/schedule/WxScheduledNoticeStoreMySqlTest.java'
     java.include 'cn/jia/wx/schedule/WxSubscriptionScopeMySqlTest.java'
+    java.include 'cn/jia/wx/schedule/WxRecipientScopeMySqlTest.java'
     java.include 'cn/jia/agent/skill/SkillManagementMySqlFixture.java'
     compileClasspath += sourceSets.main.output
     runtimeClasspath += output + compileClasspath

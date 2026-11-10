@@ -101,10 +101,26 @@ public class KefuServiceImpl implements KefuService {
 		if (mpUser == null || EsConstants.COMMON_NO.equals(mpUser.getSubscribe())) {
 			return false;
 		}
+		boolean active = redisService.get(ACTIVE_MP_USER + mpUser.getOpenId()) != null;
+		return sendWxTemplate(kefuMsgType, mpUser, jiacn, active, attr);
+	}
+
+	@Override
+	public cn.jia.kefu.entity.WxNoticeSendResult sendScheduledWxTemplate(
+			String clientId, String typeCode, String jiacn, String... attr) throws Exception {
+		KefuMsgTypeEntity type = kefuMsgTypeDao.findScheduledMsgType(clientId, typeCode);
+		if (type == null) return new cn.jia.kefu.entity.WxNoticeSendResult(false, false);
+		MpUserEntity user = mpUserService.findScheduledRecipient(clientId, jiacn);
+		if (user == null) return new cn.jia.kefu.entity.WxNoticeSendResult(false, false);
+		boolean active = redisService.get(ACTIVE_MP_USER + user.getOpenId()) != null;
+		return new cn.jia.kefu.entity.WxNoticeSendResult(sendWxTemplate(type, user, jiacn, active, attr), active);
+	}
+
+	private boolean sendWxTemplate(KefuMsgTypeEntity kefuMsgType, MpUserEntity mpUser,
+			String jiacn, boolean active, String... attr) throws Exception {
 		String msgContent = "";
 		boolean sendSuccess = false;
-		Object activeMpUser = redisService.get(ACTIVE_MP_USER + mpUser.getOpenId());
-		if (StringUtil.isNotEmpty(kefuMsgType.getWxTemplateTxt()) && activeMpUser != null) {
+		if (StringUtil.isNotEmpty(kefuMsgType.getWxTemplateTxt()) && active) {
 			WxMpKefuMessage kfmessage = new WxMpKefuMessage();
 			kfmessage.setToUser(mpUser.getOpenId());
 			kfmessage.setMsgType(WxConsts.KefuMsgType.TEXT);
@@ -116,13 +132,20 @@ public class KefuServiceImpl implements KefuService {
 			try {
 				sendSuccess = mpInfoService.findWxMpService(mpUser.getAppid()).getKefuService().sendKefuMessage(kfmessage);
 			} catch (WxErrorException e) {
-				log.error("sendKefuMessage error: ", e);
+				// A transport/provider exception is not proof of non-delivery. Do not issue a second message.
+				markUserUnsubscribed(mpUser, e);
+				throw e;
 			}
 		}
 		// 如果客服消息发送失败，尝试用模板消息
 		if (!sendSuccess && StringUtil.isNotEmpty(kefuMsgType.getWxTemplateId())) {
 			MpTemplateEntity mpTemplate = mpTemplateService.get(kefuMsgType.getWxTemplateId());
 			if (mpTemplate != null) {
+				if (!java.util.Objects.equals(mpUser.getTenantId(), mpTemplate.getTenantId())
+						|| !java.util.Objects.equals(mpUser.getClientId(), mpTemplate.getClientId())
+						|| !java.util.Objects.equals(mpUser.getAppid(), mpTemplate.getAppid())) {
+					throw new IllegalStateException("WeChat template does not belong to the recipient application");
+				}
 				msgContent = kefuMsgType.getWxTemplate();
 				for (int i = 0; i< attr.length; i++) {
 					msgContent = msgContent.replace("#" + i + "#", attr[i]);
@@ -148,6 +171,8 @@ public class KefuServiceImpl implements KefuService {
 			msg.setUpdateTime(DateUtil.nowTime());
 			msg.setCreateTime(DateUtil.nowTime());
 			msg.setJiacn(jiacn);
+			msg.setTenantId(mpUser.getTenantId());
+			msg.setClientId(mpUser.getClientId());
 			msg.setTitle(kefuMsgType.getWxTemplateId());
 			msg.setContent(msgContent);
 			msg.setUrl(kefuMsgType.getUrl());

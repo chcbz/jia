@@ -13,4 +13,5 @@ import cn.jia.kefu.entity.KefuMsgTypeEntity;
  */
 public interface KefuMsgTypeDao extends IBaseDao<KefuMsgTypeEntity> {
     KefuMsgTypeEntity findMsgType(String typeCode);
+    KefuMsgTypeEntity findScheduledMsgType(String clientId, String typeCode);
 }

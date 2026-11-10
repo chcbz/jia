@@ -35,4 +35,12 @@
         WHERE id = #{id,jdbcType=BIGINT}
     </update>
 
+    <select id="selectScheduledRecipients" resultType="cn.jia.wx.entity.MpUserEntity">
+        SELECT tenant_id, <include refid="Base_Column_List" /> FROM wx_mp_user
+        WHERE tenant_id = CAST(#{tenantId} AS BINARY)
+          AND client_id = CAST(#{clientId} AS BINARY)
+          AND jiacn = CAST(#{jiacn} AS BINARY)
+          AND subscribe = 1
+        ORDER BY id LIMIT 2
+    </select>
 </mapper>

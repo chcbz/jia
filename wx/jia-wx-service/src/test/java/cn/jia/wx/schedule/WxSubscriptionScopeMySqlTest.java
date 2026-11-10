@@ -21,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class WxSubscriptionScopeMySqlTest extends SkillManagementMySqlFixture {
     JdbcTemplate jdbc;
     KefuMsgSubscribeMapper mapper;
+    cn.jia.kefu.mapper.KefuMsgTypeMapper typeMapper;
     @BeforeEach void setup() {
         admin.execute("CREATE DATABASE IF NOT EXISTS cyf_wx_scope CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci");
         var ds = source("cyf_wx_scope"); jdbc = new JdbcTemplate(ds);
@@ -30,10 +31,20 @@ class WxSubscriptionScopeMySqlTest extends SkillManagementMySqlFixture {
                 client_id VARCHAR(64), jiacn VARCHAR(64), type_code VARCHAR(32), status INT,
                 wx_rx_flag INT, sms_rx_flag INT, create_time BIGINT, update_time BIGINT)
                 """);
+        jdbc.execute("DROP TABLE IF EXISTS kefu_msg_type");
+        jdbc.execute("""
+                CREATE TABLE kefu_msg_type (id BIGINT PRIMARY KEY, tenant_id VARCHAR(64), client_id VARCHAR(64),
+                type_code VARCHAR(32),type_name VARCHAR(64),parent_type VARCHAR(64),type_category VARCHAR(64),
+                wx_template_id VARCHAR(64),wx_template TEXT,wx_template_txt TEXT,sms_template_id VARCHAR(64),
+                sms_template TEXT,url VARCHAR(128),status INT,create_time BIGINT,update_time BIGINT)
+                """);
         var config = new MybatisConfiguration(); config.setMapUnderscoreToCamelCase(true);
         config.setEnvironment(new Environment("owned-wx-scope", new SpringManagedTransactionFactory(), ds));
         config.addMapper(KefuMsgSubscribeMapper.class);
-        mapper = new SqlSessionTemplate(new SqlSessionFactoryBuilder().build(config)).getMapper(KefuMsgSubscribeMapper.class);
+        config.addMapper(cn.jia.kefu.mapper.KefuMsgTypeMapper.class);
+        var session=new SqlSessionTemplate(new SqlSessionFactoryBuilder().build(config));
+        mapper=session.getMapper(KefuMsgSubscribeMapper.class);
+        typeMapper=session.getMapper(cn.jia.kefu.mapper.KefuMsgTypeMapper.class);
     }
     void subscription(long id, String tenant, String client, String owner) {
         jdbc.update("INSERT INTO kefu_msg_subscribe VALUES (?,?,?,?, 'vote',1,1,0,0,0)", id,tenant,client,owner);
@@ -76,4 +87,20 @@ class WxSubscriptionScopeMySqlTest extends SkillManagementMySqlFixture {
         jdbc.update("UPDATE kefu_msg_subscribe SET status=0 WHERE id=1");
         assertNull(dao.findScheduledRecipient("client-a",1,"vote","owner"));
     }
+    @Test void scheduledTemplateDefinitionIsExactEnabledAndUnambiguous() {
+        String sql="INSERT INTO kefu_msg_type (id,tenant_id,client_id,type_code,status) VALUES (?,?,?,?,?)";
+        jdbc.update(sql,1,"Tenant-a","client-a","vote",1);
+        jdbc.update(sql,2,"tenant-a","Client-a","vote",1);
+        jdbc.update(sql,3,"tenant-a","client-a","Vote",1);
+        jdbc.update(sql,4,"tenant-a","client-a","vote",0);
+        var dao=new cn.jia.kefu.dao.impl.KefuMsgTypeDaoImpl();
+        ReflectionTestUtils.setField(dao,"baseMapper",typeMapper);
+        ReflectionTestUtils.setField(dao,"processScope",new FixedTenantAdmissionPolicy("tenant-a","client-a"));
+        assertNull(dao.findScheduledMsgType("client-a","vote"));
+        jdbc.update(sql,5,"tenant-a","client-a","vote",1);
+        assertEquals(5L,dao.findScheduledMsgType("client-a","vote").getId());
+        jdbc.update(sql,6,"tenant-a","client-a","vote",1);
+        assertThrows(RuntimeException.class,()->dao.findScheduledMsgType("client-a","vote"));
+    }
+
 }

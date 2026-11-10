@@ -9,4 +9,10 @@
         id, client_id, type_code, type_name, parent_type, type_category, wx_template_id, wx_template, wx_template_txt, sms_template_id, sms_template, url, status
     </sql>
 
+    <select id="selectScheduledMsgType" resultType="cn.jia.kefu.entity.KefuMsgTypeEntity">
+        SELECT tenant_id, <include refid="Base_Column_List"/> FROM kefu_msg_type
+        WHERE tenant_id = CAST(#{tenantId} AS BINARY)
+          AND client_id = CAST(#{clientId} AS BINARY)
+          AND type_code = CAST(#{typeCode} AS BINARY) AND status = 1
+    </select>
 </mapper>

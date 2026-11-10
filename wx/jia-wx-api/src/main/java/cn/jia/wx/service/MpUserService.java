@@ -12,6 +12,9 @@ public interface MpUserService extends IBaseService<MpUserEntity> {
 
     MpUserEntity findByJiacn(String jiacn);
 
+    /** Exact recipient in the configured tenant and admitted client; ambiguous identities fail closed. */
+    MpUserEntity findScheduledRecipient(String clientId, String jiacn);
+
     /**
      * Persist the server-observed time of a verified inbound WeChat message. Returns zero when
      * the user record no longer exists.

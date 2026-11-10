@@ -18,6 +18,14 @@ import jakarta.inject.Named;
  */
 @Named
 public class KefuMsgTypeDaoImpl extends BaseDaoImpl<KefuMsgTypeMapper, KefuMsgTypeEntity> implements KefuMsgTypeDao {
+    @jakarta.inject.Inject
+    private cn.jia.core.security.FixedTenantAdmissionPolicy processScope;
+
+    @Override
+    public KefuMsgTypeEntity findScheduledMsgType(String clientId, String typeCode) {
+        return baseMapper.selectScheduledMsgType(processScope.tenantForClient(clientId), clientId, typeCode);
+    }
+
     @Override
     public KefuMsgTypeEntity findMsgType(String typeCode) {
         Wrapper<KefuMsgTypeEntity> wrapper = Wrappers.lambdaQuery(new KefuMsgTypeEntity())

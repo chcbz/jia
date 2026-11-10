@@ -13,5 +13,8 @@ public interface KefuService {
 
     boolean sendWxTemplate(KefuMsgTypeEntity kefuMsgType, String jiacn, String... attr) throws Exception;
 
+    cn.jia.kefu.entity.WxNoticeSendResult sendScheduledWxTemplate(
+            String clientId, String typeCode, String jiacn, String... attr) throws Exception;
+
     boolean isWxActive(String jiacn);
 }
