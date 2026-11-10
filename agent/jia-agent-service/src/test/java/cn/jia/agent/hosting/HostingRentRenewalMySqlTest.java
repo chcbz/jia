@@ -42,6 +42,7 @@ class HostingRentRenewalMySqlTest {
     private static JdbcTemplate admin;
     private String database;
     private JdbcTemplate jdbc;
+    private cn.jia.agent.mapper.AgentRuntimeMapper runtimeProjection;
     private EconomyHostingRentMapper leases;
     private EconomyHostingRenewalMapper renewals;
     private EconomyLedgerMapper accounts;
@@ -107,10 +108,12 @@ class HostingRentRenewalMySqlTest {
         manager = new DataSourceTransactionManager(source);
         var config = new MybatisConfiguration(); config.setMapUnderscoreToCamelCase(true);
         config.addMapper(EconomyLedgerMapper.class); config.addMapper(EconomyHostingRentMapper.class);
+        config.addMapper(cn.jia.agent.mapper.AgentRuntimeMapper.class);
         config.addMapper(EconomyHostingRenewalMapper.class); config.addMapper(ScheduledWorkMapper.class);
         var factory = new MybatisSqlSessionFactoryBean(); factory.setDataSource(source); factory.setConfiguration(config);
         factory.setPlugins(new TaskTenantConfiguration().taskPlanTenantInterceptor(policy));
         var template = new SqlSessionTemplate(factory.getObject());
+        runtimeProjection = template.getMapper(cn.jia.agent.mapper.AgentRuntimeMapper.class);
         accounts = template.getMapper(EconomyLedgerMapper.class); leases = template.getMapper(EconomyHostingRentMapper.class);
         renewals = spy(template.getMapper(EconomyHostingRenewalMapper.class));
         schedules = new ScheduledWorkStore(template.getMapper(ScheduledWorkMapper.class), policy, manager);
@@ -126,6 +129,53 @@ class HostingRentRenewalMySqlTest {
         wallet("tenant", "client", "user", 1000);
     }
     @AfterEach void dropSchema() { if (database != null) admin.execute("DROP DATABASE `" + database + "`"); }
+    @Test void finalReleaseRetainsPublicInstanceAndClearsPrivateRelationship() {
+        seedRuntimeProjection();
+        assertEquals(1, runtimeProjection.clearBindingAfterUnbind(1, "agent", 7, "client", "old-owner", 100));
+        var row = jdbc.queryForMap("SELECT * FROM agent_runtime WHERE id=1");
+        assertEquals("tenant", row.get("tenant_id"));
+        assertEquals("client", row.get("client_id"));
+        assertEquals("agent", row.get("agent_id"));
+        assertEquals("wuyong", row.get("persona_code"));
+        assertEquals("吴用", row.get("persona_name"));
+        for (String column : List.of("owner_jiacn", "binding_id", "endpoint", "token_hash",
+                "current_task_id", "current_task_title", "error_message")) assertNull(row.get(column), column);
+        assertEquals("offline", row.get("status"));
+        assertEquals(100L, ((Number) row.get("update_time")).longValue());
+        assertEquals(0, runtimeProjection.clearBindingAfterUnbind(1, "agent", 7, "client", "old-owner", 101));
+        assertEquals(row, jdbc.queryForMap("SELECT * FROM agent_runtime WHERE id=1"));
+    }
+
+    @Test void lateReleaseCannotClearAnotherRelationshipOrScope() {
+        seedRuntimeProjection();
+        var before = jdbc.queryForMap("SELECT * FROM agent_runtime WHERE id=1");
+        assertEquals(0, runtimeProjection.clearBindingAfterUnbind(1, "agent", 8, "client", "old-owner", 100));
+        assertEquals(0, runtimeProjection.clearBindingAfterUnbind(1, "agent", 7, "other-client", "old-owner", 100));
+        assertEquals(0, runtimeProjection.clearBindingAfterUnbind(1, "agent", 7, "client", "new-owner", 100));
+        assertEquals(before, jdbc.queryForMap("SELECT * FROM agent_runtime WHERE id=1"));
+        jdbc.update("UPDATE agent_runtime SET binding_id=8, owner_jiacn='new-owner'");
+        var rebound = jdbc.queryForMap("SELECT * FROM agent_runtime WHERE id=1");
+        assertEquals(0, runtimeProjection.clearBindingAfterUnbind(1, "agent", 7, "client", "old-owner", 100));
+        assertEquals(rebound, jdbc.queryForMap("SELECT * FROM agent_runtime WHERE id=1"));
+    }
+
+    private void seedRuntimeProjection() {
+        // Minimal projection fixture; execute the production mapper, not copied UPDATE SQL.
+        jdbc.execute("""
+                CREATE TABLE agent_runtime (
+                    id BIGINT PRIMARY KEY, agent_id VARCHAR(100), tenant_id VARCHAR(50), client_id VARCHAR(50),
+                    owner_jiacn VARCHAR(50), persona_code VARCHAR(50), persona_name VARCHAR(50), binding_id BIGINT,
+                    endpoint VARCHAR(100), token_hash VARCHAR(100), current_task_id VARCHAR(100),
+                    current_task_title VARCHAR(100), error_message VARCHAR(100), status VARCHAR(20),
+                    last_seen_at BIGINT, update_time BIGINT
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
+                """);
+        jdbc.update("""
+                INSERT INTO agent_runtime VALUES (1,'agent','tenant','client','old-owner','wuyong','吴用',7,
+                    'private-endpoint','private-token','old-task','private-title','private-error','busy',1,1)
+                """);
+    }
+
     @Test void handoverSnapshotRequiresCallerTransactionAndRetainsMissingIntentAsUnknown() {
         seed("finish", "FINISHING", 500, now(), null);
         assertThrows(IllegalStateException.class, () -> service.lockHandover(scope, "missing", "finish"));
