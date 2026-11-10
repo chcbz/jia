@@ -24,7 +24,7 @@ class SkillManagementRetainedInventoryMySqlTest extends SkillManagementTransacti
     private SkillRelationshipAuthorizations authorizations;
 
     private void retainedFixture(String owner) throws Exception {
-        original=install();report(original,"PREPARED",null);report(current(original),"APPLIED",null);catalog(current(original));
+        original=install();report(original,"PREPARED",null);report(current(original),"APPLIED",null);original=current(original);catalog(original);
         installation=text(object(original.get("target")),"skillInstallationId");
         originalAuthorization=jdbc.queryForMap("SELECT * FROM agent_skill_installation_authorization WHERE installation_id=?",installation);
         // Use the real component DDL, not a permissive surrogate authorization table.
@@ -110,10 +110,11 @@ class SkillManagementRetainedInventoryMySqlTest extends SkillManagementTransacti
         var dto=new cn.jia.agent.entity.AgentRuntimeDTO();dto.setAgentId(AGENT);dto.setStatus("online");dto.setSystemAgent(false);
         when(agents.getObject().requireApiKeyOwnedAgentForUpdate(next.clientId(),next.ownerJiacn(),AGENT)).thenReturn(dto);
         when(agents.getObject().requireOwnedAgentCapabilities(next.tenantId(),next.clientId(),next.ownerJiacn(),AGENT)).thenReturn(dto);
-        catalog(current(original));
+        catalog(original);
+        assertThrows(SkillMarketplaceException.class,()->current(original));
         assertEquals("admitted",service.admitNative(scope(next.ownerJiacn()),text(original,"skillKey"),installation,()->"admitted"));
         assertThrows(SkillMarketplaceException.class,()->service.admitNative(scope(ACTOR.ownerJiacn()),text(original,"skillKey"),installation,()->"wrong-owner"));
-        var installed=current(original);long before=wallet();
+        var installed=original;long before=wallet();
         var disabled=service.create(next,AGENT,"new-owner-disable","request",map("action","DISABLE","skillKey",installed.get("skillKey"),
                 "sourceSkillInstallationId",installation,"expectedAgentVersion",Long.toString(versions.readOwned(next,AGENT)),
                 "expectedSkillRevision",installed.get("skillRevision")),false);
