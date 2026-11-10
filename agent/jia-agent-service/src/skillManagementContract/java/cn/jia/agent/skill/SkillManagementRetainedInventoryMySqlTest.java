@@ -166,6 +166,7 @@ class SkillManagementRetainedInventoryMySqlTest extends SkillManagementTransacti
         var applied=result(change,evidence(change,"APPLIED",null));
         service.result(proof(),applied);service.result(proof(),applied);
         change=service.change(next,AGENT,text(change,"skillChangeId"));catalog(change);
+        change=service.change(next,AGENT,text(change,"skillChangeId"));
         assertEquals("SUCCEEDED",change.get("status"));assertEquals("CAPTURED",change.get("fundingStatus"));
         assertEquals(80L,jdbc.queryForObject("SELECT balance_wen FROM economy_account WHERE account_id='next-wallet'",Long.class));
         assertEquals(previousOwnerBalance,wallet());assertEquals(2,count("economy_skill_order"));

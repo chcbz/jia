@@ -302,9 +302,13 @@ public final class HostingRentApplicationService {
             EconomyHostingProvisioningIntentEntity intent = rent.selectIntent(
                     actor.tenantId(), actor.clientId(), lease.getLatestIntentId());
             if (intent == null || !actor.actorId().equals(intent.getPrincipalId())) throw forbidden();
-            String admission = "ACTIVE".equals(lease.getStatus())
-                    ? lease.getPaidThrough() > System.currentTimeMillis() ? "ALLOWED" : "RENEWAL_REQUIRED"
-                    : "REFUNDED".equals(lease.getStatus()) ? "INITIAL_REQUIRED" : "PENDING";
+            String admission = switch (lease.getStatus()) {
+                case "ACTIVE" -> lease.getPaidThrough() > System.currentTimeMillis() ? "ALLOWED" : "RENEWAL_REQUIRED";
+                case "LOCKED" -> "LOCKED";
+                case "FINISHING" -> "FINISHING";
+                case "REFUNDED" -> "INITIAL_REQUIRED";
+                default -> "PENDING";
+            };
             return new LeaseView(true, new LeaseSnapshot(lease.getLeaseId(), agentId, lease.getPersonaCode(),
                     lease.getBindingId(), number(lease.getVersion()), lease.getStatus(), number(lease.getPlanVersion()),
                     number(lease.getAmountWen()), number(lease.getPeriodSeconds()), number(lease.getPaidFrom()), number(lease.getPaidThrough()), intent.getSettlementKind()),

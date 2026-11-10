@@ -262,6 +262,29 @@ class HostingRentApplicationServiceTest {
     }
 
     @Test
+    void lookupShowsArrearsFinishingAndRestoredActiveWithoutFinancialMutation() {
+        var identity = new AgentIdentityRegistryEntity().setCanonicalAgentId(AGENT);
+        when(identities.requireRegistrationIdentityInScope("0", "Client-A", "Tenant-A", AGENT)).thenReturn(identity);
+        var lease = new EconomyHostingLeaseEntity().setLeaseId("lease-paid").setAgentId(AGENT).setPersonaCode("wuyong")
+                .setBindingId("binding-1").setPrincipalId("login-sub").setPrincipalType("USER").setVersion(4L)
+                .setPlanVersion(1L).setAmountWen(500L).setPeriodSeconds(2592000L).setPaidFrom(1000L)
+                .setPaidThrough(System.currentTimeMillis() + 100_000).setLatestIntentId("intent-paid");
+        when(rent.selectLatestLease("0", "Client-A", AGENT)).thenReturn(lease);
+        when(rent.selectIntent("0", "Client-A", "intent-paid")).thenReturn(new EconomyHostingProvisioningIntentEntity()
+                .setIntentId("intent-paid").setPrincipalId("login-sub").setStatus("ACTIVE").setVersion(3L)
+                .setReserveTransactionId("reserve").setCaptureTransactionId("capture"));
+        for (String status : java.util.List.of("LOCKED", "ACTIVE", "FINISHING")) {
+            lease.setStatus(status);
+            var view = application.lookup(ACTOR, AGENT);
+            assertEquals(status, view.lease().status());
+            assertEquals("ACTIVE".equals(status) ? "ALLOWED" : status, view.admission());
+            assertEquals("500", view.lease().amountWen());
+            assertEquals("capture", view.intent().captureTransactionId());
+        }
+        verifyNoInteractions(ledger, runtimes);
+    }
+
+    @Test
     void lookupRetainedRightsExposesSourceAndOriginalExpiryWithoutWalletReceipts() {
         var identity = new AgentIdentityRegistryEntity().setCanonicalAgentId(AGENT);
         when(identities.requireRegistrationIdentityInScope("0", "Client-A", "Tenant-A", AGENT)).thenReturn(identity);
