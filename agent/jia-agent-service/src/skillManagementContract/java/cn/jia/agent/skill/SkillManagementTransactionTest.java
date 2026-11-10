@@ -130,7 +130,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         service=new SkillManagementService(db,market,app,marketplace,trade,versions,runtimes,installations,authentication,identityLocks,provider(packages),provider(writer),provider(sessions),provider(capabilities),manager,rentalAdmission);
         dispatch=new SkillInstallDispatchService(app,market,marketplace,versions,authentication,commands,provider(sessions),manager);dispatch.setManagement(service);
         recoveryMapper=sql.getMapper(AgentSkillInstallRecoveryMapper.class);
-        recoveryDao=new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class));
+        recoveryDao=new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class), new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         recovery=new SkillInstallRecoveryService(recoveryMapper,recoveryDao,dispatch,manager,new FixedTenantAdmissionPolicy("0", null),provider(schedules),"node-1");
         for(var p:new PlatformSkillPackageCatalog().products()) {
             market.insertProduct(new SkillProductEntity().setProductId(p.productId()).setSellerType("SYSTEM").setSellerId("SKILL_STORE").setName(p.name()).setDescription(p.description())

@@ -70,7 +70,7 @@ class SkillInstallTransportMySqlTest {
         var manager=new DataSourceTransactionManager(ds);tx=new TransactionTemplate(manager);
         var preview=new EconomyPreviewGate(new EconomyPreviewProperties(true,List.of(new EconomyPreviewProperties.AllowedScope("0","Client-A"))));
         writer=new SkillInstallCommandWriter(new AgentCommandTransportDaoImpl(commands),scheduleProvider(),"node-1");dispatch=mock(SkillInstallDispatchService.class);when(dispatch.canDispatch(anyString(),anyString(),anyString())).thenReturn(true);
-        recovery=new SkillInstallRecoveryService(mapper,new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class)),dispatch,manager,new FixedTenantAdmissionPolicy("0", null),scheduleProvider(),"node-1");
+        recovery=new SkillInstallRecoveryService(mapper,new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class), new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null)),dispatch,manager,new FixedTenantAdmissionPolicy("0", null),scheduleProvider(),"node-1");
         long now=System.currentTimeMillis();
         change=new cn.jia.agent.entity.skill.SkillChangeEntity().setChangeId("change-fixture")
                 .setAgentId("agt_fixture").setOwnerJiacn("Owner-A");

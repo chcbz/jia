@@ -180,7 +180,7 @@ class AgentHallMailboxMySqlRestartTest {
         makeWaitingSource(firstContext.jdbc(), written, waitingAt, retryAt);
 
         RuntimeContext restarted = newContext();
-        AgentCommandReissueServiceImpl reissue = new AgentCommandReissueServiceImpl(new AgentCommandRecoveryDaoImpl(restarted.recoveryMapper()), gate(), connected(), AgentRabbitTopologyManifest.canonical(), 30_000L, restarted.transactionManager(), ids(M2, E2), new AgentCommandRecoveryPolicy(), "0");
+        AgentCommandReissueServiceImpl reissue = new AgentCommandReissueServiceImpl(new AgentCommandRecoveryDaoImpl(restarted.recoveryMapper(), new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null)), gate(), connected(), AgentRabbitTopologyManifest.canonical(), 30_000L, restarted.transactionManager(), ids(M2, E2), new AgentCommandRecoveryPolicy(), "0");
 
         assertEquals(1, reissue.reissueForReconnect(new AgentCommandReconnectScope(
                 TENANT, CLIENT, TARGET, TARGET,

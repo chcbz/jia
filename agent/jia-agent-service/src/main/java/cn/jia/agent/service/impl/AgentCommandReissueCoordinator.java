@@ -8,17 +8,27 @@ import cn.jia.agent.service.AgentCommandReissueService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
+import cn.jia.task.scheduling.ScheduleKey;
+import cn.jia.task.scheduling.ScheduleService;
+import cn.jia.task.scheduling.ScheduledInvocation;
+import cn.jia.task.scheduling.ScheduledJobHandler;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.ApplicationListener;
+
 import java.time.Clock;
 import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.LongSupplier;
 
 /** Non-blocking bounded reconnect queue plus bounded restart/lost-signal fallback scanner. */
-public final class AgentCommandReissueCoordinator implements AgentCommandReconnectSignal, AutoCloseable {
+public final class AgentCommandReissueCoordinator implements AgentCommandReconnectSignal, AutoCloseable, ScheduledJobHandler, ApplicationListener<ApplicationReadyEvent> {
+    public static final String HANDLER = "agent.command-recovery";
     private static final Logger LOG = LoggerFactory.getLogger(AgentCommandReissueCoordinator.class);
     private static final long CLOSE_AWAIT_MILLIS = 1_000L;
 
@@ -27,33 +37,61 @@ public final class AgentCommandReissueCoordinator implements AgentCommandReconne
     private final ArrayBlockingQueue<AgentCommandReconnectScope> signals;
     private final LongSupplier nowMillis;
     private final AtomicBoolean closed = new AtomicBoolean();
-    private final ScheduledExecutorService worker;
+    private final ExecutorService worker;
+    private final ScheduleService schedules;
+    private final ScheduleKey scheduleKey;
+    private final AtomicBoolean iterationActive = new AtomicBoolean();
+    private volatile boolean ready;
     private volatile long schedulerCursor;
 
     public AgentCommandReissueCoordinator(
             AgentCommandReissueService service,
-            AgentCommandReissueSettings settings) {
-        this(service, settings, Clock.systemUTC()::millis, true);
+            AgentCommandReissueSettings settings, ScheduleService schedules,
+            FixedTenantAdmissionPolicy scope, String node) {
+        this(service, settings, schedules, scope, node, Clock.systemUTC()::millis);
     }
 
     AgentCommandReissueCoordinator(
             AgentCommandReissueService service,
-            AgentCommandReissueSettings settings,
-            LongSupplier nowMillis,
-            boolean start) {
+            AgentCommandReissueSettings settings, ScheduleService schedules,
+            FixedTenantAdmissionPolicy scope, String node, LongSupplier nowMillis) {
+        if (node == null || node.isBlank()) throw new IllegalArgumentException("Command recovery requires a scheduler node identity");
+        this.schedules = Objects.requireNonNull(schedules, "schedules");
+        this.scheduleKey = new ScheduleKey(scope.clientId() == null ? "" : scope.clientId(), HANDLER, "recovery", node);
         this.service = Objects.requireNonNull(service, "service");
         this.settings = Objects.requireNonNull(settings, "settings");
         this.nowMillis = Objects.requireNonNull(nowMillis, "nowMillis");
         this.signals = new ArrayBlockingQueue<>(settings.queueCapacity());
-        this.worker = Executors.newSingleThreadScheduledExecutor(runnable -> {
+        this.worker = Executors.newSingleThreadExecutor(runnable -> {
             Thread thread = new Thread(runnable, "agent-command-reissue");
             thread.setDaemon(true);
             return thread;
         });
-        if (start) {
-            worker.scheduleWithFixedDelay(
-                    this::runSafely, settings.pollDelayMillis(), settings.pollDelayMillis(),
-                    TimeUnit.MILLISECONDS);
+    }
+
+    @Override public String getName() { return HANDLER; }
+
+    @Override
+    public synchronized void onApplicationEvent(ApplicationReadyEvent event) {
+        if (closed.get() || ready) return;
+        schedules.signal(scheduleKey, nowMillis.getAsLong() + settings.pollDelayMillis());
+        ready = true;
+    }
+
+    @Override
+    public synchronized void executeScheduled(ScheduledInvocation invocation) {
+        if (closed.get() || !ready) return;
+        // Persist recovery before launching work: a crash or a failed scan cannot lose the next wake.
+        schedules.signal(scheduleKey, nowMillis.getAsLong() + settings.pollDelayMillis());
+        if (!iterationActive.compareAndSet(false, true)) return;
+        try {
+            worker.execute(() -> {
+                try { runSafely(); }
+                finally { iterationActive.set(false); }
+            });
+        } catch (RejectedExecutionException rejected) {
+            iterationActive.set(false);
+            if (!closed.get()) throw rejected;
         }
     }
 

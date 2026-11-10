@@ -26,6 +26,12 @@ class AgentCommandRecoveryMapperContractTest {
         assertTrue(due.contains("tenant_id=#{tenantid}"));
         assertTrue(due.contains("octet_length(tenant_id)=octet_length(#{tenantid})"));
         assertBinary(due, "tenant_id");
+        assertTrue(due.contains("#{processclientid} is null"));
+        assertTrue(due.contains("client_id=#{processclientid}"));
+        assertTrue(due.contains("cast(client_id as binary)=cast(#{processclientid} as binary)"));
+        assertTrue(due.contains("octet_length(client_id)=octet_length(#{processclientid})"));
+        assertTrue(due.indexOf("client_id=#{processclientid}") < due.indexOf("order by"));
+        assertTrue(due.indexOf("order by") < due.indexOf("limit #{limit}"));
         assertTrue(due.contains("next_retry_at<=#{now}"));
         assertTrue(due.contains("status='sent'"));
         assertTrue(due.contains("update_time<=#{sentbefore}"));

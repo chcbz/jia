@@ -193,8 +193,8 @@ public class SkillMarketplaceRealTransactionTest {
         service=new SkillMarketplaceService(market,app,trade,versions,runtimes,provider(writer),provider(packages),provider(authentication),provider(sessions),manager,positionService);
         dispatch=new SkillInstallDispatchService(app,market,service,versions,authentication,commands,provider(sessions),manager);
         recoveryMapper=sql.getMapper(AgentSkillInstallRecoveryMapper.class);
-        recovery=new SkillInstallRecoveryService(recoveryMapper,new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class)),dispatch,manager,new FixedTenantAdmissionPolicy("0", null),scheduleProvider(),"node-1");
-        ackCommands=spy(new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class)));
+        recovery=new SkillInstallRecoveryService(recoveryMapper,new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class), new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null)),dispatch,manager,new FixedTenantAdmissionPolicy("0", null),scheduleProvider(),"node-1");
+        ackCommands=spy(new AgentCommandRecoveryDaoImpl(sql.getMapper(AgentCommandRecoveryMapper.class), new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null)));
         nativeAcks=new SkillInstallAckService(app,market,ackCommands,recoveryMapper,authentication,service,manager);
         commandsForResults=commands;transactionManagerForResults=manager;
         results=new SkillInstallResultService(market,app,commands,service,versions,authentication,provider(packages),manager,trade);

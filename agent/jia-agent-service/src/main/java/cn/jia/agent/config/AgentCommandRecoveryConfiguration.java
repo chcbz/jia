@@ -2,7 +2,8 @@ package cn.jia.agent.config;
 
 import cn.jia.agent.dao.AgentCommandRecoveryDao;
 import cn.jia.agent.service.AgentCommandAckService;
-import cn.jia.agent.service.AgentCommandReconnectSignal;
+import cn.jia.task.scheduling.ScheduleService;
+import org.springframework.beans.factory.annotation.Value;
 import cn.jia.agent.service.AgentCommandReissueService;
 import cn.jia.agent.service.AgentRawCommandDispatcher;
 import cn.jia.agent.service.impl.AgentCommandAckServiceImpl;
@@ -47,9 +48,12 @@ public class AgentCommandRecoveryConfiguration {
     }
 
     @Bean(name = "agentCommandReconnectSignal", destroyMethod = "close")
-    public AgentCommandReconnectSignal agentCommandReconnectSignal(
+    @ConditionalOnProperty(name = "cyf.task.scheduling.enabled", havingValue = "true")
+    public AgentCommandReissueCoordinator agentCommandReconnectSignal(
             AgentCommandReissueService service,
-            @Qualifier("agentCommandReissueSettings") AgentCommandReissueSettings settings) {
-        return new AgentCommandReissueCoordinator(service, settings);
+            @Qualifier("agentCommandReissueSettings") AgentCommandReissueSettings settings,
+            ScheduleService schedules, FixedTenantAdmissionPolicy scope,
+            @Value("${cyf.task.scheduling.node-id}") String node) {
+        return new AgentCommandReissueCoordinator(service, settings, schedules, scope, node);
     }
 }

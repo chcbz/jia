@@ -518,6 +518,10 @@ tasks.register('mmdU1Grant', Test) {
 // MMD-U1-BOOTSTRAP-OUTBOX isolated assignment/grant/bootstrap transaction and claim contract.
 def mmdU1BootstrapOutboxSourceSet = sourceSets.create('mmdU1BootstrapOutbox') {
     java {
+        include 'cn/jia/agent/dao/AgentCommandRecoveryMapperContractTest.java'
+        include 'cn/jia/agent/service/impl/AgentCommandReissueCoordinatorTest.java'
+        include 'cn/jia/agent/service/impl/AgentCommandRecoveryRealTransactionTest.java'
+        include 'cn/jia/agent/config/AgentCommandRecoveryConfigurationTest.java'
         include 'cn/jia/agent/dao/AgentOutboxRelayMapperContractTest.java'
         include 'cn/jia/agent/service/impl/AgentOutboxRelaySchedulerTest.java'
         include 'cn/jia/agent/service/impl/AgentOutboxRelayRealTransactionTest.java'

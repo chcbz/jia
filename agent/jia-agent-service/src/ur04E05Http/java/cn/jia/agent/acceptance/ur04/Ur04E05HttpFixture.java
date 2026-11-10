@@ -684,7 +684,7 @@ public final class Ur04E05HttpFixture {
         }
         @Bean AgentCommandAckService commandAcks(SqlSessionTemplate session, AgentRabbitSafetyGate gate, DataSourceTransactionManager manager) {
             return new AgentCommandAckServiceImpl(
-                    new AgentCommandRecoveryDaoImpl(session.getMapper(AgentCommandRecoveryMapper.class)), gate, manager);
+                    new AgentCommandRecoveryDaoImpl(session.getMapper(AgentCommandRecoveryMapper.class), new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null)), gate, manager);
         }
         @Bean AgentRuntimeV1Service runtime(AgentRuntimeV1InstallationDao installations, AgentIdentityService identity,
                 AgentIdentityRegistryDao registry, ObjectProvider<AgentCommandAckService> acks, AgentRuntimeAuthenticationService authentication) {

@@ -69,6 +69,9 @@ public interface AgentCommandRecoveryMapper {
                    CASE WHEN expires_at<=#{now} THEN TRUE ELSE FALSE END AS expiryCandidate
             FROM agent_command_delivery
             WHERE tenant_id=#{tenantId}
+              AND (#{processClientId} IS NULL OR (client_id=#{processClientId}
+                   AND CAST(client_id AS BINARY)=CAST(#{processClientId} AS BINARY)
+                   AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{processClientId})))
               AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
               AND (
@@ -87,6 +90,7 @@ public interface AgentCommandRecoveryMapper {
             """)
     List<AgentWaitingCommandCandidate> selectDueCandidates(
             @Param("tenantId") String tenantId,
+            @Param("processClientId") String processClientId,
             @Param("now") long now,
             @Param("sentBefore") long sentBefore,
             @Param("afterDeliveryId") long afterDeliveryId,

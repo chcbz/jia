@@ -7,6 +7,7 @@ import cn.jia.agent.entity.AgentOutboxEventEntity;
 import cn.jia.agent.entity.AgentWaitingCommandCandidate;
 import cn.jia.agent.mapper.AgentCommandRecoveryMapper;
 import jakarta.inject.Named;
+import cn.jia.core.security.FixedTenantAdmissionPolicy;
 import lombok.RequiredArgsConstructor;
 
 import java.util.List;
@@ -15,6 +16,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class AgentCommandRecoveryDaoImpl implements AgentCommandRecoveryDao {
     private final AgentCommandRecoveryMapper mapper;
+    private final FixedTenantAdmissionPolicy scope;
 
     @Override
     public List<AgentWaitingCommandCandidate> findReconnectCandidates(
@@ -27,7 +29,7 @@ public class AgentCommandRecoveryDaoImpl implements AgentCommandRecoveryDao {
     @Override
     public List<AgentWaitingCommandCandidate> findDueCandidates(
             String tenantId, long now, long sentBefore, long afterDeliveryId, int limit) {
-        return mapper.selectDueCandidates(tenantId, now, sentBefore, afterDeliveryId, limit);
+        return mapper.selectDueCandidates(tenantId, scope.clientId(), now, sentBefore, afterDeliveryId, limit);
     }
 
     @Override

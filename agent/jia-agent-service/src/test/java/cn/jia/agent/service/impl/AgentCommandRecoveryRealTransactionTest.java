@@ -88,6 +88,7 @@ class AgentCommandRecoveryRealTransactionTest {
     private AgentCommandRecoveryDao dao;
     private AgentOutboxRelayDao relayDao;
     private AgentCommandInboxDao inboxDao;
+    private AgentCommandRecoveryMapper recoveryMapper;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -109,8 +110,9 @@ class AgentCommandRecoveryRealTransactionTest {
         bean.setGlobalConfig(globalConfig);
         SqlSessionFactory factory = bean.getObject();
         SqlSessionTemplate template = new SqlSessionTemplate(factory);
+        recoveryMapper = template.getMapper(AgentCommandRecoveryMapper.class);
         dao = new AgentCommandRecoveryDaoImpl(
-                template.getMapper(AgentCommandRecoveryMapper.class));
+                recoveryMapper, new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null));
         relayDao = new AgentOutboxRelayDaoImpl(
                 template.getMapper(AgentOutboxRelayMapper.class),
                 new cn.jia.core.security.FixedTenantAdmissionPolicy("tenant-a", null));
@@ -118,6 +120,29 @@ class AgentCommandRecoveryRealTransactionTest {
                 template.getMapper(AgentCommandInboxMapper.class));
         manager = new DataSourceTransactionManager(source);
         insertWaitingSource();
+    }
+
+    @Test
+    void fixedClientDiscoveryFiltersBeforeLimitIncludingCaseAndTrailingSpace() {
+        jdbc.update("UPDATE agent_command_delivery SET id=2 WHERE id=1");
+        jdbc.update("""
+                INSERT INTO agent_command_delivery(id,owner_jiacn,command_id,task_id,target_agent_id,
+                  command_type,command_payload,command_payload_hash,status,attempt_count,next_retry_at,
+                  active_attempt,expires_at,version,tenant_id,client_id,update_time)
+                SELECT 1,owner_jiacn,'other-command',task_id,target_agent_id,command_type,command_payload,
+                  command_payload_hash,status,attempt_count,next_retry_at,active_attempt,expires_at,version,
+                  tenant_id,'client-b',update_time FROM agent_command_delivery WHERE id=2
+                """);
+        var restricted = new AgentCommandRecoveryDaoImpl(recoveryMapper,
+                new cn.jia.core.security.FixedTenantAdmissionPolicy("0", "client-a"));
+        for (String client : List.of("client-b", "Client-a", "client-a ")) {
+            jdbc.update("UPDATE agent_command_delivery SET client_id=? WHERE id=1", client);
+            for (String status : List.of("WAITING_AGENT", "SENT")) {
+                jdbc.update("UPDATE agent_command_delivery SET status=?,update_time=?", status, NOW - 30_001L);
+                assertEquals(2L, restricted.findDueCandidates("0", NOW, NOW, 0, 1).getFirst().deliveryId());
+                assertEquals(1L, dao.findDueCandidates("0", NOW, NOW, 0, 1).getFirst().deliveryId());
+            }
+        }
     }
 
     @Test
@@ -404,7 +429,8 @@ class AgentCommandRecoveryRealTransactionTest {
         AgentCommandReissueServiceImpl service = reissueService(dao);
         try (AgentCommandReissueCoordinator coordinator = new AgentCommandReissueCoordinator(
                 service, new AgentCommandReissueSettings(2, 1, 10, 100, 30_000L),
-                () -> NOW, false)) {
+                org.mockito.Mockito.mock(cn.jia.task.scheduling.ScheduleService.class),
+                new cn.jia.core.security.FixedTenantAdmissionPolicy("0", null), "node-a", () -> NOW)) {
             coordinator.runOnce();
         }
         assertEquals("PENDING", string("SELECT status FROM agent_command_delivery WHERE id=1"));
