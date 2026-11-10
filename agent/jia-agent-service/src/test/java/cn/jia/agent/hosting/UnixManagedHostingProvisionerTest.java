@@ -281,6 +281,14 @@ class UnixManagedHostingProvisionerTest {
                         "fixture-owner", "agt_fixture", "fixture-instance-1"), c.installationId(), "fixture-host", expectedSession.get(), "a".repeat(64), 1, 0);
             });
             assertTrue(real.probeCapabilities("0", "fixture-client", "fixture-owner"));
+            assertNotNull(System.getenv("CYF_GSS_INVENTORY_CODEX_BIN"), "Explicit actual native inventory binary required");
+            var freshInventory = real.inventory("0", "fixture-client", "fixture-owner", "agt_fixture");
+            assertNotNull(freshInventory); assertEquals(0, freshInventory.installedSkillCount());
+            var nativeInventory = real.inventory("0", "fixture-client", "fixture-owner", "agt_peer_0");
+            assertNotNull(nativeInventory, "Actual native inventory is not an empty fallback on transport timeout");
+            assertEquals(List.of("disabled-fixture", "manual-fixture"), nativeInventory.skills().stream()
+                    .map(ManagedHostingProvisioner.InstalledSkill::skillKey).toList());
+
             var initial = preparation();
             var ready = pollFixtureReady(real, initial);
             assertEquals(initial, ready.preparation());
