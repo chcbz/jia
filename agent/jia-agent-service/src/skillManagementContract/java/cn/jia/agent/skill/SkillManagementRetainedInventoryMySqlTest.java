@@ -35,7 +35,7 @@ class SkillManagementRetainedInventoryMySqlTest extends SkillManagementTransacti
         }
         assertNotNull(schema);
         for(String table:List.of("agent_runtime","agent_persona_binding")) {
-            int start=schema.indexOf("CREATE TABLE IF NOT EXISTS "+table+" (");jdbc.execute(schema.substring(start,schema.indexOf(';',start)+1));
+            int start=schema.indexOf("CREATE TABLE IF NOT EXISTS "+table+" (");jdbc.execute(schema.substring(start,schema.indexOf(";\n",start)+1));
         }
         new ResourceDatabasePopulator(new ClassPathResource("db/agent-runtime-session-fence-v1.sql"),
                 new ClassPathResource("db/economy-v0-hosting-rent.sql")).execute(Objects.requireNonNull(jdbc.getDataSource()));
@@ -97,4 +97,31 @@ class SkillManagementRetainedInventoryMySqlTest extends SkillManagementTransacti
         assertThrows(SkillMarketplaceException.class,()->service.admitNative(scope(ACTOR.ownerJiacn()),text(original,"skillKey"),installation,()->"must-not-admit"));
         assertHistoryUnchanged();
     }
+    @Test void retainedDifferentBuyerCanAdmitAndDisableButPredecessorCannot() throws Exception {
+        retainedFixture("new-owner");
+        var next=new cn.jia.agent.hosting.HostingRentHttp.Actor("new-buyer","0",ACTOR.clientId(),"new-owner");
+        for(String table:List.of("economy_hosting_rent_quote","economy_hosting_lease","economy_hosting_provisioning_intent"))
+            jdbc.update("UPDATE "+table+" SET principal_id='new-buyer'");
+        // Only the external authentication/Agent ownership adapters are synthetic; installation,
+        // paid inventory lookup, policy state and immutable provenance remain real MySQL.
+        var owners=(cn.jia.agent.hosting.HostingRentOwnerResolver)ReflectionTestUtils.getField(versions,"owners");
+        doReturn(next.ownerJiacn()).when(owners).requireOwner(next);
+        @SuppressWarnings("unchecked") var agents=(org.springframework.beans.factory.ObjectProvider<cn.jia.agent.service.AgentService>)ReflectionTestUtils.getField(versions,"agents");
+        var dto=new cn.jia.agent.entity.AgentRuntimeDTO();dto.setAgentId(AGENT);dto.setStatus("online");dto.setSystemAgent(false);
+        when(agents.getObject().requireApiKeyOwnedAgentForUpdate(next.clientId(),next.ownerJiacn(),AGENT)).thenReturn(dto);
+        when(agents.getObject().requireOwnedAgentCapabilities(next.tenantId(),next.clientId(),next.ownerJiacn(),AGENT)).thenReturn(dto);
+        catalog(current(original));
+        assertEquals("admitted",service.admitNative(scope(next.ownerJiacn()),text(original,"skillKey"),installation,()->"admitted"));
+        assertThrows(SkillMarketplaceException.class,()->service.admitNative(scope(ACTOR.ownerJiacn()),text(original,"skillKey"),installation,()->"wrong-owner"));
+        var installed=current(original);long before=wallet();
+        var disabled=service.create(next,AGENT,"new-owner-disable","request",map("action","DISABLE","skillKey",installed.get("skillKey"),
+                "sourceSkillInstallationId",installation,"expectedAgentVersion",Long.toString(versions.readOwned(next,AGENT)),
+                "expectedSkillRevision",installed.get("skillRevision")),false);
+        var change=db.findChange("0",ACTOR.clientId(),text(disabled,"skillChangeId"));
+        assertEquals(next.actorId(),change.getActorId());assertEquals(next.ownerJiacn(),change.getOwnerJiacn());
+        assertEquals(NEXT_RUNTIME,change.getRuntimeInstallationId());assertEquals(before,wallet());
+        assertThrows(SkillMarketplaceException.class,()->service.admitNative(scope(next.ownerJiacn()),text(original,"skillKey"),installation,()->"disabled"));
+        assertHistoryUnchanged();
+    }
+
 }
