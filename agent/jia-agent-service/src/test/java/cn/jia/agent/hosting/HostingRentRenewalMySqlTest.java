@@ -461,6 +461,10 @@ class HostingRentRenewalMySqlTest {
         var ledger = new HostingRentLedgerServiceImpl(leases, accounts, posting, manager);
         var initial = initialProvisionCommand(ledger, 3);
         var frozen = leases.selectQuoteForUpdate("tenant", "client", initial.quoteId());
+        var projected = leases.selectQuoteInventory("tenant", "client", initial.quoteId());
+        assertEquals(frozen.getInventoryHostId(), projected.getInventoryHostId());
+        assertEquals(frozen.getInventorySha256(), projected.getInventorySha256());
+        assertNull(leases.selectQuoteInventory("tenant", "CLIENT", initial.quoteId()));
         assertEquals(500L, frozen.getRecurringAmountWen());
         assertEquals(650L, frozen.getAmountWen());
         assertEquals(3L, frozen.getInitialSkillCount());
@@ -539,6 +543,21 @@ class HostingRentRenewalMySqlTest {
                     reconciler.wakeInitial("client", reserved.intentId());
                 }));
         assertNoInitialProvisionReservation();
+    }
+
+    @Test void confirmedInventoryNoEffectReturnsEntireFirstInvoiceWithoutStartingLease() {
+        new cn.jia.economy.config.EconomyHostingRentSchemaInitializer(jdbc).afterPropertiesSet();
+        var ledger=new HostingRentLedgerServiceImpl(leases,accounts,posting,manager);
+        var initial=initialProvisionCommand(ledger,3);
+        var reserved=ledger.reserve(initial);assertEquals(350,balance());
+        // Trusted Runtime proof acceptance is separately exercised by the actual Java->UDS suite.
+        ledger.confirmProvisioningFailedNoEffect(new HostingRentOutcomeCommand(scope,initial.principal(),reserved.intentId(),1,"inventory-rejected-proof"));
+        var command=new HostingRentSettlementCommand(scope,initial.principal(),
+                "00000000-0000-0000-0000-000000000203",new byte[32],reserved.intentId(),2);
+        var refunded=ledger.refund(command);assertEquals(refunded,ledger.refund(command));
+        assertEquals(1000,balance());
+        var lease=leases.selectLatestLease("tenant","client","agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        assertEquals("REFUNDED",lease.getStatus());assertNull(lease.getPaidFrom());assertNull(lease.getPaidThrough());
     }
 
     private HostingRentReserveCommand initialProvisionCommand(HostingRentLedgerService ledger) {
