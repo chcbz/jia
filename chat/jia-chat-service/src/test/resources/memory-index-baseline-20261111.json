@@ -1,0 +1,64 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0
+  },
+  "mappings": {
+    "properties": {
+      "categories": {
+        "type": "keyword"
+      },
+      "content": {
+        "type": "text",
+        "analyzer": "ik_max_word"
+      },
+      "conversation_count": {
+        "type": "integer"
+      },
+      "conversation_id": {
+        "type": "keyword"
+      },
+      "embedding": {
+        "type": "dense_vector",
+        "dims": 1024,
+        "index": true,
+        "similarity": "cosine",
+        "index_options": {
+          "type": "bbq_hnsw",
+          "m": 16,
+          "ef_construction": 100,
+          "rescore_vector": {
+            "oversample": 3.0
+          }
+        }
+      },
+      "id": {
+        "type": "keyword"
+      },
+      "jiacn": {
+        "type": "keyword"
+      },
+      "key_points": {
+        "type": "keyword"
+      },
+      "period_end": {
+        "type": "long"
+      },
+      "period_start": {
+        "type": "long"
+      },
+      "preferences": {
+        "type": "keyword"
+      },
+      "summary_type": {
+        "type": "keyword"
+      },
+      "timestamp": {
+        "type": "long"
+      },
+      "topic": {
+        "type": "keyword"
+      }
+    }
+  }
+}
