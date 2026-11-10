@@ -34,6 +34,14 @@ class AgentControllerTest {
             agentService, mock(AbilityEvaluationService.class), provisioning);
 
     @Test
+    void retiredHostedRepairRouteIsNotMappedAndCannotMutateBinding() throws Exception {
+        var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller).build();
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/agent/personas/bindings/17/repair"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isNotFound());
+        verifyNoInteractions(provisioning,agentService);
+    }
+
+    @Test
     void abilitiesSaveRequiresJwtAndMapsConflictAndValidationToHttpStatus() {
         var request = new cn.jia.agent.entity.AgentAbilitiesUpdateDTO();
         request.setExpectedAbilities(java.util.List.of());
@@ -71,7 +79,6 @@ class AgentControllerTest {
 
         Object catalogResponse = controller.personaCatalog(auth);
         controller.bindPersona("wuyong", request, auth);
-        controller.repairPersonaBinding(17L, auth);
         var rent = mock(HostingRentApplicationService.class);
         controller.setHostingRent(rent);
         var removal = assertInstanceOf(ResponseEntity.class, controller.unbindPersona("wuyong", auth,
@@ -87,7 +94,6 @@ class AgentControllerTest {
                 "0", "Client-A", "Owner-A");
         verify(agentService).listPersonaCatalog("0", "Client-A", "Owner-A");
         verify(provisioning).bind(scope, "wuyong", "local");
-        verify(provisioning).repair(scope, 17L);
         verifyNoMoreInteractions(provisioning);
     }
 
@@ -191,8 +197,6 @@ class AgentControllerTest {
                     () -> controller.personaCatalog(authentication));
             assertThrows(AgentBizException.class,
                     () -> controller.bindPersona("wuyong", request, authentication));
-            assertThrows(AgentBizException.class,
-                    () -> controller.repairPersonaBinding(1L, authentication));
             assertThrows(HostingRentApplicationException.class,
                     () -> controller.unbindPersona("wuyong", authentication, "{}".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
         }

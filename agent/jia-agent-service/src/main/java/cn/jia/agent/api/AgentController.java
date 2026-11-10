@@ -190,12 +190,6 @@ public class AgentController {
         return JsonResult.success(requirePersonaProvisioningService().bind(scope, personaCode, mode));
     }
 
-    @PostMapping("/personas/bindings/{bindingId}/repair")
-    public Object repairPersonaBinding(@PathVariable long bindingId, Authentication authentication) {
-        return JsonResult.success(requirePersonaProvisioningService()
-                .repair(requireJwtScope(authentication), bindingId));
-    }
-
     @DeleteMapping("/personas/{personaCode}/bind")
     public Object unbindPersona(@PathVariable String personaCode, Authentication authentication,
             @cn.jia.core.annotation.ApiJsonData @RequestBody byte[] rawBody) {

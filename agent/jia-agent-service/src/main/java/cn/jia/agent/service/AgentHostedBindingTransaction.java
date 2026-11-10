@@ -7,14 +7,12 @@ import cn.jia.agent.dao.AgentHostedProfileDao;
 import cn.jia.agent.dao.AgentPersonaBindingDao;
 import cn.jia.agent.dao.AgentPersonaDao;
 import cn.jia.agent.dao.AgentRuntimeDao;
-import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.entity.AgentHostedProfileEntity;
 import cn.jia.agent.entity.AgentIdentityRegistryEntity;
 import cn.jia.agent.entity.AgentPersonaBindingEntity;
 import cn.jia.agent.entity.AgentPersonaEntity;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentRuntimeEntity;
-import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StringUtil;
@@ -23,8 +21,6 @@ import cn.jia.oauth.service.ApiKeyService;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -43,29 +39,17 @@ public class AgentHostedBindingTransaction {
     private final AgentPersonaDao personaDao;
     private final AgentPersonaBindingDao bindingDao;
     private final AgentHostedProfileDao hostedDao;
-    private final AgentTaskMetaDao taskMetaDao;
     private final ObjectProvider<ApiKeyService> apiKeyProvider;
-    private final ObjectProvider<AgentEventPublisher> eventPublisherProvider;
-    private final AgentScopePublicationCoordinator scopePublicationCoordinator;
-    private final AgentHostedRuntimePublicationWorker runtimePublicationWorker;
 
     public AgentHostedBindingTransaction(AgentRuntimeDao runtimeDao, AgentIdentityService identityService,
             AgentPersonaDao personaDao, AgentPersonaBindingDao bindingDao,
-            AgentHostedProfileDao hostedDao, AgentTaskMetaDao taskMetaDao,
-            ObjectProvider<ApiKeyService> apiKeyProvider,
-            ObjectProvider<AgentEventPublisher> eventPublisherProvider,
-            AgentScopePublicationCoordinator scopePublicationCoordinator,
-            AgentHostedRuntimePublicationWorker runtimePublicationWorker) {
+            AgentHostedProfileDao hostedDao, ObjectProvider<ApiKeyService> apiKeyProvider) {
         this.runtimeDao = runtimeDao;
         this.identityService = identityService;
         this.personaDao = personaDao;
         this.bindingDao = bindingDao;
         this.hostedDao = hostedDao;
-        this.taskMetaDao = taskMetaDao;
         this.apiKeyProvider = apiKeyProvider;
-        this.eventPublisherProvider = eventPublisherProvider;
-        this.scopePublicationCoordinator = scopePublicationCoordinator;
-        this.runtimePublicationWorker = runtimePublicationWorker;
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -146,175 +130,6 @@ public class AgentHostedBindingTransaction {
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public Prepared resumeRepair(Scope scope, long bindingId) {
-        scope.requireLegacyHostedTenant();
-        AgentPersonaBindingEntity binding = bindingDao.findByIdForUpdate(bindingId);
-        if (binding == null) fail(AgentErrorConstants.AGENT_FORBIDDEN, "Hosted binding not found");
-        requireExactBinding(scope, binding);
-        AgentHostedProfileEntity hosted = hostedDao.findExactForUpdate(
-                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), bindingId);
-        if (hosted == null) fail(AgentErrorConstants.AGENT_FORBIDDEN, "Hosted binding not found");
-        requireExactHosted(scope, binding, hosted);
-        String checkpoint = requireEffectiveCheckpoint(hosted);
-        AgentHostedGeneration.requireAdvanceable(checkpoint, hosted.getGeneration());
-        AgentRuntimeEntity runtime = runtimeDao.findByAgentIdForUpdate(hosted.getCanonicalAgentId());
-        boolean suspensionCheckpoint = AgentHostedProfileState.SUSPENDING.equals(checkpoint)
-                || AgentHostedProfileState.SUSPENDED.equals(checkpoint);
-        require(runtime != null || suspensionCheckpoint, "Hosted runtime projection is missing");
-        if (AgentHostedProfileState.REPAIR_REQUIRED.equals(hosted.getLifecycleState())) {
-            require(hostedDao.resumeRepair(hosted.getId(), checkpoint, hosted.getGeneration()) == 1,
-                    "Hosted repair checkpoint changed concurrently");
-            hosted.setLifecycleState(checkpoint);
-            hosted.setResumeState(null);
-            hosted.setLastError(null);
-        }
-        AgentRuntimeDTO runtimeDto = runtime == null
-                ? runtimePlaceholder(hosted.getCanonicalAgentId()) : toDto(runtime);
-        String apiKey = AgentHostedProfileState.SUSPENDED.equals(hosted.getLifecycleState())
-                ? null : requireApiKeyMaterial(hosted);
-        return prepared(hosted, runtimeDto, requirePersona(scope, hosted.getPersonaCode()), apiKey);
-    }
-
-    @Transactional(rollbackFor = Exception.class)
-    public Prepared prepareUnbind(Scope scope, String personaCode) {
-        scope.requireLegacyHostedTenant();
-        AgentPersonaEntity persona = requirePersona(scope, personaCode);
-        AgentPersonaBindingEntity binding = bindingDao.findExactActiveByScopeAndPersonaForUpdate(
-                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), persona.getPersonaCode());
-        if (binding == null) fail(AgentErrorConstants.AGENT_FORBIDDEN, "Persona is not bound to current owner");
-        requireExactBinding(scope, binding);
-        AgentIdentityRegistryEntity identity = identityService.requireRegistrationIdentityInScope(
-                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), binding.getAgentId());
-        AgentHostedProfileEntity hosted = hostedDao.findExactForUpdate(
-                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), binding.getId());
-        if (hosted != null) requireExactHosted(scope, binding, hosted);
-        if (hosted != null) {
-            String checkpoint = requireEffectiveCheckpoint(hosted);
-            long generation = AgentHostedGeneration.requireNonNegative(hosted.getGeneration());
-            if (AgentHostedProfileState.ACTIVE.equals(checkpoint)) {
-                AgentHostedGeneration.requireTransition(AgentHostedProfileState.ACTIVE, generation,
-                        AgentHostedProfileState.SUSPENDING, generation);
-                AgentHostedGeneration.successor(generation);
-            } else if (AgentHostedProfileState.SUSPENDING.equals(checkpoint)) {
-                AgentHostedGeneration.requireTransition(AgentHostedProfileState.SUSPENDING, generation,
-                        AgentHostedProfileState.SUSPENDED, AgentHostedGeneration.successor(generation));
-            }
-        }
-        AgentRuntimeEntity runtime = runtimeDao.findByAgentIdForUpdate(identity.getCanonicalAgentId());
-        requireNoActiveTask(scope, identity.getCanonicalAgentId(), runtime);
-        if (hosted == null) {
-            suspendDatabase(scope, binding, identity, runtime);
-            publishOfflineAfterCommit(scope, runtime);
-            return null;
-        }
-        if (AgentHostedProfileState.REPAIR_REQUIRED.equals(hosted.getLifecycleState())
-                && AgentHostedProfileState.SUSPENDING.equals(hosted.getResumeState())) {
-            require(hostedDao.resumeRepair(hosted.getId(), AgentHostedProfileState.SUSPENDING,
-                    hosted.getGeneration()) == 1, "Hosted unbind repair changed concurrently");
-            hosted.setLifecycleState(AgentHostedProfileState.SUSPENDING);
-            hosted.setResumeState(null);
-            hosted.setLastError(null);
-            hosted.setDesiredEnabled(false);
-        } else if (AgentHostedProfileState.ACTIVE.equals(hosted.getLifecycleState())) {
-            require(hostedDao.transition(hosted.getId(), AgentHostedProfileState.ACTIVE,
-                    hosted.getGeneration(), AgentHostedProfileState.SUSPENDING,
-                    hosted.getGeneration(), false) == 1, "Hosted unbind state changed concurrently");
-            hosted.setLifecycleState(AgentHostedProfileState.SUSPENDING);
-            hosted.setDesiredEnabled(false);
-        } else if (!AgentHostedProfileState.SUSPENDING.equals(hosted.getLifecycleState())) {
-            fail(AgentErrorConstants.AGENT_ERROR, "Hosted profile cannot unbind from state " + hosted.getLifecycleState());
-        }
-        return prepared(hosted, runtime == null
-                ? runtimePlaceholder(hosted.getCanonicalAgentId()) : toDto(runtime),
-                persona, requireApiKeyMaterial(hosted));
-    }
-
-    @Transactional(rollbackFor = Exception.class)
-    public AgentHostedProfileEntity completeUnbind(Scope scope, long bindingId,
-            long expectedGeneration, long fileGeneration) {
-        scope.requireLegacyHostedTenant();
-        AgentHostedGeneration.requireTransition(AgentHostedProfileState.SUSPENDING,
-                expectedGeneration, AgentHostedProfileState.SUSPENDED, fileGeneration);
-        AgentPersonaBindingEntity binding = bindingDao.findByIdForUpdate(bindingId);
-        if (binding == null) fail(AgentErrorConstants.AGENT_FORBIDDEN, "Binding not found");
-        requireExactBinding(scope, binding);
-        AgentIdentityRegistryEntity identity = identityService.requireRegistrationIdentityInScope(
-                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), binding.getAgentId());
-        AgentHostedProfileEntity hosted = hostedDao.findExactForUpdate(
-                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), bindingId);
-        requireExactHosted(scope, binding, hosted);
-        AgentRuntimeEntity runtime = runtimeDao.findByAgentIdForUpdate(identity.getCanonicalAgentId());
-        requireNoActiveTask(scope, identity.getCanonicalAgentId(), runtime);
-        require(AgentHostedProfileState.SUSPENDING.equals(hosted.getLifecycleState())
-                && Objects.equals(hosted.getGeneration(), expectedGeneration), "Hosted unbind generation changed");
-        OauthApiKeyEntity key = exactKey(hosted);
-        if (key.getStatus() == null || key.getStatus() != 0) {
-            key.setStatus(0);
-            require(requireApiKeyService().update(key) != null, "Dedicated hosted API key disable failed");
-        }
-        suspendDatabase(scope, binding, identity, runtime);
-        require(hostedDao.transition(hosted.getId(), AgentHostedProfileState.SUSPENDING,
-                expectedGeneration, AgentHostedProfileState.SUSPENDED, fileGeneration, false) == 1,
-                "Hosted suspend state changed concurrently");
-        hosted.setLifecycleState(AgentHostedProfileState.SUSPENDED);
-        hosted.setGeneration(fileGeneration);
-        hosted.setDesiredEnabled(false);
-        hosted.setResumeState(null);
-        publishOfflineAfterCommit(scope, runtime);
-        return hosted;
-    }
-
-    private void requireNoActiveTask(Scope scope, String agentId, AgentRuntimeEntity runtime) {
-        if (runtime != null) {
-            if (!StringUtil.isBlank(runtime.getCurrentTaskId())
-                    || AgentConstants.STATUS_BUSY.equals(runtime.getStatus())) {
-                fail(AgentErrorConstants.AGENT_BUSY,
-                        "Agent cannot be unbound while it has active work");
-            }
-            if (!StringUtil.isBlank(runtime.getCurrentTaskTitle())) {
-                fail(AgentErrorConstants.AGENT_ERROR,
-                        "Agent task projection is inconsistent during unbind");
-            }
-        }
-        if (taskMetaDao.findDurableActiveAssignmentByAgentForUpdate(
-                scope.tenantId(), scope.clientId(), agentId) != null) {
-            fail(AgentErrorConstants.AGENT_BUSY,
-                    "Agent cannot be unbound while it has durable active work");
-        }
-    }
-
-    private void suspendDatabase(Scope scope, AgentPersonaBindingEntity binding,
-            AgentIdentityRegistryEntity identity, AgentRuntimeEntity runtime) {
-        binding.setStatus(AgentConstants.BINDING_STATUS_SUSPENDED);
-        require(bindingDao.updateById(binding) == 1, "Binding suspension failed");
-        identityService.suspendForBinding(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), binding.getId());
-        if (runtime != null) {
-            require(runtime.getId() != null && runtime.getId() > 0
-                    && Objects.equals(runtime.getAgentId(), identity.getCanonicalAgentId())
-                    && Objects.equals(runtime.getBindingId(), binding.getId())
-                    && Objects.equals(runtime.getClientId(), scope.clientId())
-                    && Objects.equals(runtime.getOwnerJiacn(), scope.ownerJiacn()), "Runtime scope mismatch during unbind");
-            long detachedAt = System.currentTimeMillis();
-            require(runtimeDao.clearBindingAfterUnbind(runtime.getId(), runtime.getAgentId(),
-                    binding.getId(), scope.clientId(), scope.ownerJiacn(), detachedAt) == 1,
-                    "Runtime suspension changed concurrently");
-            runtime.setClientId(null);
-            runtime.setOwnerJiacn(null);
-            runtime.setPersonaCode(null);
-            runtime.setPersonaName(null);
-            runtime.setBindingId(null);
-            runtime.setEndpoint(null);
-            runtime.setTokenHash(null);
-            runtime.setCurrentTaskId(null);
-            runtime.setCurrentTaskTitle(null);
-            runtime.setErrorMessage(null);
-            runtime.setStatus(AgentConstants.STATUS_OFFLINE);
-            runtime.setLastSeenAt(detachedAt);
-            runtime.setUpdateTime(detachedAt);
-        }
-    }
-
-    @Transactional(rollbackFor = Exception.class)
     public AgentHostedProfileEntity transition(Scope scope, long bindingId, String expectedState,
             long expectedGeneration, String nextState, long nextGeneration, boolean desiredEnabled) {
         scope.requireLegacyHostedTenant();
@@ -356,45 +171,6 @@ public class AgentHostedBindingTransaction {
         if (type.length() > 160) type = type.substring(0, 160);
         hostedDao.markRepair(hosted.getId(), expectedState, expectedResumeState,
                 expectedGeneration, resumeState, "HOSTED_PROFILE_FAILURE:" + type);
-    }
-
-    private void publishOfflineAfterCommit(Scope scope, AgentRuntimeEntity runtime) {
-        if (runtime == null || eventPublisherProvider == null || scopePublicationCoordinator == null
-                || runtimePublicationWorker == null
-                || !TransactionSynchronizationManager.isActualTransactionActive()
-                || !TransactionSynchronizationManager.isSynchronizationActive()) {
-            return;
-        }
-        String agentId = runtime.getAgentId();
-        Long runtimeId = runtime.getId();
-        if (StringUtil.isBlank(agentId) || runtimeId == null || runtimeId <= 0) {
-            return;
-        }
-        try {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    try {
-                        scopePublicationCoordinator.execute(scope.clientId(), scope.ownerJiacn(), () -> {
-                            AgentEventPublisher publisher = eventPublisherProvider.getIfAvailable();
-                            if (publisher == null) {
-                                return;
-                            }
-                            AgentRuntimeEntity current = runtimePublicationWorker
-                                    .revalidateDetachedForPublication(scope, agentId, runtimeId);
-                            if (current != null) {
-                                publisher.publishAgentStatus(
-                                        scope.clientId(), scope.ownerJiacn(), toDto(current));
-                            }
-                        });
-                    } catch (RuntimeException ignored) {
-                        // Optional snapshot publication must not invalidate the committed unbind.
-                    }
-                }
-            });
-        } catch (RuntimeException ignored) {
-            // Fail closed on registration; never publish before commit.
-        }
     }
 
     private String requireEffectiveCheckpoint(AgentHostedProfileEntity hosted) {
@@ -467,12 +243,6 @@ public class AgentHostedBindingTransaction {
         r.setLastSeenAt(System.currentTimeMillis());
         require(runtimeDao.insert(r) == 1, "Hosted runtime insert failed");
         return toDto(r);
-    }
-    private AgentRuntimeDTO runtimePlaceholder(String canonicalAgentId) {
-        AgentRuntimeDTO dto = new AgentRuntimeDTO();
-        dto.setAgentId(canonicalAgentId);
-        dto.setStatus(AgentConstants.STATUS_OFFLINE);
-        return dto;
     }
     private AgentRuntimeDTO toDto(AgentRuntimeEntity runtime) {
         AgentRuntimeDTO dto = new AgentRuntimeDTO();

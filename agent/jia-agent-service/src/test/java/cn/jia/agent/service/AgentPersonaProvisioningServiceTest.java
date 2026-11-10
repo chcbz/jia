@@ -55,7 +55,7 @@ class AgentPersonaProvisioningServiceTest {
     }
 
     @Test
-    void tenantOneCannotEnterServerHostedRepairOrUnbindPaths() {
+    void tenantOneCannotEnterLegacyServerHostedBind() {
         AgentService agentService = mock(AgentService.class);
         AgentHostedBindingTransaction transactions = mock(AgentHostedBindingTransaction.class);
         AgentHostedProfilePublisher publisher = mock(AgentHostedProfilePublisher.class);
@@ -65,47 +65,8 @@ class AgentPersonaProvisioningServiceTest {
 
         assertThrows(IllegalArgumentException.class,
                 () -> service.bind(tenantOne, "wuyong", "server"));
-        assertThrows(IllegalArgumentException.class,
-                () -> service.unbind(tenantOne, "wuyong"));
-        assertThrows(IllegalArgumentException.class,
-                () -> service.repair(tenantOne, 19L));
 
         verifyNoInteractions(agentService, transactions, publisher);
-    }
-
-    @Test
-    void suspendingRepairCompletesCrashWindowAndRepeatedRepairIsIdempotent() {
-        AgentService agentService = mock(AgentService.class);
-        AgentHostedBindingTransaction transactions = mock(AgentHostedBindingTransaction.class);
-        AgentHostedProfilePublisher publisher = mock(AgentHostedProfilePublisher.class);
-        AgentHostedProfileEntity suspending = hosted(AgentHostedProfileState.SUSPENDING, 4L);
-        AgentHostedProfileEntity suspended = hosted(AgentHostedProfileState.SUSPENDED, 5L);
-        AgentPersonaEntity persona = persona();
-        AgentRuntimeDTO runtime = runtime();
-        Prepared first = new Prepared(suspending, runtime, persona, "dedicated-secret");
-        Prepared second = new Prepared(suspended, runtime, persona, null);
-        AgentHostedProfilePublisher.PublishedPaths paths = paths(false, true);
-        when(transactions.resumeRepair(SCOPE, 19L)).thenReturn(first, second);
-        when(publisher.publish(suspending, persona, 4L, 5L, false, "dedicated-secret"))
-                .thenReturn(paths);
-        when(publisher.inspectExisting(suspended, 5L)).thenReturn(paths);
-        when(transactions.completeUnbind(SCOPE, 19L, 4L, 5L)).thenReturn(suspended);
-
-        AgentPersonaProvisioningService service =
-                new AgentPersonaProvisioningService(agentService, transactions, publisher);
-        var completed = service.repair(SCOPE, 19L);
-        var repeated = service.repair(SCOPE, 19L);
-
-        assertEquals(AgentHostedProfileState.SUSPENDED, completed.getHostedState());
-        assertEquals("19", completed.getBindingId());
-        assertEquals("5", completed.getGeneration());
-        assertEquals(AgentHostedProfileState.SUSPENDED, repeated.getHostedState());
-        assertTrue(repeated.getServerProfileAlreadyExists());
-        verify(publisher, times(1)).publish(suspending, persona, 4L, 5L, false, "dedicated-secret");
-        verify(publisher, times(1)).inspectExisting(suspended, 5L);
-        verify(transactions, times(1)).completeUnbind(SCOPE, 19L, 4L, 5L);
-        verify(transactions, never()).markRepair(any(), anyLong(), anyString(),
-                any(), anyLong(), anyString(), any());
     }
 
     @Test

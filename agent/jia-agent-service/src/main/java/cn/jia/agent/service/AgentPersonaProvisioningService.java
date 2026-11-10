@@ -36,54 +36,6 @@ public class AgentPersonaProvisioningService {
         return advance(scope, prepared);
     }
 
-    public void unbind(Scope scope, String personaCode) {
-        scope.requireLegacyHostedTenant();
-        Prepared prepared = transactions.prepareUnbind(scope, personaCode);
-        if (prepared == null) return;
-        AgentHostedProfileEntity hosted = prepared.hosted();
-        String expectedState = hosted.getLifecycleState();
-        String expectedResumeState = hosted.getResumeState();
-        long generation = AgentHostedGeneration.requireNonNegative(hosted.getGeneration());
-        long nextGeneration = AgentHostedGeneration.successor(generation);
-        try {
-            publisher.publish(hosted, prepared.persona(), generation, nextGeneration,
-                    false, prepared.apiKey());
-            transactions.completeUnbind(scope, hosted.getBindingId(), generation, nextGeneration);
-        } catch (RuntimeException failure) {
-            markRepair(scope, hosted, expectedState, expectedResumeState, generation,
-                    AgentHostedProfileState.SUSPENDING, failure);
-            throw failure;
-        }
-    }
-
-    public AgentPersonaBindResultDTO repair(Scope scope, long bindingId) {
-        scope.requireLegacyHostedTenant();
-        if (bindingId <= 0) throw new IllegalArgumentException("bindingId must be positive");
-        Prepared prepared = transactions.resumeRepair(scope, bindingId);
-        AgentHostedProfileEntity hosted = prepared.hosted();
-        if (AgentHostedProfileState.SUSPENDED.equals(hosted.getLifecycleState())) {
-            return result(prepared, publisher.inspectExisting(hosted, hosted.getGeneration()));
-        }
-        if (AgentHostedProfileState.SUSPENDING.equals(hosted.getLifecycleState())) {
-            String expectedState = hosted.getLifecycleState();
-            String expectedResumeState = hosted.getResumeState();
-            long generation = AgentHostedGeneration.requireNonNegative(hosted.getGeneration());
-            long nextGeneration = AgentHostedGeneration.successor(generation);
-            try {
-                AgentHostedProfilePublisher.PublishedPaths paths = publisher.publish(hosted, prepared.persona(),
-                        generation, nextGeneration, false, prepared.apiKey());
-                AgentHostedProfileEntity suspended = transactions.completeUnbind(
-                        scope, hosted.getBindingId(), generation, nextGeneration);
-                return result(new Prepared(suspended, prepared.agent(), prepared.persona(), null), paths);
-            } catch (RuntimeException failure) {
-                markRepair(scope, hosted, expectedState, expectedResumeState, generation,
-                        AgentHostedProfileState.SUSPENDING, failure);
-                throw failure;
-            }
-        }
-        return advance(scope, prepared);
-    }
-
     private AgentPersonaBindResultDTO advance(Scope scope, Prepared prepared) {
         AgentHostedProfileEntity hosted = prepared.hosted();
         AgentHostedProfilePublisher.PublishedPaths published = null;

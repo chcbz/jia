@@ -2,6 +2,13 @@
 
 基线 `7e2d07a05b9e9b18461e97abcff44642504320ff`；179 个method/path条目。源代码声明不是目标契约已完成。公共封装/权限/幂等见[目录说明](README.md)，人工复核关键链见[逐接口契约](critical-contracts.md)。
 
+## 2026-11-10 收尾入口变更（候选，尚未发布）
+
+- 相对源码基线`1ef7fffc36424584cc697750202fe76bb7474e2f`，移除旧`POST /agent/personas/bindings/{bindingId}/repair`映射及其旧直接解绑执行链，不提供自动转发/恢复旧SUSPENDING状态的兼容入口。
+- 移除仍使用`DELETE /agent/personas/{personaCode}/bind`，请求明确原`agentId/leaseId`，进入FINISHING而非立即清空绑定；最终释放只能在原证据/费用/私有清理完成后由统一调度执行。
+- 原生托管故障恢复沿现有hostingAction=REPROVISION合同及原意图恢复，不通过旧repair恢复；本变更不改其授权/幂等，不删除历史记录、公共实例或技能。
+- 下方7e2d07a基线条目和数量是历史源码库存，含已退役接口，不作为当前映射存在的证明；当前测试/发布证据见CYF统一调度handoff。
+
 ## `POST /agent/hall/collaboration/requests`
 
 - operationId：`AgentCollaborationRequestController.submit.POST`
