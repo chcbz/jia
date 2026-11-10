@@ -35,6 +35,7 @@ public final class HostingRentReconciler {
     private final TransactionTemplate transactions;
     private final cn.jia.agent.dao.AgentPersonaBindingDao bindings;
     private final boolean schemaEnabled;
+    private final cn.jia.core.security.FixedTenantAdmissionPolicy scope;
     private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(HostingRentReconciler.class);
     private final AtomicBoolean wake = new AtomicBoolean();
     private long freeScanAfterId;
@@ -45,12 +46,13 @@ public final class HostingRentReconciler {
             HostingRentOwnerResolver owners, ObjectProvider<ManagedHostingProvisioner> providers,
             ManagedHostingCredentials credentials, PlatformTransactionManager transactionManager,
             cn.jia.agent.dao.AgentPersonaBindingDao bindings,
+            cn.jia.core.security.FixedTenantAdmissionPolicy scope,
             @org.springframework.beans.factory.annotation.Value("${economy.hosting-rent.schema-enabled:false}") boolean schemaEnabled) {
         this.properties = properties; this.preview = preview; this.mapper = mapper; this.ledger = ledger;
         this.identities = identities; this.owners = owners; this.providers = providers;
         this.credentials = credentials;
         this.transactions = new TransactionTemplate(transactionManager);
-        this.bindings = bindings; this.schemaEnabled = schemaEnabled;
+        this.bindings = bindings; this.schemaEnabled = schemaEnabled; this.scope = scope;
     }
 
     public void wake() { wake.set(true); }
@@ -63,7 +65,7 @@ public final class HostingRentReconciler {
         if (provider == null || !provider.available()) return;
         wake.getAndSet(false);
         // Poll even without a wake: the persisted intent, NOT the in-memory signal, survives crashes.
-        var page = mapper.selectPendingIntents(scanAfterId);
+        var page = mapper.selectPendingIntents(scope.businessTenantId(), scope.clientId(), scanAfterId);
         scanAfterId = page.size() < 100 ? 0L : page.getLast().getId();
         for (EconomyHostingProvisioningIntentEntity row : page) {
             if (!preview.allows(row.getTenantId(), row.getClientId())) continue;
@@ -75,7 +77,7 @@ public final class HostingRentReconciler {
                         row.getIntentId(), unknown.getClass().getSimpleName());
             }
         }
-        var freePage = mapper.selectPendingReprovisions(freeScanAfterId);
+        var freePage = mapper.selectPendingReprovisions(scope.businessTenantId(), scope.clientId(), freeScanAfterId);
         freeScanAfterId = freePage.size() < 100 ? 0L : freePage.getLast().getId();
         for (var row : freePage) {
             if (!preview.allows(row.getTenantId(), row.getClientId())) continue;

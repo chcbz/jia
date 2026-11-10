@@ -315,10 +315,15 @@ public interface EconomyHostingRentMapper {
     EconomyHostingProvisioningIntentEntity selectIntent(@Param("tenantId") String tenantId,
             @Param("clientId") String clientId, @Param("intentId") String intentId);
 
-    @Select("SELECT " + INTENT_COLUMNS + " FROM economy_hosting_provisioning_intent"
-            + " WHERE quote_purpose='INITIAL' AND status IN ('FUNDS_RESERVED','PROVISIONING_UNKNOWN','SERVICE_READY','FAILED_NO_EFFECT')"
-            + " AND id>#{afterId} ORDER BY id LIMIT 100")
-    java.util.List<EconomyHostingProvisioningIntentEntity> selectPendingIntents(@Param("afterId") long afterId);
+    // Discovery partitions before ORDER BY/LIMIT; null client means all admitted clients in this tenant.
+    String DISCOVERY_SCOPE = "tenant_id=#{tenantId} AND BINARY tenant_id=BINARY #{tenantId}"
+            + " <if test='clientId != null'> AND client_id=#{clientId} AND BINARY client_id=BINARY #{clientId}</if>";
+
+    @Select("<script>SELECT " + INTENT_COLUMNS + " FROM economy_hosting_provisioning_intent WHERE " + DISCOVERY_SCOPE
+            + " AND quote_purpose='INITIAL' AND status IN ('FUNDS_RESERVED','PROVISIONING_UNKNOWN','SERVICE_READY','FAILED_NO_EFFECT')"
+            + " AND id&gt;#{afterId} ORDER BY id LIMIT 100</script>")
+    java.util.List<EconomyHostingProvisioningIntentEntity> selectPendingIntents(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("afterId") long afterId);
 
     @Update("UPDATE economy_hosting_lease SET binding_id=#{bindingId} WHERE " + EXACT_SCOPE
             + " AND lease_id=#{leaseId} AND OCTET_LENGTH(lease_id)=OCTET_LENGTH(#{leaseId})"
@@ -406,8 +411,10 @@ public interface EconomyHostingRentMapper {
     EconomyHostingReprovisionEntity selectLatestReprovision(@Param("tenantId") String tenantId,
             @Param("clientId") String clientId, @Param("leaseId") String leaseId);
 
-    @Select("SELECT * FROM economy_hosting_reprovision WHERE live_slot=1 AND id>#{afterId} ORDER BY id LIMIT 100")
-    java.util.List<EconomyHostingReprovisionEntity> selectPendingReprovisions(@Param("afterId") long afterId);
+    @Select("<script>SELECT * FROM economy_hosting_reprovision WHERE " + DISCOVERY_SCOPE
+            + " AND live_slot=1 AND id&gt;#{afterId} ORDER BY id LIMIT 100</script>")
+    java.util.List<EconomyHostingReprovisionEntity> selectPendingReprovisions(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("afterId") long afterId);
 
     @Insert("""
             INSERT INTO economy_hosting_reprovision(request_id,lease_id,intent_id,agent_id,persona_code,

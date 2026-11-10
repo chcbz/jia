@@ -50,6 +50,38 @@ class HostingRentReconcilerTest {
     private DataSourceTransactionManager manager;
     private JdbcTemplate jdbc;
 
+    @Test void pendingDiscoveryUsesProcessScopeForBothQueues() {
+        worker.reconcilePending();
+        verify(mapper).selectPendingIntents(TENANT, CLIENT, 0L);
+        verify(mapper).selectPendingReprovisions(TENANT, CLIENT, 0L);
+    }
+
+    @Test void discoverySqlPartitionsBeforePaginationWithOptionalConfiguredClient() throws Exception {
+        var configuration = new org.apache.ibatis.session.Configuration();
+        var language = new org.apache.ibatis.scripting.xmltags.XMLLanguageDriver();
+        for (String method : List.of("selectPendingIntents", "selectPendingReprovisions")) {
+            var annotation = EconomyHostingRentMapper.class.getMethod(method, String.class, String.class, long.class)
+                    .getAnnotation(org.apache.ibatis.annotations.Select.class);
+            var sqlSource = language.createSqlSource(configuration, String.join(" ", annotation.value()), java.util.Map.class);
+            var parameters = new java.util.HashMap<String, Object>();
+            parameters.put("tenantId", TENANT); parameters.put("clientId", CLIENT); parameters.put("afterId", 100L);
+            var bound = sqlSource.getBoundSql(parameters);
+            String sql = bound.getSql().replaceAll("\\s+", " ");
+            assertTrue(sql.indexOf("tenant_id=") < sql.indexOf("ORDER BY"));
+            assertTrue(sql.indexOf("client_id=") < sql.indexOf("ORDER BY"));
+            assertTrue(sql.contains("BINARY tenant_id=BINARY ?"));
+            assertTrue(sql.contains("BINARY client_id=BINARY ?"));
+            assertTrue(sql.contains("id>?") && sql.endsWith("LIMIT 100"));
+            assertEquals(List.of("tenantId", "tenantId", "clientId", "clientId", "afterId"),
+                    bound.getParameterMappings().stream().map(org.apache.ibatis.mapping.ParameterMapping::getProperty).toList());
+            parameters.put("clientId", null);
+            bound = sqlSource.getBoundSql(parameters);
+            assertFalse(bound.getSql().contains("client_id=?"));
+            assertEquals(List.of("tenantId", "tenantId", "afterId"),
+                    bound.getParameterMappings().stream().map(org.apache.ibatis.mapping.ParameterMapping::getProperty).toList());
+        }
+    }
+
     @BeforeEach
     void setUp() {
         var source = new DriverManagerDataSource("jdbc:h2:mem:rent_reconcile_" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1", "sa", "");
@@ -61,7 +93,7 @@ class HostingRentReconcilerTest {
         worker = new HostingRentReconciler(new AgentHostingRentProperties(true, "1", "1000000000", "2592000"),
                 new EconomyPreviewGate(new EconomyPreviewProperties(true, List.of(
                         new EconomyPreviewProperties.AllowedScope(TENANT, CLIENT)))), mapper, ledger, identities,
-                owners, providers, credentials, manager, bindings, true);
+                owners, providers, credentials, manager, bindings, new cn.jia.core.security.FixedTenantAdmissionPolicy(TENANT, CLIENT), true);
         intent = new EconomyHostingProvisioningIntentEntity().setId(1L).setTenantId(TENANT).setClientId(CLIENT)
                 .setPrincipalType("USER").setPrincipalId("Login-A").setAgentId(AGENT).setPersonaCode("wuyong")
                 .setIntentId("hri-test").setLeaseId("hrl-test").setQuotePurpose("INITIAL")
@@ -72,7 +104,7 @@ class HostingRentReconcilerTest {
         lease = new EconomyHostingLeaseEntity().setLeaseId("hrl-test").setAgentId(AGENT)
                 .setPrincipalType("USER").setPrincipalId("Login-A").setBindingId("17")
                 .setStatus("PROVISIONING").setLatestIntentId("hri-test");
-        when(mapper.selectPendingIntents(0L)).thenReturn(List.of(intent));
+        when(mapper.selectPendingIntents(TENANT, CLIENT, 0L)).thenReturn(List.of(intent));
         when(mapper.selectIntentForUpdate(TENANT, CLIENT, "hri-test")).thenReturn(intent);
         when(mapper.selectLeaseForUpdate(TENANT, CLIENT, "hrl-test")).thenReturn(lease);
         when(owners.requireOwner(any())).thenReturn(OWNER);
@@ -299,10 +331,10 @@ class HostingRentReconcilerTest {
         var rows = java.util.stream.LongStream.rangeClosed(1, 100).mapToObj(id ->
                 new EconomyHostingProvisioningIntentEntity().setId(id).setIntentId("held-" + id)
                         .setTenantId(TENANT).setClientId(CLIENT)).toList();
-        when(mapper.selectPendingIntents(0L)).thenReturn(rows);
-        when(mapper.selectPendingIntents(100L)).thenReturn(List.of());
+        when(mapper.selectPendingIntents(TENANT, CLIENT, 0L)).thenReturn(rows);
+        when(mapper.selectPendingIntents(TENANT, CLIENT, 100L)).thenReturn(List.of());
         worker.reconcilePending(); worker.reconcilePending(); worker.reconcilePending();
-        verify(mapper, times(2)).selectPendingIntents(0L); verify(mapper).selectPendingIntents(100L);
+        verify(mapper, times(2)).selectPendingIntents(TENANT, CLIENT, 0L); verify(mapper).selectPendingIntents(TENANT, CLIENT, 100L);
         verify(provider, never()).prepareAndObserve(any()); verifyNoInteractions(ledger);
     }
 
