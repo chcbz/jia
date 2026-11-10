@@ -456,6 +456,35 @@ class HostingRentRenewalMySqlTest {
     }
 
     /** Real reservation + durable provisioning key share the caller transaction, not an after-commit callback. */
+    @Test void firstInvoiceOneOffChargeIsNeverCarriedIntoAutomaticRenewal() throws Exception {
+        new cn.jia.economy.config.EconomyHostingRentSchemaInitializer(jdbc).afterPropertiesSet();
+        var ledger = new HostingRentLedgerServiceImpl(leases, accounts, posting, manager);
+        var initial = initialProvisionCommand(ledger);
+        var frozen = leases.selectQuoteForUpdate("tenant", "client", initial.quoteId());
+        assertEquals(500L, frozen.getRecurringAmountWen());
+        // Separate immutable invoice fixture: full inventory pricing is tested at its own boundary.
+        frozen.setId(null).setQuoteId("hrq-with-first-skill-fee").setAmountWen(650L)
+                .setIdempotencyKey("00000000-0000-0000-0000-000000000201".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        assertEquals(1, leases.insertQuote(frozen));
+        var confirmation = new HostingRentReserveCommand(scope, initial.principal(), initial.idempotencyKey(),
+                initial.requestHash(), frozen.getQuoteId());
+        var reserved = ledger.reserve(confirmation);
+        assertEquals(650L, reserved.amountWen()); assertEquals(350, balance());
+        ledger.confirmProvisioningSucceeded(new HostingRentOutcomeCommand(scope, initial.principal(), reserved.intentId(), 1, "first-fee-ready"));
+        ledger.capture(new HostingRentSettlementCommand(scope, initial.principal(),
+                "00000000-0000-0000-0000-000000000202", new byte[32], reserved.intentId(), 2));
+        assertEquals(500L, lease(reserved.leaseId()).getAmountWen());
+        // Move only the synthetic lease's timeline to the next due period, never alter quote history.
+        long due = now() - 1000;
+        jdbc.update("UPDATE economy_hosting_lease SET paid_from=?,paid_through=? WHERE lease_id=?", due - PERIOD, due, reserved.leaseId());
+        credit(200, "first-fee-next-period");
+        trigger(); trigger();
+        assertEquals(1, charges()); assertEquals(50, balance());
+        assertEquals(500L, lease(reserved.leaseId()).getAmountWen());
+        assertEquals(650L, jdbc.queryForObject("SELECT amount_wen FROM economy_hosting_provisioning_intent WHERE intent_id=?", Long.class, reserved.intentId()));
+        assertEquals(0L, jdbc.queryForObject("SELECT SUM(signed_amount_wen) FROM economy_entry", Long.class));
+    }
+
     @Test void initialProvisionScheduleCommitsWithFundsAndReplayDoesNotReserveTwice() {
         var ledger = new HostingRentLedgerServiceImpl(leases, accounts, posting, manager);
         var command = initialProvisionCommand(ledger);
