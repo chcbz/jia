@@ -177,21 +177,20 @@ class LongTermMemoryTaskThreadIsolationTest extends BaseMockTest {
         verify(spy, times(1)).syncConversation("99");
     }
 
-    @Test void scheduledAndManualEntryShareLockAndPropagateFailure() throws Exception {
+    @Test void manualEntryKeepsLockAndPropagatesFailureWithoutLocalTimer() throws Exception {
         MemoryJobHandler handler = new MemoryJobHandler();
         LongTermMemoryService sync = mock(LongTermMemoryService.class);
         ReflectionTestUtils.setField(handler, "longTermMemoryService", sync);
         ReflectionTestUtils.setField(handler, "distributedLock", locks);
-        ReflectionTestUtils.setField(handler, "taskExecutor", (java.util.concurrent.Executor) Runnable::run);
         when(locks.tryLock("chat:memory:sync-job", 0)).thenReturn(new ILock("job-lock", locks));
         doThrow(new IllegalStateException("index unavailable")).when(sync).syncPendingConversations();
-        handler.scheduledSync();
         assertThrows(IllegalStateException.class, () -> handler.execute(new cn.jia.task.job.JobContext()));
-        verify(locks, times(2)).unLock("job-lock");
+        verify(locks).unLock("job-lock");
         assertFalse(handler.isParallel());
-        assertNotNull(MemoryJobHandler.class.getMethod("scheduledSync").getAnnotation(Scheduled.class));
+        for (var method : MemoryJobHandler.class.getDeclaredMethods())
+            assertFalse(method.isAnnotationPresent(Scheduled.class));
         when(locks.tryLock("chat:memory:sync-job", 0)).thenReturn(null);
         assertTrue(handler.execute(new cn.jia.task.job.JobContext()).startsWith("SKIPPED:"));
-        verify(sync, times(2)).syncPendingConversations();
+        verify(sync).syncPendingConversations();
     }
 }

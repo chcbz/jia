@@ -3,9 +3,6 @@ package cn.jia.chat.job;
 import cn.jia.chat.service.LongTermMemoryService;
 import cn.jia.core.lock.IDistributedLock;
 import cn.jia.core.lock.ILock;
-import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.beans.factory.annotation.Qualifier;
-import java.util.concurrent.Executor;
 import cn.jia.task.job.JobContext;
 import cn.jia.task.job.JobHandler;
 import lombok.extern.slf4j.Slf4j;
@@ -26,6 +23,8 @@ import org.springframework.stereotype.Component;
 @Component
 public class MemoryJobHandler implements JobHandler {
 
+    static final String ALREADY_RUNNING = "SKIPPED: memory sync already running";
+
     private static final String JOB_NAME = "memory_sync";
     private static final String GROUP = "chat";
     private static final String DESCRIPTION = "对话记忆同步和汇总";
@@ -33,6 +32,9 @@ public class MemoryJobHandler implements JobHandler {
 
     @Value("${chat.memory.job.sync-cron:0 0 * * * ?}")
     private String syncCron;
+
+    @Value("${chat.memory.job.zone:Asia/Shanghai}")
+    private String zone = "Asia/Shanghai";
 
     @Value("${chat.memory.job.daily-summary-hour:2}")
     private int dailySummaryHour;
@@ -49,24 +51,6 @@ public class MemoryJobHandler implements JobHandler {
 
     @Autowired
     private IDistributedLock distributedLock;
-
-    @Autowired
-    @Qualifier("taskExecutor")
-    private Executor taskExecutor;
-
-    @Scheduled(cron = "${chat.memory.job.sync-cron:0 0 * * * ?}")
-    public void scheduledSync() {
-        // Do not hold the shared scheduler thread while providers and Elasticsearch are working.
-        JobContext context = JobContext.builder().jobId("memory-sync-" + java.util.UUID.randomUUID())
-                .jobName(JOB_NAME).group(GROUP).triggerTime(System.currentTimeMillis()).build();
-        taskExecutor.execute(() -> {
-            try {
-                execute(context);
-            } catch (Exception failure) {
-                log.error("Scheduled memory sync failed; pending snapshots retained", failure);
-            }
-        });
-    }
 
     @Override
     public String getName() {
@@ -101,10 +85,10 @@ public class MemoryJobHandler implements JobHandler {
         // Shared by the scheduled and existing manual handler entry points; watchdog lease.
         try (ILock lock = distributedLock.tryLock("chat:memory:sync-job", 0)) {
             if (lock == null) {
-                return "SKIPPED: memory sync already running";
+                return ALREADY_RUNNING;
             }
             // 获取当前小时
-            java.time.LocalDateTime now = java.time.LocalDateTime.now();
+            java.time.LocalDateTime now = java.time.LocalDateTime.now(java.time.ZoneId.of(zone));
             int hour = now.getHour();
             int dayOfWeek = now.getDayOfWeek().getValue();  // 1=Monday, 7=Sunday
             int dayOfMonth = now.getDayOfMonth();
