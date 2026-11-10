@@ -319,8 +319,8 @@ class AgentTaskBillingMySqlTransactionTest {
         assertEquals(1,jdbc.queryForObject("SELECT live_slot FROM economy_hosting_lease",Integer.class));
         assertEquals(1,jdbc.queryForObject("SELECT status FROM agent_persona_binding",Integer.class));
     }
-    @Test void expiredRelationshipSettlementCancelsFailedTaskAndReleasesHoldOnce() {
-        assign(); expiredRelationship(); jdbc.update("UPDATE agent_task_meta SET reward_status='failed'");
+    @Test void expiredRelationshipSettlementCancelsFailedTaskAndReleasesHoldOnce() throws Exception {
+        prepareCancellation(); assign(); expiredRelationship(); jdbc.update("UPDATE agent_task_meta SET reward_status='failed'");
         rentSettlement.settleExpiredTasks(new EconomyScope(TENANT, CLIENT), "expired-lease");
         rentSettlement.settleExpiredTasks(new EconomyScope(TENANT, CLIENT), "expired-lease");
         assertEquals("cancelled",taskState()); assertEquals("RELEASED",charge()); assertEquals(100,wallet(jdbc));

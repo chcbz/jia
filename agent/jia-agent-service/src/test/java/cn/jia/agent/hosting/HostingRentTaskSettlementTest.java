@@ -79,8 +79,8 @@ class HostingRentTaskSettlementTest {
         verifyNoInteractions(decisions, cancellations, deliveries);
     }
     @Test void relationshipChangeBeforeBindingLockDoesNotLockOrMutateNewLease() {
-        when(bindings.findExactActiveByScopeAndPersonaForUpdate("tenant", "client", "owner", "hero"))
-                .thenReturn(new AgentPersonaBindingEntity().setId(8L).setAgentId("agent"));
+        doReturn(new AgentPersonaBindingEntity().setId(8L).setAgentId("agent")).when(bindings)
+                .findExactActiveByScopeAndPersonaForUpdate("tenant", "client", "owner", "hero");
         service.settleExpiredTasks(scope, "lease"); verifyNoInteractions(leases, decisions, cancellations);
     }
     @Test void terminalOrReassignedTaskIsNotSettledAgain() {
