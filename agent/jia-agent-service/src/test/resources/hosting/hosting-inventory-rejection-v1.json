@@ -1,0 +1,46 @@
+{
+  "request": {
+    "protocol": "runtime-hosting-v1",
+    "method": "prepare",
+    "tenantId": "0",
+    "clientId": "fixture-client",
+    "ownerJiacn": "fixture-owner",
+    "canonicalAgentId": "agt_fixture",
+    "bindingId": "16",
+    "leaseId": "hrl_fixture",
+    "initialIntentId": "hri_fixture",
+    "operationId": "hri_fixture",
+    "operationKind": "INITIAL",
+    "reservedAt": 1791594000000,
+    "requestedAt": 1791594000000,
+    "validUntil": null,
+    "quotedInventory": {
+      "hostId": "fixture-host",
+      "inventorySha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  "response": {
+    "protocol": "runtime-hosting-v1",
+    "method": "prepare",
+    "tenantId": "0",
+    "clientId": "fixture-client",
+    "ownerJiacn": "fixture-owner",
+    "canonicalAgentId": "agt_fixture",
+    "bindingId": "16",
+    "leaseId": "hrl_fixture",
+    "initialIntentId": "hri_fixture",
+    "operationId": "hri_fixture",
+    "operationKind": "INITIAL",
+    "reservedAt": 1791594000000,
+    "requestedAt": 1791594000000,
+    "validUntil": null,
+    "quotedInventory": {
+      "hostId": "fixture-host",
+      "inventorySha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "outcome": "FAILED_NO_EFFECT",
+    "reasonCode": "HOSTING_INVENTORY_CHANGED",
+    "evidenceRef": "23e85f76637598f7d524c8700c92f120e05c3a0d4423abcc07e1a31965b485ee",
+    "hostId": "fixture-host"
+  }
+}

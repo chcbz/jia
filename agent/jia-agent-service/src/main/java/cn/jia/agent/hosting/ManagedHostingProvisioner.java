@@ -38,9 +38,20 @@ public interface ManagedHostingProvisioner {
     boolean flushEvidence(Preparation preparation, Candidate candidate, String handoverId);
     /** Durable private cleanup for the original relationship; does not grant rebinding or release business ownership. */
     boolean cleanup(Preparation preparation, Candidate candidate, String handoverId);
+    record QuotedInventory(String hostId, String inventorySha256) { }
     record Preparation(String tenantId, String clientId, String ownerJiacn, String agentId,
                        String intentId, String leaseId, String bindingId, long reservedAt,
-                       String operationId, long requestedAt, Long validUntil) {
+                       String operationId, long requestedAt, Long validUntil, QuotedInventory quotedInventory) {
+        public Preparation(String tenantId, String clientId, String ownerJiacn, String agentId,
+                           String intentId, String leaseId, String bindingId, long reservedAt,
+                           String operationId, long requestedAt, Long validUntil) {
+            this(tenantId, clientId, ownerJiacn, agentId, intentId, leaseId, bindingId, reservedAt,
+                    operationId, requestedAt, validUntil, null);
+        }
+        public Preparation withQuotedInventory(QuotedInventory value) {
+            return new Preparation(tenantId, clientId, ownerJiacn, agentId, intentId, leaseId, bindingId, reservedAt,
+                    operationId, requestedAt, validUntil, value);
+        }
         public Preparation(String tenantId, String clientId, String ownerJiacn, String agentId,
                            String intentId, String leaseId, String bindingId, long reservedAt) {
             this(tenantId, clientId, ownerJiacn, agentId, intentId, leaseId, bindingId, reservedAt,

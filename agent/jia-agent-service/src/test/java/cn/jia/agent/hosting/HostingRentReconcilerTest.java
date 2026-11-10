@@ -99,7 +99,7 @@ class HostingRentReconcilerTest {
                 owners, providers, credentials, manager, bindings, new cn.jia.core.security.FixedTenantAdmissionPolicy(TENANT, CLIENT), true, scheduleProvider);
         intent = new EconomyHostingProvisioningIntentEntity().setId(1L).setTenantId(TENANT).setClientId(CLIENT)
                 .setPrincipalType("USER").setPrincipalId("Login-A").setAgentId(AGENT).setPersonaCode("wuyong")
-                .setIntentId("hri-test").setLeaseId("hrl-test").setQuotePurpose("INITIAL")
+                .setIntentId("hri-test").setQuoteId("quote-test").setLeaseId("hrl-test").setQuotePurpose("INITIAL")
                 .setManagedApiKeyId("managed-key-31")
                 .setRuntimeInstallationId("rti_0123456789abcdef0123456789abcdef")
                 .setRuntimeManifestSha256("a".repeat(64)).setRuntimeProvisionGeneration(1L)
@@ -110,6 +110,8 @@ class HostingRentReconcilerTest {
         when(mapper.selectPendingIntents(TENANT, CLIENT, 0L)).thenReturn(List.of(intent));
         when(mapper.selectIntentForUpdate(TENANT, CLIENT, "hri-test")).thenReturn(intent);
         when(mapper.selectLeaseForUpdate(TENANT, CLIENT, "hrl-test")).thenReturn(lease);
+        when(mapper.selectQuoteInventory(TENANT, CLIENT, "quote-test")).thenReturn(new cn.jia.economy.entity.EconomyHostingRentQuoteEntity()
+                .setInventoryHostId("fixture-host").setInventorySha256("a".repeat(64)));
         when(owners.requireOwner(any())).thenReturn(OWNER);
         var identity = new AgentIdentityRegistryEntity().setBindingId(17L).setCanonicalAgentId(AGENT);
         when(identities.requireRegistrationIdentityInScope(TENANT, CLIENT, OWNER, AGENT)).thenReturn(identity);
@@ -211,6 +213,7 @@ class HostingRentReconcilerTest {
             var preparation = (ManagedHostingProvisioner.Preparation) call.getArgument(0);
             assertEquals(AGENT, preparation.agentId()); assertEquals("hri-test", preparation.intentId());
             assertEquals("17", preparation.bindingId());
+            assertEquals(new ManagedHostingProvisioner.QuotedInventory("fixture-host", "a".repeat(64)), preparation.quotedInventory());
             return new ManagedHostingProvisioner.Observation(preparation, ManagedHostingProvisioner.Outcome.SERVICE_READY, "trusted-proof-1");
         });
         when(ledger.capture(any())).thenAnswer(call -> {
@@ -434,4 +437,11 @@ class HostingRentReconcilerTest {
         assertEquals(intent.getVersion().longValue(), command.expectedIntentVersion());
         intent.setStatus(status).setVersion(intent.getVersion() + 1);
     }
+    @Test void missingFrozenInventoryCannotProvisionOrGuessARefund() {
+        when(mapper.selectQuoteInventory(TENANT,CLIENT,"quote-test")).thenReturn(null);
+        worker.reconcileOne(intent,provider);
+        verify(provider,never()).prepareAndObserve(any());verifyNoInteractions(ledger);
+        assertEquals("FUNDS_RESERVED",intent.getStatus());
+    }
+
 }

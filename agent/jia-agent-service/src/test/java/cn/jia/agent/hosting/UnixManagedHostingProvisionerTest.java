@@ -34,6 +34,11 @@ class UnixManagedHostingProvisionerTest {
                     java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes)));
             fixture = JSON.readValue(bytes, new TypeReference<Map<String, Object>>() {});
         }
+        // Keep frozen historical bytes intact; explicitly extend only initial prepare frames.
+        var quoted = Map.of("hostId", "fixture-host", "inventorySha256", "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945");
+        for (String name : List.of("prepareRequest", "preparedResponse")) {
+            var value = frame(name); value.put("quotedInventory", quoted); fixture.put(name, value);
+        }
         when(credentials.available()).thenReturn(true);
         when(sessions.currentRegisteredProof("0", "fixture-client", "agt_fixture")).thenReturn(proof("fixture-owner", "fixture-host", "fixture-instance", 2));
     }
@@ -102,7 +107,9 @@ class UnixManagedHostingProvisionerTest {
         return new ManagedHostingProvisioner.Preparation((String)f.get("tenantId"), (String)f.get("clientId"), (String)f.get("ownerJiacn"),
                 (String)f.get("canonicalAgentId"), (String)f.get("initialIntentId"), (String)f.get("leaseId"), (String)f.get("bindingId"),
                 ((Number)f.get("reservedAt")).longValue(), (String)f.get("operationId"), ((Number)f.get("requestedAt")).longValue(),
-                f.get("validUntil") == null ? null : ((Number)f.get("validUntil")).longValue());
+                f.get("validUntil") == null ? null : ((Number)f.get("validUntil")).longValue(),
+                f.containsKey("quotedInventory") ? new ManagedHostingProvisioner.QuotedInventory("fixture-host",
+                        "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945") : null);
     }
     private ManagedHostingProvisioner.Candidate candidate() { return UnixManagedHostingProvisioner.decodePrepared(preparation(), frame("preparedResponse")); }
     private AgentRuntimeAuthenticationService.Proof proof(String owner, String host, String instance, long generation) {
@@ -290,6 +297,12 @@ class UnixManagedHostingProvisionerTest {
                     .map(ManagedHostingProvisioner.InstalledSkill::skillKey).toList());
 
             var initial = preparation();
+            var stale = new ManagedHostingProvisioner.Preparation(initial.tenantId(), initial.clientId(), initial.ownerJiacn(), initial.agentId(),
+                    "stale-inventory-intent", initial.leaseId(), initial.bindingId(), initial.reservedAt())
+                    .withQuotedInventory(new ManagedHostingProvisioner.QuotedInventory("fixture-host", "a".repeat(64)));
+            var rejection = real.prepareAndObserve(stale);
+            assertEquals(ManagedHostingProvisioner.Outcome.FAILED_NO_EFFECT, rejection.outcome());
+            assertEquals(rejection, real.prepareAndObserve(stale)); assertTrue(candidates.isEmpty());
             var ready = pollFixtureReady(real, initial);
             assertEquals(initial, ready.preparation());
             var original = candidates.get(initial.operationId()); assertNotNull(original);
@@ -519,6 +532,31 @@ class UnixManagedHostingProvisionerTest {
         TransactionSynchronizationManager.setActualTransactionActive(true);
         try { assertThrows(IllegalStateException.class, () -> adapter.cleanup(preparation(), candidate(), "finish-fixture-lease")); }
         finally { TransactionSynchronizationManager.clear(); }
+    }
+
+    @Test void durableInventoryRejectionDoesNotCreateCredentialsOrStartSession() throws Exception {
+        var p=preparation();var response=new LinkedHashMap<>(UnixManagedHostingProvisioner.request(p,"prepare",null));
+        response.put("outcome","FAILED_NO_EFFECT");response.put("reasonCode","HOSTING_INVENTORY_CHANGED");
+        response.put("hostId","fixture-host");response.put("evidenceRef","a".repeat(64));
+        var adapter=adapter();doReturn(response).when(adapter).exchange(anyMap());
+        assertEquals(ManagedHostingProvisioner.Outcome.FAILED_NO_EFFECT,adapter.prepareAndObserve(p).outcome());
+        verify(credentials,never()).ensureInstallation(any(),any());verifyNoInteractions(sessions);
+        for(String field:List.of("hostId","quotedInventory","evidenceRef","initialIntentId","reasonCode")) {
+            var changed=new LinkedHashMap<>(response);changed.put(field,"wrong");
+            assertEquals(ManagedHostingProvisioner.Outcome.UNKNOWN,UnixManagedHostingProvisioner.decodeRejected(p,changed).outcome(),field);
+        }
+        var partial=new LinkedHashMap<>(response);partial.remove("quotedInventory");
+        assertEquals(ManagedHostingProvisioner.Outcome.UNKNOWN,UnixManagedHostingProvisioner.decodeRejected(p,partial).outcome());
+    }
+
+    @Test void sharedDurableRejectionBindsOriginalQuoteAndAssociation() throws Exception {
+        try(var input=getClass().getResourceAsStream("/hosting/hosting-inventory-rejection-v1.json")) {
+            assertNotNull(input);
+            var shared=JSON.readValue(input,new TypeReference<Map<String,Map<String,Object>>>() {});
+            var p=preparation().withQuotedInventory(new ManagedHostingProvisioner.QuotedInventory("fixture-host","a".repeat(64)));
+            assertEquals(shared.get("request"), wire(UnixManagedHostingProvisioner.request(p,"prepare",null)));
+            assertEquals(ManagedHostingProvisioner.Outcome.FAILED_NO_EFFECT,UnixManagedHostingProvisioner.decodeRejected(p,shared.get("response")).outcome());
+        }
     }
 
 }

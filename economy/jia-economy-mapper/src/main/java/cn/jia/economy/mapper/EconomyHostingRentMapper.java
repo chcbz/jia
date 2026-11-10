@@ -86,6 +86,16 @@ public interface EconomyHostingRentMapper {
             @Param("clientId") String clientId,
             @Param("quoteId") String quoteId);
 
+    /** Immutable quote projection; reconciliation must not lock a quote after its intent/lease. */
+    @Select("""
+            SELECT inventory_host_id,inventory_sha256 FROM economy_hosting_rent_quote
+            WHERE """ + EXACT_SCOPE + """
+              AND quote_id=#{quoteId} AND OCTET_LENGTH(quote_id)=OCTET_LENGTH(#{quoteId})
+            LIMIT 1
+            """)
+    EconomyHostingRentQuoteEntity selectQuoteInventory(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("quoteId") String quoteId);
+
     @Insert("""
             INSERT INTO economy_hosting_lease(
                 lease_id,principal_type,principal_id,persona_code,agent_id,binding_id,

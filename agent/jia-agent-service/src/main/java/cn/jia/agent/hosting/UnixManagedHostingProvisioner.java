@@ -125,7 +125,11 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
         outsideTransaction();
         if (!validPreparation(p) || !availableFor(p.tenantId(), p.clientId(), p.ownerJiacn())) return unknown(p);
         try {
-            Candidate candidate = decodePrepared(p, exchange(request(p, "prepare", null)));
+            if (p.operationId().equals(p.intentId()) && !validQuotedInventory(p.quotedInventory())) return unknown(p);
+            var prepared = exchange(request(p, "prepare", null));
+            var rejected = decodeRejected(p, prepared);
+            if (rejected.outcome() == Outcome.FAILED_NO_EFFECT) return rejected;
+            Candidate candidate = decodePrepared(p, prepared);
             if (candidate == null) return unknown(p);
             credentials.ensureInstallation(p, candidate); // DB-only atomic authorization/linkage, committed before ensure.
             var observed = exchange(request(p, "observe", candidate));
@@ -226,6 +230,10 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
                 || !Set.of("prepare", "current").contains(method) && candidate == null) throw new IllegalArgumentException("Invalid hosting control request");
         Map<String, Object> request = association(p);
         request.put("protocol", PROTOCOL); request.put("method", method);
+        if ("prepare".equals(method) && p.operationId().equals(p.intentId()) && p.quotedInventory() != null) {
+            if (!validQuotedInventory(p.quotedInventory())) throw new IllegalArgumentException("Invalid quoted inventory");
+            request.put("quotedInventory", Map.of("hostId", p.quotedInventory().hostId(), "inventorySha256", p.quotedInventory().inventorySha256()));
+        }
         if (!Set.of("prepare", "current").contains(method)) {
             request.put("installationId", candidate.installationId()); request.put("manifestSha256", candidate.manifestSha256());
             request.put("provisionGeneration", candidate.provisionGeneration());
@@ -241,6 +249,22 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
         fields.put("requestedAt", p.requestedAt()); fields.put("validUntil", p.validUntil());
         return fields;
     }
+    private static boolean validQuotedInventory(QuotedInventory inventory) {
+        return inventory != null && exact(inventory.hostId(), 100) && digest(inventory.inventorySha256());
+    }
+    /** Only a durable, exact prepare rejection is proof of no candidate/enrollment effect. */
+    static Observation decodeRejected(Preparation p, Map<String, Object> response) {
+        if (!validPreparation(p) || !p.operationId().equals(p.intentId()) || !validQuotedInventory(p.quotedInventory()) || response == null)
+            return unknown(p);
+        var expected = request(p, "prepare", null);
+        var allowed = new java.util.HashSet<>(expected.keySet());
+        allowed.addAll(Set.of("outcome", "reasonCode", "evidenceRef", "hostId"));
+        if (!response.keySet().equals(allowed) || !echoes(expected, response)
+                || !p.quotedInventory().hostId().equals(response.get("hostId"))
+                || !"FAILED_NO_EFFECT".equals(response.get("outcome")) || !"HOSTING_INVENTORY_CHANGED".equals(response.get("reasonCode"))
+                || !digest(response.get("evidenceRef"))) return unknown(p);
+        return new Observation(p, Outcome.FAILED_NO_EFFECT, (String) response.get("evidenceRef"));
+    }
     static Candidate decodePrepared(Preparation p, Map<String, Object> response) {
         if (!validPreparation(p) || response == null) return null;
         var expected = request(p, "prepare", null);
@@ -251,7 +275,8 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
                 || !installation(response.get("installationId")) || !digest(response.get("manifestSha256"))
                 || !digest(response.get("enrollmentSecretSha256")) || integral(response.get("enrollmentExpiresAt")) <= 0
                 || integral(response.get("provisionGeneration")) <= 0 || !exact(response.get("hostId"), 100)) return null;
-        if (p.operationId().equals(p.intentId()) && integral(response.get("provisionGeneration")) != 1) return null;
+        if (p.operationId().equals(p.intentId()) && (integral(response.get("provisionGeneration")) != 1
+                || !validQuotedInventory(p.quotedInventory()) || !p.quotedInventory().hostId().equals(response.get("hostId")))) return null;
         if (!(response.get("manifest") instanceof Map<?, ?> manifest)
                 || !manifest.keySet().equals(Set.of("runtimeProtocolVersion", "manifestVersion", "installationId",
                         "tenantId", "clientId", "canonicalAgentId", "manifestSha256"))
@@ -324,7 +349,8 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
         byte[] frame = (JSON.writeValueAsString(message) + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8);
         if (frame.length > MAX_FRAME) throw new IOException("Managed frame too large");
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(
-                "inventory".equals(request.get("method")) ? config.inventoryTimeoutMs() : config.timeoutMs());
+                ("inventory".equals(request.get("method")) || "prepare".equals(request.get("method")) && request.containsKey("quotedInventory"))
+                        ? config.inventoryTimeoutMs() : config.timeoutMs());
         try (SocketChannel channel = SocketChannel.open(StandardProtocolFamily.UNIX); Selector selector = Selector.open()) {
             channel.configureBlocking(false);
             if (!channel.connect(UnixDomainSocketAddress.of(socket))) {

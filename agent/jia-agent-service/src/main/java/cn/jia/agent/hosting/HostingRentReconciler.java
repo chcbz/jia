@@ -254,8 +254,11 @@ public final class HostingRentReconciler implements ScheduledJobHandler {
         if (!intent.getAgentId().equals(identity.getCanonicalAgentId())
                 || !lease.getBindingId().equals(binding.getId().toString())
                 || !intent.getPersonaCode().equals(binding.getPersonaCode())) return null;
+        var quote = mapper.selectQuoteInventory(actor.tenantId(), actor.clientId(), intent.getQuoteId());
+        if (quote == null || quote.getInventoryHostId() == null || quote.getInventorySha256() == null) return null;
         var preparation = new ManagedHostingProvisioner.Preparation(actor.tenantId(), actor.clientId(), owner,
-                intent.getAgentId(), intent.getIntentId(), intent.getLeaseId(), lease.getBindingId(), intent.getReservedAt());
+                intent.getAgentId(), intent.getIntentId(), intent.getLeaseId(), lease.getBindingId(), intent.getReservedAt())
+                .withQuotedInventory(new ManagedHostingProvisioner.QuotedInventory(quote.getInventoryHostId(), quote.getInventorySha256()));
         return new Snapshot(actor, preparation, intent.getStatus(), intent.getVersion(), intent);
     }
 
