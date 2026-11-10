@@ -575,6 +575,59 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         assertEquals("SUCCEEDED",current(change).get("status"));assertEquals("CAPTURED",current(change).get("fundingStatus"));
         assertEquals(99_999_950L,wallet());assertEquals(1,count("economy_skill_order"));
     }
+    private void executorStopped() {
+        when(rentalMapper.selectLatestLeaseForUpdate("0",ACTOR.clientId(),AGENT)).thenReturn(
+                new EconomyHostingLeaseEntity().setStatus("FINISHING").setPaidThrough(Long.MAX_VALUE)
+                        .setHandoverId("handover").setExecutorStoppedAt(1L));
+    }
+    @Test void latePreparedAfterConfirmedStopRefundsWithoutCreatingActivationAndRetainsOriginalEvidence() {
+        var change=install();executorStopped();
+        var original=result(change,evidence(change,"PREPARED",null));
+        var receipt=service.result(proof(),original);
+        assertEquals(receipt,service.result(proof(),original));
+        var ended=current(change);
+        assertEquals("FAILED_FINAL",ended.get("status"));assertEquals("ENTITLEMENT_TERMINATED",ended.get("reasonCode"));
+        assertEquals("REFUNDED",ended.get("fundingStatus"));assertEquals(false,ended.get("retryAllowed"));
+        assertEquals(100_000_000L,wallet());assertEquals(1,count("agent_skill_change_command"));
+        assertEquals(1,count("agent_outbox_event"));assertEquals(1,count("agent_skill_management_result"));
+        var command=db.findCommand("0",ACTOR.clientId(),text(command(change),"commandId"));
+        assertEquals("RESULT",command.getState());
+        assertEquals("PREPARED",read(command.getEvidenceJson().getBytes(java.nio.charset.StandardCharsets.UTF_8),"InstallEvidence").get("outcome"));
+    }
+    @Test void confirmedStopDoesNotTurnUnknownActivationIntoRefundOrReexecution() {
+        var change=install();report(change,"PREPARED",null);var activation=current(change);executorStopped();
+        report(activation,"UNKNOWN","RECEIPT_UNKNOWN");
+        var ended=current(activation);assertEquals("RECOVERY_REQUIRED",ended.get("status"));
+        assertEquals(99_999_950L,wallet());assertEquals("INSTALLING",jdbc.queryForObject("SELECT status FROM economy_skill_order",String.class));
+        assertEquals(2,count("agent_skill_change_command"));
+    }
+    @Test void actualAppliedBeforeStopIsStillCapturedFromLateOriginalEvidence() {
+        var change=install();report(change,"PREPARED",null);var activation=current(change);executorStopped();
+        var applied=result(activation,evidence(activation,"APPLIED",null));
+        var receipt=service.result(proof(),applied);assertEquals(receipt,service.result(proof(),applied));
+        assertEquals("CAPTURED",current(activation).get("fundingStatus"));assertEquals(99_999_950L,wallet());
+        assertEquals("ACTIVE",jdbc.queryForObject("SELECT status FROM economy_skill_order",String.class));
+    }
+
+    @Test void committedStopFencesPendingMutationDispatchWithoutRefundingUnknownDelivery() {
+        var change=install();var cmd=command(change);
+        byte[] wire=jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event",byte[].class);
+        executorStopped();clearInvocations(sessions);
+        assertThrows(SkillMarketplaceException.class,()->service.dispatch("0",ACTOR.clientId(),ACTOR.ownerJiacn(),
+                text(change,"skillChangeId"),AGENT,text(cmd,"commandId"),wire));
+        verify(sessions,never()).dispatch(anyString(),anyString(),anyString(),any(),any());
+        assertEquals(99_999_950L,wallet());assertEquals("INSTALLING",jdbc.queryForObject("SELECT status FROM economy_skill_order",String.class));
+    }
+    @Test void stoppedDisableKeepsAdmissionClosedWithoutAnEndlessPendingRepairCommand() {
+        var change=install();finishInstall(change);var disable=policyChange("DISABLE",current(change));executorStopped();
+        var original=result(disable,evidence(disable,"NOT_STARTED","ENTITLEMENT_TERMINATED"));
+        var receipt=service.result(proof(),original);assertEquals(receipt,service.result(proof(),original));
+        var cmd=db.findCommand("0",ACTOR.clientId(),text(command(disable),"commandId"));
+        assertEquals("RESULT",cmd.getState());assertEquals("SUCCEEDED",current(disable).get("status"));
+        assertEquals(false,db.lockState("0",ACTOR.clientId(),AGENT,"repo-test").getAdmissionEnabled());
+        assertEquals(99_999_950L,wallet());
+    }
+
     @Test void arrearsAndFinalFinishingBothBlockNewPolicyChanges() {
         var first=install();finishInstall(first);var installed=current(first);
         rentalStatus("FINISHING");long balance=wallet();int changes=count("agent_skill_change");

@@ -311,6 +311,8 @@ public final class EconomyHostingRentSchemaInitializer implements InitializingBe
                 column("paid_from", "bigint", true, null, ""),
                 column("paid_through", "bigint", true, null, ""),
                 column("locked_at", "bigint", true, null, ""),
+                column("handover_id", "varchar(100)", true, null, ""),
+                column("executor_stopped_at", "bigint", true, null, ""),
                 column("latest_intent_id", "varchar(100)", false, null, ""),
                 column("version", "bigint", false, null, ""),
                 column("tenant_id", "varchar(50)", false, null, ""),

@@ -99,7 +99,7 @@ public interface EconomyHostingRentMapper {
 
     @Select("""
             SELECT id,lease_id,principal_type,principal_id,persona_code,agent_id,binding_id,
-                   plan_id,plan_version,amount_wen,period_seconds,status,paid_from,paid_through,locked_at,
+                   plan_id,plan_version,amount_wen,period_seconds,status,paid_from,paid_through,locked_at,handover_id,executor_stopped_at,
                    latest_intent_id,version,tenant_id,client_id,create_time,update_time
             FROM economy_hosting_lease
             WHERE """ + EXACT_SCOPE + """
@@ -113,7 +113,7 @@ public interface EconomyHostingRentMapper {
 
     @Select("""
             SELECT id,lease_id,principal_type,principal_id,persona_code,agent_id,binding_id,
-                   plan_id,plan_version,amount_wen,period_seconds,status,paid_from,paid_through,locked_at,
+                   plan_id,plan_version,amount_wen,period_seconds,status,paid_from,paid_through,locked_at,handover_id,executor_stopped_at,
                    latest_intent_id,version,tenant_id,client_id,create_time,update_time
             FROM economy_hosting_lease
             WHERE """ + EXACT_SCOPE + """

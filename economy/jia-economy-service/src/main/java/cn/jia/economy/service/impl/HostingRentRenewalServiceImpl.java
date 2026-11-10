@@ -66,6 +66,25 @@ public final class HostingRentRenewalServiceImpl implements HostingRentRenewalSe
         return new HandoverSnapshot(intent, lease);
     }
 
+    @Override public void recordExecutorStopped(EconomyScope scope, EconomyPrincipal owner, String leaseId,
+            String bindingId, String agentId, String handoverId) {
+        gate.requireMutationAllowed(scope.tenantId(), scope.clientId());
+        if (!org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())
+            throw new IllegalStateException("Executor stop fact requires the original binding transaction");
+        if (handoverId == null || handoverId.isBlank() || handoverId.length() > 100)
+            throw new HostingRentException(LEASE_CONFLICT, "handover identity required");
+        var lease = leases.selectLeaseForUpdate(scope.tenantId(), scope.clientId(), leaseId);
+        if (owner == null || owner.type() != EconomyPrincipalType.USER || lease == null
+                || !"USER".equals(lease.getPrincipalType()) || !Objects.equals(owner.id(), lease.getPrincipalId())
+                || !Objects.equals(bindingId, lease.getBindingId()) || !Objects.equals(agentId, lease.getAgentId()))
+            throw new HostingRentException(NOT_FOUND_OR_FORBIDDEN, "lease relationship not found");
+        if (lease.getExecutorStoppedAt() != null && handoverId.equals(lease.getHandoverId())
+                && ("FINISHING".equals(lease.getStatus()) || "CLOSED".equals(lease.getStatus()))) return;
+        if (!"FINISHING".equals(lease.getStatus()) || lease.getExecutorStoppedAt() != null || lease.getHandoverId() != null
+                || renewal.recordExecutorStopped(scope.tenantId(), scope.clientId(), lease, handoverId, renewal.nowMillis()) != 1)
+            throw new HostingRentException(LEASE_CONFLICT, "executor stop relationship changed");
+    }
+
     @Override public Result completeHandover(EconomyScope scope, EconomyPrincipal owner, String leaseId,
                                               String bindingId, String agentId) {
         gate.requireMutationAllowed(scope.tenantId(), scope.clientId());

@@ -61,6 +61,8 @@ CREATE TABLE IF NOT EXISTS economy_hosting_lease (
     paid_from          BIGINT DEFAULT NULL,
     paid_through       BIGINT DEFAULT NULL,
     locked_at                BIGINT DEFAULT NULL,
+    handover_id              VARCHAR(100) DEFAULT NULL,
+    executor_stopped_at      BIGINT DEFAULT NULL,
     latest_intent_id   VARCHAR(100) NOT NULL,
     version            BIGINT NOT NULL,
     tenant_id          VARCHAR(50) NOT NULL,

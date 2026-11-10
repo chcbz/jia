@@ -18,6 +18,10 @@ public interface HostingRentRenewalService {
     HandoverSnapshot lockHandover(EconomyScope scope, String initialIntentId, String leaseId);
     record HandoverSnapshot(cn.jia.economy.entity.EconomyHostingProvisioningIntentEntity intent,
                            cn.jia.economy.entity.EconomyHostingLeaseEntity lease) { }
+    /** Internal lifecycle owner calls only after exact original Runtime QUIESCED, in the binding transaction.
+     * A lease status alone is never stop evidence. Idempotent for the original handover only. */
+    void recordExecutorStopped(EconomyScope scope, EconomyPrincipal owner, String leaseId,
+                               String bindingId, String agentId, String handoverId);
     /** Agent handover owner calls only after confirmed cleanup, in its original binding/revocation transaction.
      * Releases the financial live slot, not the Agent instance; no refund or new payment. */
     Result completeHandover(EconomyScope scope, EconomyPrincipal owner, String leaseId, String bindingId, String agentId);

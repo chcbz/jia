@@ -136,6 +136,57 @@ class HostingRentRenewalMySqlTest {
         assertEquals(1000, balance()); assertEquals(0, charges());
     }
 
+    @Test void handoverMigrationPreservesFinishingHistoryWithoutInventingStopEvidence() {
+        seed("finish","FINISHING",500,now(),null);
+        var before=lease("finish");
+        jdbc.execute("ALTER TABLE economy_hosting_lease DROP COLUMN executor_stopped_at, DROP COLUMN handover_id");
+        new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator(
+                new org.springframework.core.io.ClassPathResource("db/economy-hosting-handover-v1.sql"))
+                .execute(java.util.Objects.requireNonNull(jdbc.getDataSource()));
+        assertEquals(before,lease("finish"));assertNull(lease("finish").getExecutorStoppedAt());
+        assertEquals(1000,balance());assertEquals(0,charges());
+    }
+
+    private void stopped(String id, String user, String binding, String agent, String handover) {
+        new org.springframework.transaction.support.TransactionTemplate(manager).executeWithoutResult(tx ->
+                service.recordExecutorStopped(scope, new EconomyPrincipal(EconomyPrincipalType.USER, user), id, binding, agent, handover));
+    }
+    @Test void executorStopFactIsOriginalIdempotentAndDoesNotReleaseSlotOrChangeMoney() {
+        seed("finish", "FINISHING", 500, now(), null);
+        var before=lease("finish");
+        stopped("finish","user","binding-finish","agent-finish","handover-finish");
+        var first=lease("finish");
+        assertNotNull(first.getExecutorStoppedAt()); assertEquals("handover-finish",first.getHandoverId());
+        assertEquals(before.getVersion()+1,first.getVersion());
+        stopped("finish","user","binding-finish","agent-finish","handover-finish");
+        assertEquals(first,lease("finish"));
+        assertEquals("FINISHING",first.getStatus());assertEquals(before.getPaidThrough(),first.getPaidThrough());
+        assertEquals(1,jdbc.queryForObject("SELECT live_slot FROM economy_hosting_lease WHERE lease_id='finish'",Integer.class));
+        assertEquals(1000,balance());assertEquals(0,charges());
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM task_scheduled_work",Integer.class));
+    }
+    @Test void executorStopRequiresOriginalOwnerAndIrreversibleRelationship() {
+        seed("finish","FINISHING",500,now(),null); seed("locked","LOCKED",500,now(),now());
+        assertThrows(HostingRentException.class,()->stopped("locked","user","binding-locked","agent-locked","h"));
+        assertThrows(HostingRentException.class,()->stopped("finish","other","binding-finish","agent-finish","h"));
+        assertThrows(HostingRentException.class,()->stopped("finish","user","foreign","agent-finish","h"));
+        assertThrows(HostingRentException.class,()->stopped("finish","user","binding-finish","foreign","h"));
+        assertNull(lease("finish").getExecutorStoppedAt());
+        stopped("finish","user","binding-finish","agent-finish","h");
+        assertThrows(HostingRentException.class,()->stopped("finish","user","binding-finish","agent-finish","other"));
+        assertEquals("h",lease("finish").getHandoverId());
+    }
+    @Test void executorStopRequiresCallerTransactionAndRollbackDoesNotFenceSkills() {
+        seed("finish","FINISHING",500,now(),null);
+        var owner=new EconomyPrincipal(EconomyPrincipalType.USER,"user");
+        assertThrows(IllegalStateException.class,()->service.recordExecutorStopped(scope,owner,"finish","binding-finish","agent-finish","h"));
+        assertThrows(IllegalStateException.class,()->new org.springframework.transaction.support.TransactionTemplate(manager).executeWithoutResult(tx->{
+            service.recordExecutorStopped(scope,owner,"finish","binding-finish","agent-finish","h");
+            throw new IllegalStateException("original relationship transaction rolled back");
+        }));
+        assertNull(lease("finish").getExecutorStoppedAt());assertNull(lease("finish").getHandoverId());
+    }
+
     private HostingRentRenewalService.Result complete(String id, String user, String binding, String agent) {
         return new org.springframework.transaction.support.TransactionTemplate(manager).execute(tx ->
                 service.completeHandover(scope, new EconomyPrincipal(EconomyPrincipalType.USER, user), id, binding, agent));

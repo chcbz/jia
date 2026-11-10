@@ -813,6 +813,12 @@ public final class SkillManagementService {
             require(expected.equals(evidence.get("preparedSha256")),409,"SKILL_RESULT_CONFLICT");
             require(Objects.equals(state.getActiveInstallationId(),value.get("source")==null?null:object(value.get("source")).get("skillInstallationId")),409,"SKILL_STATE_CONFLICT");
             if(value.get("source")!=null)source(a,state,object(value.get("source")).get("skillInstallationId"));
+            if (hosting.executorStopped(a.tenantId(),a.clientId(),c.getAgentId())) {
+                // PREPARED proves only staging. This transaction has not created ACTIVATE;
+                // cancel the business change, retaining the original PREPARED evidence verbatim.
+                failChange(a,state,c,value,cmd,evidence,"ENTITLEMENT_TERMINATED",false,install);
+                return;
+            }
             // Durable ACTIVATE intent closes ONLY this skill's new admission before any bytes leave API.
             state.setAdmissionEnabled(false);one(db.saveState(state,revision));
             cmd.setPreparedSha256(expected);var activate=command(c,value,cmd.getRequestId(),"ACTIVATE",cmd);c.setCommandId(activate.getCommandId());
@@ -863,36 +869,48 @@ public final class SkillManagementService {
             // mandatory even for a terminal identity/entitlement diagnostic.
             boolean recoverable=("PREPARE".equals(phase)||Set.of("ENABLE","UNINSTALL").contains(text(value,"action")))
                     && !Set.of("IDENTITY_CHANGED","ENTITLEMENT_TERMINATED").contains(reason);
-            value.put("status",recoverable?"FAILED_RETRYABLE":"FAILED_FINAL");value.put("retryAllowed",recoverable);value.put("reasonCode",reason);
-            value.put("runtimeSynced",false);
-            var failedOrder=value.get("orderId")==null?null:trade.selectOrderForUpdate(a.tenantId(),a.clientId(),text(value,"orderId"));
-            var failedEnt=install?db.entitlement(a.tenantId(),a.clientId(),c.getEntitlementId()):null;
-            if(!recoverable&&failedOrder!=null) {
-                require("INSTALLING".equals(failedOrder.getStatus()),409,"SKILL_STATE_CONFLICT");
-                String refund=marketplace.settle(a,failedOrder,app.deliveryBinding(a.tenantId(),a.clientId(),text(object(value.get("target")),"skillInstallationId")),false,System.currentTimeMillis());
-                one(trade.markOrderRefunded(a.tenantId(),a.clientId(),failedOrder.getOrderId(),failedOrder.getVersion(),refund,System.currentTimeMillis()));
-                value.put("fundingStatus",failedOrder.getPriceWen()>0?"REFUNDED":"NONE");
-            }
-            if(install) {
-                var target=object(value.get("target"));String installId=text(target,"skillInstallationId");
-                var ent=failedEnt;long now=System.currentTimeMillis();
-                var i=market.selectInstallationForUpdate(a.tenantId(),a.clientId(),c.getAgentId(),installId);
-                one(market.markInstallationFailed(a.tenantId(),a.clientId(),c.getAgentId(),installId,i.getCommandId(),i.getAttempt(),i.getFencingToken(),i.getDeliveryEpoch(),i.getVersion(),text(value,"reasonCode"),now));
-                one(market.markEntitlementFailed(a.tenantId(),a.clientId(),c.getAgentId(),ent.getEntitlementId(),installId,ent.getVersion(),now));
-            }
-            state.setPendingChangeId(null);one(db.saveState(state,revision));save(c,value);
-            cmd.setState("RESULT").setEvidenceJson(json(evidence));one(db.saveCommand(cmd));return;
+            failChange(a,state,c,value,cmd,evidence,reason,recoverable,install);return;
         }
         if("DISABLE".equals(value.get("action"))&&Set.of("FAILED","NOT_STARTED").contains(outcome)) {
             // API success/admission closure is already durable. Only the original idempotent
             // policy intent is recovered; this must never create an installation or refund.
             value.put("runtimeSynced",false);value.put("reasonCode",evidence.get("reasonCode"));save(c,value);
+            if ("NOT_STARTED".equals(outcome) && "ENTITLEMENT_TERMINATED".equals(evidence.get("reasonCode"))
+                    && hosting.executorStopped(a.tenantId(),a.clientId(),c.getAgentId())) {
+                // Disable already closed API admission. A permanent stop has no live policy to repair.
+                state.setPendingChangeId(null);one(db.saveState(state,revision));
+                cmd.setState("RESULT").setEvidenceJson(json(evidence));one(db.saveCommand(cmd));return;
+            }
             cmd.setState("PENDING").setEvidenceJson(json(evidence));one(db.saveCommand(cmd));return;
         }
         // Unknown is never failure, refund, retry or permission to execute a second installation.
         if(!"DISABLE".equals(value.get("action"))) {value.put("status","RECOVERY_REQUIRED");value.put("reasonCode","RECEIPT_UNKNOWN");value.put("retryAllowed",false);save(c,value);}
         if(!"PREPARE".equals(phase)) {state.setAdmissionEnabled(false);one(db.saveState(state,revision));}
         cmd.setState("UNKNOWN");one(db.saveCommand(cmd));
+    }
+    private void failChange(HostingRentHttp.Actor a,SkillManagedStateEntity state,SkillChangeEntity c,
+            Map<String,Object> value,SkillChangeCommandEntity cmd,Map<String,Object> evidence,
+            String reason,boolean recoverable,boolean install) {
+        long revision=state.getSkillRevision();
+        value.put("status",recoverable?"FAILED_RETRYABLE":"FAILED_FINAL");value.put("retryAllowed",recoverable);value.put("reasonCode",reason);
+        value.put("runtimeSynced",false);
+        var failedOrder=value.get("orderId")==null?null:trade.selectOrderForUpdate(a.tenantId(),a.clientId(),text(value,"orderId"));
+        var failedEnt=install?db.entitlement(a.tenantId(),a.clientId(),c.getEntitlementId()):null;
+        if(!recoverable&&failedOrder!=null) {
+            require("INSTALLING".equals(failedOrder.getStatus()),409,"SKILL_STATE_CONFLICT");
+            String refund=marketplace.settle(a,failedOrder,app.deliveryBinding(a.tenantId(),a.clientId(),text(object(value.get("target")),"skillInstallationId")),false,System.currentTimeMillis());
+            one(trade.markOrderRefunded(a.tenantId(),a.clientId(),failedOrder.getOrderId(),failedOrder.getVersion(),refund,System.currentTimeMillis()));
+            value.put("fundingStatus",failedOrder.getPriceWen()>0?"REFUNDED":"NONE");
+        }
+        if(install) {
+            var target=object(value.get("target"));String installId=text(target,"skillInstallationId");
+            var ent=failedEnt;long now=System.currentTimeMillis();
+            var i=market.selectInstallationForUpdate(a.tenantId(),a.clientId(),c.getAgentId(),installId);
+            one(market.markInstallationFailed(a.tenantId(),a.clientId(),c.getAgentId(),installId,i.getCommandId(),i.getAttempt(),i.getFencingToken(),i.getDeliveryEpoch(),i.getVersion(),reason,now));
+            one(market.markEntitlementFailed(a.tenantId(),a.clientId(),c.getAgentId(),ent.getEntitlementId(),installId,ent.getVersion(),now));
+        }
+        state.setPendingChangeId(null);one(db.saveState(state,revision));save(c,value);
+        cmd.setState("RESULT").setEvidenceJson(json(evidence));one(db.saveCommand(cmd));return;
     }
     private void confirmCatalog(HostingRentHttp.Actor a,SkillManagedStateEntity state,SkillChangeEntity c,Map<String,Object> value) {
         if(!Set.of("VERIFYING","SUCCEEDED").contains(text(value,"status")))return;
@@ -966,6 +984,7 @@ public final class SkillManagementService {
             var data=decode(cmd.getDataJson(),"CommandData");
             require(state.getSkillRevision().toString().equals(data.get("skillRevision"))&&value.get("attempt").equals(data.get("attempt")),409,"SKILL_DELIVERY_FENCED");
             require(Arrays.equals(wire,bytes(map("protocolVersion",1,"requestId",cmd.getRequestId(),"messageType","command.dispatch","messageId",cmd.getMessageId(),"data",data))),409,"SKILL_DELIVERY_FENCED");
+            require("READ".equals(data.get("phase")) || !hosting.executorStopped(tenant,client,agent),409,"SKILL_DELIVERY_FENCED");
             if("WAITING_AGENT".equals(value.get("status"))) {value.put("status","PREPARE".equals(data.get("phase"))?"PREPARING":"ACTIVATING");value.put("reasonCode",null);save(c,value);}
             return null;
         }));

@@ -21,6 +21,8 @@ public class EconomyHostingLeaseEntity {
     private Long paidFrom;
     private Long paidThrough;
     private Long lockedAt;
+    private String handoverId;
+    private Long executorStoppedAt;
     private String latestIntentId;
     private Long version;
     private String tenantId;

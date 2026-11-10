@@ -27,6 +27,13 @@ public final class HostingRentWorkAdmission implements AgentHostingWorkAdmission
         requirePaidPeriod(lease(tenantId, clientId, agentId));
     }
 
+    /** Existing operations may finish during arrears/FINISHING. Only a committed real stop
+     * fact fences subsequent activation; callers already hold the original runtime/binding roots. */
+    public boolean executorStopped(String tenantId, String clientId, String agentId) {
+        var current = lease(tenantId, clientId, agentId);
+        return current != null && current.getExecutorStoppedAt() != null;
+    }
+
     private EconomyHostingLeaseEntity lease(String tenantId, String clientId, String agentId) {
         if (!schemaEnabled) return null;
         HostingRentHttp.exact(tenantId, 50); HostingRentHttp.exact(clientId, 50); HostingRentHttp.exact(agentId, 100);
