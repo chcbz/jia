@@ -98,7 +98,7 @@ CREATE TABLE IF NOT EXISTS agent_persona_binding (
 
 CREATE TABLE IF NOT EXISTS agent_identity_registry (
     id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
-    canonical_agent_id      VARCHAR(100) NOT NULL COMMENT 'ADR-001 canonical agentId | immutable after insert | never reused even after delete',
+    canonical_agent_id      VARCHAR(100) NOT NULL COMMENT 'Public Agent ID | immutable per relationship | retained across invitations',
     canonical_type          VARCHAR(32) NOT NULL COMMENT 'OPAQUE/LEGACY_CANONICAL/SYSTEM | immutable after insert',
     lifecycle_status        VARCHAR(20) NOT NULL DEFAULT 'PROVISIONED' COMMENT 'PROVISIONED/ACTIVE/SUSPENDED/RETIRED | RETIRED is terminal and cannot be reverted',
     client_id               VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope client after insert | NULL only for system identity',
@@ -113,7 +113,11 @@ CREATE TABLE IF NOT EXISTS agent_identity_registry (
     create_time             BIGINT DEFAULT NULL COMMENT 'Create time',
     update_time             BIGINT DEFAULT NULL COMMENT 'Update time',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_identity_registry_agent (canonical_agent_id),
+    live_agent_id VARCHAR(100) GENERATED ALWAYS AS (
+        CASE WHEN lifecycle_status IN ('PROVISIONED', 'ACTIVE') THEN canonical_agent_id ELSE NULL END
+    ) STORED,
+    UNIQUE KEY uk_identity_registry_live_agent (live_agent_id),
+    KEY idx_identity_registry_agent (canonical_agent_id),
     UNIQUE KEY uk_identity_registry_binding (binding_id),
     UNIQUE KEY uk_identity_registry_alias_target
         (id, canonical_agent_id, client_id, owner_jiacn, tenant_id),

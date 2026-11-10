@@ -321,7 +321,12 @@ public class AgentSchemaInitializer implements InitializingBean {
                 "tinyint", "tinyint", true, null,
                 "(case when ((alias_status = 'ACTIVE') and (valid_to is null)) then 1 else null end)");
 
-        ensureRequiredIndex("agent_identity_registry", "uk_identity_registry_agent", true,
+        validateIdentityColumn("agent_identity_registry", "live_agent_id",
+                "varchar", "varchar(100)", true, "utf8mb4_0900_bin",
+                "(case when (lifecycle_status in ('PROVISIONED','ACTIVE')) then canonical_agent_id else null end)");
+        ensureRequiredIndex("agent_identity_registry", "uk_identity_registry_live_agent", true,
+                List.of("live_agent_id"), "");
+        ensureRequiredIndex("agent_identity_registry", "idx_identity_registry_agent", false,
                 List.of("canonical_agent_id"), "");
         ensureRequiredIndex("agent_identity_registry", "uk_identity_registry_binding", true,
                 List.of("binding_id"), "");
@@ -645,7 +650,7 @@ public class AgentSchemaInitializer implements InitializingBean {
         jdbcTemplate.execute("""
                 CREATE TABLE IF NOT EXISTS agent_identity_registry (
                     id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
-                    canonical_agent_id      VARCHAR(100) NOT NULL COMMENT 'ADR-001 canonical agentId | immutable after insert | never reused even after delete',
+                    canonical_agent_id      VARCHAR(100) NOT NULL COMMENT 'Public Agent ID | immutable per relationship | retained across invitations',
                     canonical_type          VARCHAR(32) NOT NULL COMMENT 'OPAQUE/LEGACY_CANONICAL/SYSTEM | immutable after insert',
                     lifecycle_status        VARCHAR(20) NOT NULL DEFAULT 'PROVISIONED' COMMENT 'PROVISIONED/ACTIVE/SUSPENDED/RETIRED | RETIRED is terminal and cannot be reverted',
                     client_id               VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope client after insert | NULL only for system identity',
@@ -660,13 +665,16 @@ public class AgentSchemaInitializer implements InitializingBean {
                     create_time             BIGINT DEFAULT NULL COMMENT 'Create time',
                     update_time             BIGINT DEFAULT NULL COMMENT 'Update time',
                     PRIMARY KEY (id),
-                    UNIQUE KEY uk_identity_registry_agent (canonical_agent_id),
+                    live_agent_id VARCHAR(100) GENERATED ALWAYS AS
+                        (CASE WHEN lifecycle_status IN ('PROVISIONED', 'ACTIVE') THEN canonical_agent_id ELSE NULL END)%s,
+                    UNIQUE KEY uk_identity_registry_live_agent (live_agent_id),
+                    KEY idx_identity_registry_agent (canonical_agent_id),
                     UNIQUE KEY uk_identity_registry_binding (binding_id),
                     UNIQUE KEY uk_identity_registry_alias_target
                         (id, canonical_agent_id, client_id, owner_jiacn, tenant_id),
                     KEY idx_identity_registry_scope_status (tenant_id, client_id, owner_jiacn, lifecycle_status)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Durable canonical Agent identity registry | collation binary enforces exact case matching'
-                """);
+                """.formatted(generatedColumnStorage));
         jdbcTemplate.execute("""
                 CREATE TABLE IF NOT EXISTS agent_identity_alias (
                     id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',

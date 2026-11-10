@@ -1553,6 +1553,9 @@ class AgentSchemaInitializerTest extends BaseMockTest {
             case "active_key" -> new AgentSchemaInitializer.ColumnDefinition(
                     "tinyint", "tinyint", true, null,
                     "case when alias_status = 'ACTIVE' and valid_to is null then 1 else null end");
+            case "live_agent_id" -> new AgentSchemaInitializer.ColumnDefinition(
+                    "varchar", "varchar(100)", true, "utf8mb4_0900_bin",
+                    "case when lifecycle_status in ('PROVISIONED','ACTIVE') then canonical_agent_id else null end");
             case "canonical_agent_id", "alias_value" -> new AgentSchemaInitializer.ColumnDefinition(
                     "varchar", "varchar(100)", false, "utf8mb4_0900_bin", "");
             case "canonical_type", "alias_type" -> new AgentSchemaInitializer.ColumnDefinition(
@@ -1569,7 +1572,8 @@ class AgentSchemaInitializerTest extends BaseMockTest {
 
     private List<AgentSchemaInitializer.IndexColumn> identityIndex(String table, String index) {
         List<String> columns = switch (index) {
-            case "uk_identity_registry_agent" -> List.of("canonical_agent_id");
+            case "uk_identity_registry_live_agent" -> List.of("live_agent_id");
+            case "idx_identity_registry_agent" -> List.of("canonical_agent_id");
             case "uk_identity_registry_binding" -> List.of("binding_id");
             case "uk_identity_registry_alias_target" ->
                     List.of("id", "canonical_agent_id", "client_id", "owner_jiacn", "tenant_id");

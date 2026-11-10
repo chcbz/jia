@@ -129,6 +129,117 @@ class HostingRentRenewalMySqlTest {
         wallet("tenant", "client", "user", 1000);
     }
     @AfterEach void dropSchema() { if (database != null) admin.execute("DROP DATABASE `" + database + "`"); }
+    @Test void reinvitationPreservesOriginalReadGrantAndUsesFreshPrivateRelationship() throws Exception {
+        var identities = identityFixture();
+        String agent = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var old = inviteIdentity(identities, "old-owner", agent);
+        new org.springframework.transaction.support.TransactionTemplate(manager).executeWithoutResult(tx ->
+                identities.activateForFirstRegistration(old));
+        jdbc.update("UPDATE agent_persona_binding SET status=0 WHERE id=?", old.getBindingId());
+        identities.suspendForBinding("tenant", "client", "old-owner", old.getBindingId());
+        var retained = jdbc.queryForMap("SELECT * FROM agent_identity_registry WHERE id=?", old.getId());
+        var next = inviteIdentity(identities, "new-owner", agent);
+        assertNotEquals(old.getId(), next.getId()); assertNotEquals(old.getBindingId(), next.getBindingId());
+        assertEquals(agent, identities.requireRegistrationIdentityInScope("tenant", "client", "new-owner", agent).getCanonicalAgentId());
+        assertThrows(cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException.class,
+                () -> identities.requireRegistrationIdentityInScope("tenant", "client", "old-owner", agent));
+        assertEquals(agent, identities.requirePersistedCanonicalAgentIdInScope("tenant", "client", "old-owner", agent));
+        assertThrows(cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException.class,
+                () -> identities.requirePersistedCanonicalAgentIdInScope("tenant", "client", "new-owner", agent));
+        assertEquals(retained, jdbc.queryForMap("SELECT * FROM agent_identity_registry WHERE id=?", old.getId()));
+        assertThrows(org.springframework.dao.DataIntegrityViolationException.class, () -> jdbc.update("""
+                INSERT INTO agent_identity_registry (canonical_agent_id,canonical_type,lifecycle_status,
+                    tenant_id,client_id,owner_jiacn,binding_id,audit_reason)
+                VALUES (?,'OPAQUE','PROVISIONED','tenant','client','intruder',999,'conflicting live relationship')
+                """, agent));
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM agent_identity_registry", Integer.class));
+        assertThrows(org.springframework.dao.DataAccessException.class, () -> jdbc.update(
+                "UPDATE agent_identity_registry SET owner_jiacn='new-owner' WHERE id=?", old.getId()));
+    }
+
+    @Test void sameOwnerNewInvitationDoesNotHidePreviouslyActivatedHistory() throws Exception {
+        var identities = identityFixture();
+        String agent = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var old = inviteIdentity(identities, "owner", agent);
+        new org.springframework.transaction.support.TransactionTemplate(manager).executeWithoutResult(tx ->
+                identities.activateForFirstRegistration(old));
+        jdbc.update("UPDATE agent_persona_binding SET status=0 WHERE id=?", old.getBindingId());
+        identities.suspendForBinding("tenant", "client", "owner", old.getBindingId());
+        var next = inviteIdentity(identities, "owner", agent);
+        assertEquals(next.getId(), identities.requireRegistrationIdentityInScope("tenant", "client", "owner", agent).getId());
+        assertEquals(agent, identities.requirePersistedCanonicalAgentIdInScope("tenant", "client", "owner", agent));
+        assertThrows(cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException.class,
+                () -> identities.requirePersistedCanonicalAgentIdInScope("tenant", "client", "foreign-owner", agent));
+    }
+
+    @Test void identityReinvitationMigrationPreservesRowsAndImmutableTriggers() throws Exception {
+        var identities = identityFixture();
+        // Recreate only the previous unique-index shape, then apply the real focused migration.
+        jdbc.execute("ALTER TABLE agent_identity_registry DROP INDEX uk_identity_registry_live_agent, "
+                + "DROP INDEX idx_identity_registry_agent, DROP COLUMN live_agent_id, "
+                + "ADD UNIQUE KEY uk_identity_registry_agent(canonical_agent_id)");
+        var old = inviteIdentity(identities, "owner", "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        var before = jdbc.queryForMap("SELECT * FROM agent_identity_registry WHERE id=?", old.getId());
+        jdbc.update("""
+                INSERT INTO agent_identity_alias (registry_id,canonical_agent_id,alias_type,alias_value,alias_status,
+                    valid_from,client_id,owner_jiacn,tenant_id,audit_reason)
+                VALUES (?,?,'LEGACY_AGENT_ID','old-alias','ACTIVE',1,'client','owner','tenant','original evidence')
+                """, old.getId(), old.getCanonicalAgentId());
+        var alias = jdbc.queryForMap("SELECT * FROM agent_identity_alias");
+        var migration = new ResourceDatabasePopulator(new ClassPathResource("db/agent-identity-reinvitation-v1.sql"));
+        migration.execute(java.util.Objects.requireNonNull(jdbc.getDataSource()));
+        migration.execute(java.util.Objects.requireNonNull(jdbc.getDataSource()));
+        var after = jdbc.queryForMap("SELECT * FROM agent_identity_registry WHERE id=?", old.getId());
+        assertEquals(old.getCanonicalAgentId(), after.remove("live_agent_id")); assertEquals(before, after);
+        assertEquals(alias, jdbc.queryForMap("SELECT * FROM agent_identity_alias"));
+        assertThrows(org.springframework.dao.DataAccessException.class, () -> jdbc.update(
+                "UPDATE agent_identity_registry SET owner_jiacn='other' WHERE id=?", old.getId()));
+    }
+
+    private cn.jia.agent.service.impl.AgentIdentityServiceImpl identityFixture() throws Exception {
+        jdbc.execute("""
+                CREATE TABLE agent_persona_binding (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY, jiacn VARCHAR(50), persona_code VARCHAR(50),
+                    agent_id VARCHAR(100), bound_at BIGINT, status INT, tenant_id VARCHAR(50), client_id VARCHAR(50),
+                    create_time BIGINT, update_time BIGINT
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
+                """);
+        String ddl = new ClassPathResource("db/agent-identity-schema.sql").getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+        for (String table : List.of("agent_identity_registry", "agent_identity_alias")) {
+            int start = ddl.indexOf("CREATE TABLE IF NOT EXISTS " + table);
+            jdbc.execute(ddl.substring(start, ddl.indexOf(";", start)));
+        }
+        // Use the production immutable-relationship trigger, not a permissive test-only owner update.
+        int trigger = ddl.indexOf("CREATE TRIGGER trg_identity_registry_immutable_update");
+        jdbc.execute(ddl.substring(trigger, ddl.indexOf("END$$", trigger) + 3));
+        var configuration = new MybatisConfiguration(); configuration.setMapUnderscoreToCamelCase(true);
+        configuration.addMapper(cn.jia.agent.mapper.AgentIdentityRegistryMapper.class);
+        configuration.addMapper(cn.jia.agent.mapper.AgentIdentityAliasMapper.class);
+        configuration.addMapper(cn.jia.agent.mapper.AgentPersonaBindingMapper.class);
+        var factory = new MybatisSqlSessionFactoryBean(); factory.setDataSource(jdbc.getDataSource()); factory.setConfiguration(configuration);
+        var template = new SqlSessionTemplate(factory.getObject());
+        var registry = new cn.jia.agent.dao.impl.AgentIdentityRegistryDaoImpl();
+        var aliases = new cn.jia.agent.dao.impl.AgentIdentityAliasDaoImpl();
+        var bindings = new cn.jia.agent.dao.impl.AgentPersonaBindingDaoImpl();
+        ReflectionTestUtils.setField(registry,"baseMapper",template.getMapper(cn.jia.agent.mapper.AgentIdentityRegistryMapper.class));
+        ReflectionTestUtils.setField(aliases,"baseMapper",template.getMapper(cn.jia.agent.mapper.AgentIdentityAliasMapper.class));
+        ReflectionTestUtils.setField(bindings,"baseMapper",template.getMapper(cn.jia.agent.mapper.AgentPersonaBindingMapper.class));
+        return new cn.jia.agent.service.impl.AgentIdentityServiceImpl(registry, aliases, bindings);
+    }
+
+    private cn.jia.agent.entity.AgentIdentityRegistryEntity inviteIdentity(
+            cn.jia.agent.service.impl.AgentIdentityServiceImpl identities, String owner, String agent) {
+        jdbc.update("""
+                INSERT INTO agent_persona_binding (jiacn,persona_code,agent_id,bound_at,status,tenant_id,client_id)
+                VALUES (?,'wuyong',?,1,1,'tenant','client')
+                """, owner, agent);
+        long id = jdbc.queryForObject("SELECT MAX(id) FROM agent_persona_binding", Long.class);
+        var binding = new cn.jia.agent.entity.AgentPersonaBindingEntity();
+        binding.setId(id); binding.setJiacn(owner); binding.setPersonaCode("wuyong"); binding.setAgentId(agent);
+        binding.setBoundAt(1L); binding.setStatus(1); binding.setTenantId("tenant"); binding.setClientId("client");
+        return identities.provisionOpaqueIdentity(binding, "authorized invitation fixture");
+    }
+
     @Test void finalReleaseRetainsPublicInstanceAndClearsPrivateRelationship() {
         seedRuntimeProjection();
         assertEquals(1, runtimeProjection.clearBindingAfterUnbind(1, "agent", 7, "client", "old-owner", 100));

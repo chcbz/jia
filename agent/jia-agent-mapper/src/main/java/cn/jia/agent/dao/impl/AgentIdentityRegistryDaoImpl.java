@@ -23,7 +23,7 @@ public class AgentIdentityRegistryDaoImpl
         IdentityExactQuerySupport.exact(query, "client_id", clientId, 200);
         IdentityExactQuerySupport.exact(query, "owner_jiacn", ownerJiacn, 200);
         IdentityExactQuerySupport.exact(query, "canonical_agent_id", canonicalAgentId, 400);
-        return baseMapper.selectOne(query.last("limit 1"));
+        return baseMapper.selectOne(query.in("lifecycle_status", "PROVISIONED", "ACTIVE").last("limit 1"));
     }
 
     @Override
@@ -37,7 +37,23 @@ public class AgentIdentityRegistryDaoImpl
         IdentityExactQuerySupport.exact(query, "client_id", clientId, 200);
         IdentityExactQuerySupport.exact(query, "owner_jiacn", ownerJiacn, 200);
         IdentityExactQuerySupport.exact(query, "canonical_agent_id", canonicalAgentId, 400);
-        return baseMapper.selectOne(query.last("limit 1 FOR UPDATE"));
+        return baseMapper.selectOne(query.in("lifecycle_status", "PROVISIONED", "ACTIVE").last("limit 1 FOR UPDATE"));
+    }
+
+    @Override
+    public AgentIdentityRegistryEntity findActivatedByCanonicalInScope(
+            String tenantId, String clientId, String ownerJiacn, String canonicalAgentId) {
+        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
+        requireExact(canonicalAgentId, "canonicalAgentId", 400);
+        requireSystemTenantScope(tenantId, canonicalAgentId);
+        QueryWrapper<AgentIdentityRegistryEntity> query = new QueryWrapper<>();
+        IdentityExactQuerySupport.exact(query, "tenant_id", tenantId, 200);
+        IdentityExactQuerySupport.exact(query, "client_id", clientId, 200);
+        IdentityExactQuerySupport.exact(query, "owner_jiacn", ownerJiacn, 200);
+        IdentityExactQuerySupport.exact(query, "canonical_agent_id", canonicalAgentId, 400);
+        // A new, not-yet-activated invitation must not hide this user's historical read grant.
+        query.isNotNull("activated_at").in("lifecycle_status", "ACTIVE", "SUSPENDED", "RETIRED");
+        return baseMapper.selectOne(query.orderByDesc("id").last("limit 1"));
     }
 
     @Override

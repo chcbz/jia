@@ -247,7 +247,7 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
             });
             AgentIdentityRegistryEntity identity = registry(binding, CANONICAL,
                     AgentConstants.IDENTITY_TYPE_OPAQUE, lifecycle);
-            when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, OWNER, CANONICAL))
+            when(registryDao.findActivatedByCanonicalInScope(TENANT, CLIENT, OWNER, CANONICAL))
                     .thenReturn(identity);
             when(bindingDao.selectById(binding.getId())).thenReturn(binding);
 
@@ -261,7 +261,7 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
         AgentPersonaBindingEntity binding = binding(CANONICAL);
         AgentIdentityRegistryEntity provisioned = registry(binding, CANONICAL,
                 AgentConstants.IDENTITY_TYPE_OPAQUE, AgentConstants.IDENTITY_STATUS_PROVISIONED);
-        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, OWNER, CANONICAL))
+        when(registryDao.findActivatedByCanonicalInScope(TENANT, CLIENT, OWNER, CANONICAL))
                 .thenReturn(provisioned);
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> service.requirePersistedCanonicalAgentIdInScope(
@@ -284,7 +284,7 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
                 AgentConstants.IDENTITY_TYPE_OPAQUE, AgentConstants.IDENTITY_STATUS_ACTIVE);
         AgentPersonaBindingEntity tampered = binding(CANONICAL);
         tampered.setJiacn("owner-b");
-        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, OWNER, CANONICAL))
+        when(registryDao.findActivatedByCanonicalInScope(TENANT, CLIENT, OWNER, CANONICAL))
                 .thenReturn(active);
         when(bindingDao.selectById(binding.getId())).thenReturn(tampered);
         assertThrows(AgentServiceImpl.AgentBizException.class,

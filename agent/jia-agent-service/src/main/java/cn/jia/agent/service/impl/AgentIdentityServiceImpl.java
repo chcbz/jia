@@ -293,7 +293,7 @@ public class AgentIdentityServiceImpl implements AgentIdentityService {
         requireScope(tenantId, clientId, ownerJiacn);
         requireAgentId(canonicalAgentId);
         rejectSystem(canonicalAgentId);
-        AgentIdentityRegistryEntity identity = registryDao.findExactByCanonicalInScope(
+        AgentIdentityRegistryEntity identity = registryDao.findActivatedByCanonicalInScope(
                 tenantId, clientId, ownerJiacn, canonicalAgentId);
         if (identity == null) {
             throw forbidden("Persisted canonical Agent identity is not registered in this scope");
