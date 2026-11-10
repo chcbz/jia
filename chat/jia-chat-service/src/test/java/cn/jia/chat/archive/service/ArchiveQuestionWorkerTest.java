@@ -1184,20 +1184,55 @@ class ArchiveQuestionWorkerTest {
 
     @Test
     void healthyProviderCrossingInitialLeaseRenewsWithoutConsumingExtraAttempts() {
+        var now = new java.util.concurrent.atomic.AtomicReference<>(NOW);
+        Clock leaseClock = org.mockito.Mockito.mock(Clock.class);
+        org.mockito.Mockito.when(leaseClock.instant()).thenAnswer(ignored -> now.get());
+        var renewals = new CountDownLatch(8);
         ArchiveQuestionProvider provider = request -> {
-            // Test-scaled equivalent of a provider call crossing the production 30-second lease.
-            Thread.sleep(800);
-            assertTrue(store.leaseRenewals.get() >= 5, "provider must stay fenced through repeated renewals");
+            assertTrue(renewals.await(5, TimeUnit.SECONDS), "real heartbeat must renew during provider execution");
+            assertTrue(now.get().isAfter(NOW.plusMillis(300)), "provider crosses the original lease deadline");
+            assertTrue(store.leaseRenewals.get() >= 8);
             return ArchiveQuestionProvider.Answer.complete("slow-but-healthy");
         };
         create(provider);
-        ArchiveQuestionWorker worker = new ArchiveQuestionWorker(store, transactions, provider, delivery,
-                enabledPolicy(), Clock.systemUTC(), Duration.ofMillis(300), Duration.ofMillis(50));
+        ArchiveQuestionWorker worker = org.mockito.Mockito.spy(new ArchiveQuestionWorker(
+                store, transactions, provider, delivery, enabledPolicy(), leaseClock,
+                Duration.ofMillis(300), Duration.ofMillis(25)));
+        // Real scheduled heartbeat and real CAS, but elapsed business time advances in
+        // controlled steps. Host descheduling is not evidence of a healthy 300ms lease.
+        org.mockito.Mockito.doAnswer(invocation -> {
+            now.updateAndGet(value -> value.plusMillis(100));
+            boolean renewed = (boolean) invocation.callRealMethod();
+            if (renewed) renewals.countDown();
+            return renewed;
+        }).when(worker).renewLease(org.mockito.ArgumentMatchers.any());
         try {
             assertTrue(worker.runOnce());
             assertEquals("SUCCEEDED", service.get(OWNER, ID).status());
             assertEquals(1, store.findOutbox(OWNER, ID, false).attemptCount());
             assertEquals(1, store.findOutbox(OWNER, ID, false).fencingToken());
+        } finally { worker.stop(); }
+    }
+
+    @Test
+    void providerResultAfterUnrenewedDeadlineCannotCommit() {
+        var now = new java.util.concurrent.atomic.AtomicReference<>(NOW);
+        Clock leaseClock = org.mockito.Mockito.mock(Clock.class);
+        org.mockito.Mockito.when(leaseClock.instant()).thenAnswer(ignored -> now.get());
+        ArchiveQuestionProvider provider = request -> {
+            now.set(NOW.plusSeconds(60));
+            return ArchiveQuestionProvider.Answer.complete("expired-private-output");
+        };
+        create(provider);
+        ArchiveQuestionWorker worker = new ArchiveQuestionWorker(store, transactions, provider, delivery,
+                enabledPolicy(), leaseClock, Duration.ofSeconds(30), Duration.ofSeconds(10));
+        try {
+            assertTrue(worker.runOnce());
+            assertEquals("RUNNING", service.get(OWNER, ID).status());
+            assertEquals("", service.get(OWNER, ID).answer());
+            assertTrue(store.allEvents(OWNER, ID).stream().noneMatch(event ->
+                    "ANSWER_DELTA".equals(event.eventType()) || "QUESTION_SUCCEEDED".equals(event.eventType())));
+            assertEquals(1, store.findOutbox(OWNER, ID, false).attemptCount());
         } finally { worker.stop(); }
     }
 
