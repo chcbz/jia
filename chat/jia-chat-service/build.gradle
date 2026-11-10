@@ -201,6 +201,8 @@ tasks.register('mmdU1ProviderCredentialBinding', Test) {
 // MMD-BRIDGE-A same-session declaration, capability and Agent-before-Chat transaction slice.
 def mmdControlledImageBridgeSourceSet = sourceSets.create('mmdControlledImageBridge') {
     java {
+        srcDir 'src/test/java'
+        include 'cn/jia/chat/service/NativeConversationWorkNotifierTest.java'
         srcDir 'src/mmdRegressionTest/java'
         include 'cn/jia/chat/handler/ControlledImageBountyExecutionDeclarationTest.java'
         include 'cn/jia/chat/handler/AgentWebSocketControlledImageExecutionTest.java'
@@ -639,6 +641,7 @@ tasks.register('r9TenantPrivateChat', Test) {
 
 // Runtime fact stability: heartbeat races must not retract unchanged native actions.
 def runtimeCapabilityRegressionSourceSet = sourceSets.create('runtimeCapabilityRegression') {
+    java.include 'cn/jia/chat/service/NativeConversationWorkNotifierTest.java'
     java.include 'cn/jia/chat/service/recommendation/RecommendationUsageJournalTest.java'
     java.include 'cn/jia/chat/service/recommendation/RecommendationUsageRecoveryTest.java'
     java.srcDir 'src/test/java'

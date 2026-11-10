@@ -11,37 +11,32 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.function.Supplier;
 import org.springframework.beans.factory.annotation.Autowired;
-import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 
-/** One recovery scan per WS node, restricted to its current subscriptions. No queue authority. */
+/** Coalesced local WS hints. Durable recovery is registered by NativeConversationWorkRecovery.
+ * Both paths use current local subscriptions; neither owns the business queue. */
 @Slf4j
 @Component
 public final class NativeConversationWorkNotifier implements SmartLifecycle,AutoCloseable {
     private final AgentWebSocketHandler sockets;
     private final NativeConversationWorkDiscovery discovery;
     private final Set<NativeConversationWorkAvailable> dirty=new HashSet<>();
-    private final Supplier<ScheduledExecutorService> workers;
-    private ScheduledExecutorService worker;
+    private final Supplier<ExecutorService> workers;
+    private ExecutorService worker;
     private boolean drainScheduled;
     @Autowired
     public NativeConversationWorkNotifier(AgentWebSocketHandler sockets,NativeConversationWorkDiscovery discovery) {
-        this(sockets,discovery,()->Executors.newSingleThreadScheduledExecutor(r->{
+        this(sockets,discovery,()->Executors.newSingleThreadExecutor(r->{
             var t=new Thread(r,"native-work-notifications");t.setDaemon(true);return t;}));
     }
     NativeConversationWorkNotifier(AgentWebSocketHandler sockets,NativeConversationWorkDiscovery discovery,
-            Supplier<ScheduledExecutorService> workers) {
+            Supplier<ExecutorService> workers) {
         this.sockets=sockets;this.discovery=discovery;this.workers=workers;
     }
     @Override public synchronized void start() {
         if(worker!=null)return;
-        var owner=workers.get();
-        worker=owner;
-        owner.scheduleWithFixedDelay(()->{
-            synchronized(this){if(worker!=owner)return;}
-            try {recover();} catch(RuntimeException failure){log.warn("Native work notification recovery unavailable",failure);}
-        },30,30,TimeUnit.SECONDS);
+        worker=workers.get();
     }
     @EventListener public synchronized void available(NativeConversationWorkAvailable target) {
         if(worker==null || !sockets.nativeWorkTargets().contains(target))return;
@@ -51,7 +46,7 @@ public final class NativeConversationWorkNotifier implements SmartLifecycle,Auto
         var owner=worker;
         owner.execute(()->drain(owner));
     }
-    private void drain(ScheduledExecutorService owner) {
+    private void drain(ExecutorService owner) {
         Set<NativeConversationWorkAvailable> targets;
         synchronized(this){
             if(worker!=owner)return;
@@ -63,6 +58,7 @@ public final class NativeConversationWorkNotifier implements SmartLifecycle,Auto
         }
     }
     void recover() {
+        synchronized (this) { if (worker == null) return; }
         var targets=sockets.nativeWorkTargets();
         if(targets.isEmpty())return;
         for(var pending:discovery.pendingFor(targets)) {
