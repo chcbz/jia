@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
+import java.util.Properties;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -45,11 +45,20 @@ class ArchiveQuestionFeatureFlagTest {
 
     @Test
     void packagedServiceDefaultsQuestionCapabilityOffIndependentlyOfReaderFlag() throws Exception {
-        try (InputStream input = getClass().getClassLoader().getResourceAsStream("application.properties")) {
-            assertNotNull(input);
-            String properties = new String(input.readAllBytes(), StandardCharsets.UTF_8);
-            assertTrue(properties.lines().anyMatch("archive.reader.enabled=false"::equals));
-            assertTrue(properties.lines().anyMatch("archive.question.enabled=false"::equals));
+        // Dependencies also ship application.properties; the first classloader hit is not
+        // necessarily this service's packaged defaults (common-test has its own file).
+        var resources = getClass().getClassLoader().getResources("application.properties");
+        int archiveDefaults = 0;
+        while (resources.hasMoreElements()) {
+            var resource = resources.nextElement();
+            Properties properties = new Properties();
+            try (InputStream input = resource.openStream()) { properties.load(input); }
+            if (!properties.containsKey("archive.reader.enabled")
+                    && !properties.containsKey("archive.question.enabled")) continue;
+            archiveDefaults++;
+            assertEquals("false", properties.getProperty("archive.reader.enabled"), resource.toString());
+            assertEquals("false", properties.getProperty("archive.question.enabled"), resource.toString());
         }
+        assertEquals(1, archiveDefaults, "exactly one packaged archive defaults resource");
     }
 }

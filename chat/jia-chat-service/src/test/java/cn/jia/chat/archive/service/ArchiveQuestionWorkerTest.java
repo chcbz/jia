@@ -83,22 +83,25 @@ class ArchiveQuestionWorkerTest {
         var worker = org.mockito.Mockito.spy(worker(request -> ArchiveQuestionProvider.Answer.complete("unused")));
         var entered = new java.util.concurrent.CountDownLatch(1);
         var release = new java.util.concurrent.CountDownLatch(1);
+        var scans = new AtomicInteger();
         var callers = java.util.concurrent.Executors.newSingleThreadExecutor();
         org.mockito.Mockito.doAnswer(invocation -> {
-            entered.countDown(); release.await(); return false;
+            scans.incrementAndGet(); entered.countDown(); release.await(); return false;
         }).when(worker).runOnce();
         try {
             worker.start();
-            org.mockito.Mockito.verify(worker, org.mockito.Mockito.never()).runOnce();
+            assertEquals(0, scans.get());
             callers.submit(worker::submit).get(5, java.util.concurrent.TimeUnit.SECONDS);
             assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS));
             callers.submit(() -> { for (int i = 0; i < 10; i++) worker.submit(); }).get(5, java.util.concurrent.TimeUnit.SECONDS);
-            org.mockito.Mockito.verify(worker).runOnce();
+            // Verifying a synchronized spy method here would acquire its monitor while
+            // that method waits for our finally latch. Observe the invocation separately.
+            assertEquals(1, scans.get());
         } finally {
             release.countDown(); worker.stop(); callers.shutdownNow();
         }
         worker.submit();
-        org.mockito.Mockito.verify(worker).runOnce();
+        assertEquals(1, scans.get());
     }
 
     @Test
@@ -1138,16 +1141,17 @@ class ArchiveQuestionWorkerTest {
     void blockingQuestionSinkCannotDelayHttpProviderCompletionOrLeaseRenewal() throws Exception {
         CountDownLatch sinkEntered = new CountDownLatch(1);
         CountDownLatch releaseSink = new CountDownLatch(1);
+        CountDownLatch renewals = new CountDownLatch(2);
         broker.subscribe(OWNER, ID, ignored -> {
             sinkEntered.countDown();
             try {
-                releaseSink.await(5, TimeUnit.SECONDS);
+                releaseSink.await();
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
             }
         });
         ArchiveQuestionProvider provider = request -> {
-            Thread.sleep(350);
+            assertTrue(renewals.await(5, TimeUnit.SECONDS), "lease renews while the publisher is blocked");
             return ArchiveQuestionProvider.Answer.complete("persisted-while-sink-blocked");
         };
         long createStarted = System.nanoTime();
@@ -1156,8 +1160,16 @@ class ArchiveQuestionWorkerTest {
                 "HTTP mutation must not run the sink inline");
         assertTrue(sinkEntered.await(2, TimeUnit.SECONDS));
 
-        ArchiveQuestionWorker worker = new ArchiveQuestionWorker(store, transactions, provider, delivery,
-                enabledPolicy(), Clock.systemUTC(), Duration.ofMillis(150), Duration.ofMillis(25));
+        // This test checks thread separation, not sub-150ms host scheduling. Lease expiry
+        // and crossing a real initial lease are tested independently below.
+        ArchiveQuestionWorker worker = org.mockito.Mockito.spy(new ArchiveQuestionWorker(
+                store, transactions, provider, delivery, enabledPolicy(), clock,
+                Duration.ofMillis(150), Duration.ofMillis(25)));
+        org.mockito.Mockito.doAnswer(invocation -> {
+            boolean renewed = (boolean) invocation.callRealMethod();
+            if (renewed) renewals.countDown();
+            return renewed;
+        }).when(worker).renewLease(org.mockito.ArgumentMatchers.any());
         try {
             assertTrue(worker.runOnce());
             assertEquals("SUCCEEDED", service.get(OWNER, ID).status());
