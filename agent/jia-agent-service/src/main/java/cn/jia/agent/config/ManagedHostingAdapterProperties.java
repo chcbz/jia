@@ -6,19 +6,23 @@ import java.nio.file.Path;
 /** Operator-only private channel. Blank settings and the independent rent switch fail closed. */
 @ConfigurationProperties(prefix = "agent.hosting-rent.managed")
 public record ManagedHostingAdapterProperties(String socketPath, Long runnerUid, String tenantId,
-        String clientId, String ownerJiacn, Integer timeoutMs, Long socketGroupGid) {
+        String clientId, String ownerJiacn, Integer timeoutMs, Long socketGroupGid, Integer inventoryTimeoutMs) {
     private static final String ANY_OWNER = "*";
 
     public ManagedHostingAdapterProperties {
         socketPath = socketPath == null ? "/run/cyf-agent-runtime-v1/unified/control.sock" : socketPath;
-        timeoutMs = timeoutMs == null ? 2000 : timeoutMs; }
+        timeoutMs = timeoutMs == null ? 2000 : timeoutMs;
+        // Native inventory cold-start measured ~33s on the supported host. Keep
+        // quick control probes unchanged; this is transport failure, never a task deadline.
+        inventoryTimeoutMs = inventoryTimeoutMs == null ? 60000 : inventoryTimeoutMs;
+    }
     public boolean configured() {
         boolean absolute;
         try { absolute = socketPath != null && Path.of(socketPath).isAbsolute() && socketPath.length() <= 100; }
         catch (java.nio.file.InvalidPathException invalid) { return false; }
         return absolute && runnerUid != null && runnerUid >= 0 && socketGroupGid != null && socketGroupGid >= 0 && tenantId != null && !tenantId.isBlank()
                 && clientId != null && !clientId.isBlank() && ownerJiacn != null && !ownerJiacn.isBlank()
-                && timeoutMs >= 100 && timeoutMs <= 20000;
+                && timeoutMs >= 100 && timeoutMs <= 20000 && inventoryTimeoutMs > 0;
     }
 
     /** Keeps tenant/client fixed while reserving {@code *} solely as the configured owner wildcard. */

@@ -304,7 +304,8 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
                 java.util.UUID.randomUUID().toString(), hostingData(request));
         byte[] frame = (JSON.writeValueAsString(message) + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8);
         if (frame.length > MAX_FRAME) throw new IOException("Managed frame too large");
-        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(config.timeoutMs());
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(
+                "inventory".equals(request.get("method")) ? config.inventoryTimeoutMs() : config.timeoutMs());
         try (SocketChannel channel = SocketChannel.open(StandardProtocolFamily.UNIX); Selector selector = Selector.open()) {
             channel.configureBlocking(false);
             if (!channel.connect(UnixDomainSocketAddress.of(socket))) {

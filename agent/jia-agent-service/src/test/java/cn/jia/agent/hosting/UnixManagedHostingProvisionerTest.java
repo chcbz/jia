@@ -111,7 +111,7 @@ class UnixManagedHostingProvisionerTest {
     }
     private UnixManagedHostingProvisioner adapter(Path socket, long uid, long gid, String owner) {
         return new UnixManagedHostingProvisioner(new AgentHostingRentProperties(true, "1", "1000000000", "2592000"),
-                new ManagedHostingAdapterProperties(socket.toString(), uid, "0", "fixture-client", owner, 1000, gid), credentials, sessions);
+                new ManagedHostingAdapterProperties(socket.toString(), uid, "0", "fixture-client", owner, 1000, gid, null), credentials, sessions);
     }
     private UnixManagedHostingProvisioner adapter() { return spy(adapter(Path.of("/private/control.sock"), 0, 1000, "*")); }
     private void exchangeFixture(UnixManagedHostingProvisioner adapter, Map<String, Object> observed) throws Exception {
