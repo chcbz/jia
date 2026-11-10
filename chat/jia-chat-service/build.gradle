@@ -640,6 +640,7 @@ tasks.register('r9TenantPrivateChat', Test) {
 // Runtime fact stability: heartbeat races must not retract unchanged native actions.
 def runtimeCapabilityRegressionSourceSet = sourceSets.create('runtimeCapabilityRegression') {
     java.srcDir 'src/test/java'
+    java.srcDir 'src/sharedTest/java'
     java.include 'cn/jia/chat/service/SkillCapabilityExecutionFactsTest.java'
     java.include 'cn/jia/chat/service/ChatActionCapabilityServiceTest.java'
     java.include 'cn/jia/chat/service/NativeSkillScriptSessionLookupImplTest.java'
