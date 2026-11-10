@@ -1194,7 +1194,7 @@ public class SkillManagementTransactionTest extends SkillManagementMySqlFixture 
         var before=businessSnapshot();recovery.recover(d,now);assertEquals(before,businessSnapshot());
         verify(sessions,never()).dispatch(anyString(),anyString(),anyString(),any(),any());
         var relay=sql.getMapper(AgentOutboxRelayMapper.class);
-        assertTrue(relay.selectDueCandidates("0", now+120000,25).isEmpty());assertTrue(relay.selectCorruptCandidates("0", now+120000,25).isEmpty());assertTrue(relay.selectStaleCandidates("0", now+120000,25).isEmpty());
+        assertTrue(relay.selectDueCandidates("0", ACTOR.clientId(), now+120000,25).isEmpty());assertTrue(relay.selectCorruptCandidates("0", ACTOR.clientId(), now+120000,25).isEmpty());assertTrue(relay.selectStaleCandidates("0", ACTOR.clientId(), now+120000,25).isEmpty());
         jdbc.update("UPDATE agent_command_delivery SET lease_until=?",now-1);jdbc.update("UPDATE agent_outbox_event SET lease_until=?",now-1);
         when(sessions.dispatch(anyString(),anyString(),anyString(),any(),any())).thenAnswer(call->{
             assertFalse(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive());
