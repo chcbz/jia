@@ -271,8 +271,10 @@ class AgentTaskBillingMySqlTransactionTest {
         var rentBindings = new cn.jia.agent.dao.impl.AgentPersonaBindingDaoImpl();
         ReflectionTestUtils.setField(rentBindings, "baseMapper", sql.getMapper(AgentPersonaBindingMapper.class));
         rentSettlement = new cn.jia.agent.hosting.HostingRentTaskSettlement(sql.getMapper(HostingRentFinishingMapper.class),
-                rentBindings, sql.getMapper(cn.jia.economy.mapper.EconomyHostingRentMapper.class),
-                sql.getMapper(cn.jia.economy.mapper.EconomyHostingRenewalMapper.class), roots,
+                rentBindings, new cn.jia.economy.service.impl.HostingRentRenewalServiceImpl(
+                        sql.getMapper(cn.jia.economy.mapper.EconomyHostingRentMapper.class),
+                        sql.getMapper(cn.jia.economy.mapper.EconomyHostingRenewalMapper.class),
+                        ledger, mock(cn.jia.economy.service.EconomyPostingService.class), walletGate, manager), roots,
                 new AgentTaskFormalDeliveryDaoImpl(sql.getMapper(AgentTaskFormalDeliveryMapper.class)), decisions,
                 cancellation, new cn.jia.core.security.FixedTenantAdmissionPolicy(TENANT, CLIENT));
         jdbc.update("INSERT INTO agent_task_meta(task_id,owner_jiacn,tenant_id,client_id) VALUES(?,?,?,?)",
@@ -328,6 +330,9 @@ class AgentTaskBillingMySqlTransactionTest {
     }
     @Test void expiredRelationshipSettlementDoesNotForceVoluntaryRemovalOrWrongBinding() {
         assign(); expiredRelationship(); jdbc.update("UPDATE economy_hosting_lease SET locked_at=NULL");
+        rentSettlement.settleExpiredTasks(new EconomyScope(TENANT, CLIENT), "expired-lease");
+        assertEquals("HELD",charge()); assertEquals("assigned",taskState());
+        jdbc.update("UPDATE economy_hosting_lease SET locked_at=CAST(UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3))*1000 AS UNSIGNED)");
         rentSettlement.settleExpiredTasks(new EconomyScope(TENANT, CLIENT), "expired-lease");
         assertEquals("HELD",charge()); assertEquals("assigned",taskState());
         jdbc.update("UPDATE economy_hosting_lease SET locked_at=2,binding_id='8'");

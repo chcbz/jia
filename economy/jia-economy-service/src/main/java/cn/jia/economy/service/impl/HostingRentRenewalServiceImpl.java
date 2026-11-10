@@ -45,6 +45,18 @@ public final class HostingRentRenewalServiceImpl implements HostingRentRenewalSe
         this.listeners = List.copyOf(listeners);
     }
 
+    @Override public boolean lockExpiredFinishing(EconomyScope scope, String leaseId, String bindingId, String agentId) {
+        gate.requireMutationAllowed(scope.tenantId(), scope.clientId());
+        // Without the caller transaction the lease lock would disappear before task capture/release.
+        if (!org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())
+            throw new IllegalStateException("Finishing settlement requires the task root transaction");
+        var lease = leases.selectLeaseForUpdate(scope.tenantId(), scope.clientId(), leaseId);
+        return lease != null && "FINISHING".equals(lease.getStatus())
+                && Objects.equals(bindingId, lease.getBindingId()) && Objects.equals(agentId, lease.getAgentId())
+                && lease.getLockedAt() != null
+                && renewal.nowMillis() >= Math.addExact(lease.getLockedAt(), LOCK_RETENTION_MILLIS);
+    }
+
     @Override public Long reconcileUser(EconomyScope scope, String userId) {
         gate.requireMutationAllowed(scope.tenantId(), scope.clientId());
         long after = 0; String afterId = "";

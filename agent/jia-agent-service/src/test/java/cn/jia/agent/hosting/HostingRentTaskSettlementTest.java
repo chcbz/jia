@@ -5,8 +5,7 @@ import cn.jia.agent.entity.*;
 import cn.jia.agent.mapper.HostingRentFinishingMapper;
 import cn.jia.agent.service.*;
 import cn.jia.core.security.FixedTenantAdmissionPolicy;
-import cn.jia.economy.entity.EconomyHostingLeaseEntity;
-import cn.jia.economy.mapper.*;
+import cn.jia.economy.hosting.HostingRentRenewalService;
 import cn.jia.economy.service.EconomyScope;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -18,18 +17,15 @@ class HostingRentTaskSettlementTest {
     final EconomyScope scope = new EconomyScope("tenant", "client");
     final HostingRentFinishingMapper discovery = mock(HostingRentFinishingMapper.class);
     final AgentPersonaBindingDao bindings = mock(AgentPersonaBindingDao.class);
-    final EconomyHostingRentMapper leases = mock(EconomyHostingRentMapper.class);
-    final EconomyHostingRenewalMapper clock = mock(EconomyHostingRenewalMapper.class);
+    final HostingRentRenewalService renewal = mock(HostingRentRenewalService.class);
     final AgentTaskMutationTransaction roots = mock(AgentTaskMutationTransaction.class);
     final AgentTaskFormalDeliveryDao deliveries = mock(AgentTaskFormalDeliveryDao.class);
     final AgentTaskFormalDeliveryDecisionService decisions = mock(AgentTaskFormalDeliveryDecisionService.class);
     final AgentTaskCancellationService cancellations = mock(AgentTaskCancellationService.class);
-    final HostingRentTaskSettlement service = new HostingRentTaskSettlement(discovery, bindings, leases, clock,
+    final HostingRentTaskSettlement service = new HostingRentTaskSettlement(discovery, bindings, renewal,
             roots, deliveries, decisions, cancellations, new FixedTenantAdmissionPolicy("tenant", "client"));
     final AgentPersonaBindingEntity binding = new AgentPersonaBindingEntity().setId(7L).setJiacn("owner")
             .setPersonaCode("hero").setAgentId("agent").setStatus(1);
-    final EconomyHostingLeaseEntity lease = new EconomyHostingLeaseEntity().setStatus("FINISHING")
-            .setBindingId("7").setAgentId("agent").setLockedAt(1000L);
     final AgentTaskMetaEntity task = new AgentTaskMetaEntity().setId(1L).setTaskId("task")
             .setOwnerJiacn("owner").setAssignedAgentId("agent").setRewardStatus("running").setTaskVersion(4L);
     boolean rootLocked;
@@ -43,14 +39,13 @@ class HostingRentTaskSettlementTest {
                 } finally { rootLocked=false; } });
         when(bindings.findExactActiveByScopeAndPersonaForUpdate("tenant", "client", "owner", "hero"))
                 .thenAnswer(i -> { assertTrue(rootLocked); return binding; });
-        when(leases.selectLeaseForUpdate("tenant", "client", "lease")).thenReturn(lease);
-        when(clock.nowMillis()).thenReturn(1000L + 15L * 86400000);
+        when(renewal.lockExpiredFinishing(scope, "lease", "7", "agent")).thenReturn(true);
     }
     @Test void expiredUnfinishedTaskUsesExistingCancellationAndRootBindingLeaseOrder() {
         service.settleExpiredTasks(scope, "lease");
-        var order = inOrder(bindings, leases, cancellations);
+        var order = inOrder(bindings, renewal, cancellations);
         order.verify(bindings).findExactActiveByScopeAndPersonaForUpdate("tenant", "client", "owner", "hero");
-        order.verify(leases).selectLeaseForUpdate("tenant", "client", "lease");
+        order.verify(renewal).lockExpiredFinishing(scope, "lease", "7", "agent");
         order.verify(cancellations).cancel("tenant", "client", "owner", "hosting-rent-expiry", "task", 4L);
         verifyNoInteractions(decisions, deliveries);
     }
@@ -68,20 +63,20 @@ class HostingRentTaskSettlementTest {
         task.setRewardStatus("failed"); service.settleExpiredTasks(scope, "lease");
         verify(cancellations).cancel("tenant", "client", "owner", "hosting-rent-expiry", "task", 4L);
     }
-    @Test void voluntaryRemovalAndGracePeriodDoNotForceOldTasks() {
-        lease.setLockedAt(null); service.settleExpiredTasks(scope, "lease");
-        lease.setLockedAt(1001L); service.settleExpiredTasks(scope, "lease");
+    @Test void financialGuardRefusalNeverForcesOldTasks() {
+        when(renewal.lockExpiredFinishing(scope, "lease", "7", "agent")).thenReturn(false);
+        service.settleExpiredTasks(scope, "lease");
         verifyNoInteractions(decisions, cancellations, deliveries);
     }
-    @Test void renewedLeaseOrChangedBindingCannotSettleOldDiscovery() {
-        lease.setStatus("ACTIVE"); service.settleExpiredTasks(scope, "lease");
-        lease.setStatus("FINISHING").setBindingId("8"); service.settleExpiredTasks(scope, "lease");
-        verifyNoInteractions(decisions, cancellations, deliveries);
+    @Test void absentCurrentBindingNeverCallsFinancialGuard() {
+        doReturn(null).when(bindings).findExactActiveByScopeAndPersonaForUpdate("tenant", "client", "owner", "hero");
+        service.settleExpiredTasks(scope, "lease");
+        verifyNoInteractions(renewal, decisions, cancellations);
     }
     @Test void relationshipChangeBeforeBindingLockDoesNotLockOrMutateNewLease() {
         doReturn(new AgentPersonaBindingEntity().setId(8L).setAgentId("agent")).when(bindings)
                 .findExactActiveByScopeAndPersonaForUpdate("tenant", "client", "owner", "hero");
-        service.settleExpiredTasks(scope, "lease"); verifyNoInteractions(leases, decisions, cancellations);
+        service.settleExpiredTasks(scope, "lease"); verifyNoInteractions(renewal, decisions, cancellations);
     }
     @Test void terminalOrReassignedTaskIsNotSettledAgain() {
         task.setRewardStatus("completed"); service.settleExpiredTasks(scope, "lease");
@@ -98,6 +93,6 @@ class HostingRentTaskSettlementTest {
         service.settleExpiredTasks(scope, "lease");
         assertThrows(IllegalArgumentException.class, () -> service.settleExpiredTasks(new EconomyScope("foreign", "client"), "lease"));
         verify(discovery).findFinishingBinding("tenant", "client", "lease"); verifyNoMoreInteractions(discovery);
-        verifyNoInteractions(bindings, leases, roots, decisions, cancellations);
+        verifyNoInteractions(bindings, renewal, roots, decisions, cancellations);
     }
 }

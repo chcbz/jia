@@ -9,8 +9,7 @@ import cn.jia.agent.service.AgentTaskCancellationService;
 import cn.jia.agent.service.AgentTaskFormalDeliveryDecisionService;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.core.security.FixedTenantAdmissionPolicy;
-import cn.jia.economy.mapper.EconomyHostingRentMapper;
-import cn.jia.economy.mapper.EconomyHostingRenewalMapper;
+import cn.jia.economy.hosting.HostingRentRenewalService;
 import cn.jia.economy.service.EconomyScope;
 import org.springframework.stereotype.Service;
 import java.util.Objects;
@@ -19,11 +18,9 @@ import java.util.Set;
 /** Only the task phase of handover. No lease release, Runtime deletion or claim of process exit. */
 @Service
 public final class HostingRentTaskSettlement {
-    private static final long RETENTION = 15L * 24 * 60 * 60 * 1000;
     private final HostingRentFinishingMapper discovery;
     private final AgentPersonaBindingDao bindings;
-    private final EconomyHostingRentMapper leases;
-    private final EconomyHostingRenewalMapper clock;
+    private final HostingRentRenewalService renewal;
     private final AgentTaskMutationTransaction tasks;
     private final AgentTaskFormalDeliveryDao deliveries;
     private final AgentTaskFormalDeliveryDecisionService decisions;
@@ -31,10 +28,10 @@ public final class HostingRentTaskSettlement {
     private final FixedTenantAdmissionPolicy scopePolicy;
 
     public HostingRentTaskSettlement(HostingRentFinishingMapper discovery, AgentPersonaBindingDao bindings,
-            EconomyHostingRentMapper leases, EconomyHostingRenewalMapper clock, AgentTaskMutationTransaction tasks,
+            HostingRentRenewalService renewal, AgentTaskMutationTransaction tasks,
             AgentTaskFormalDeliveryDao deliveries, AgentTaskFormalDeliveryDecisionService decisions,
             AgentTaskCancellationService cancellation, FixedTenantAdmissionPolicy scopePolicy) {
-        this.discovery=discovery; this.bindings=bindings; this.leases=leases; this.clock=clock;
+        this.discovery=discovery; this.bindings=bindings; this.renewal=renewal;
         this.tasks=tasks; this.deliveries=deliveries; this.decisions=decisions;
         this.cancellation=cancellation; this.scopePolicy=scopePolicy;
     }
@@ -61,11 +58,7 @@ public final class HostingRentTaskSettlement {
                     expected.getJiacn(), expected.getPersonaCode());
             if (binding == null || !Objects.equals(binding.getId(), expected.getId())
                     || !Objects.equals(binding.getAgentId(), expected.getAgentId())) return null;
-            var lease = leases.selectLeaseForUpdate(scope.tenantId(), scope.clientId(), leaseId);
-            if (lease == null || !"FINISHING".equals(lease.getStatus())
-                    || !Objects.equals(lease.getBindingId(), String.valueOf(binding.getId()))
-                    || !Objects.equals(lease.getAgentId(), binding.getAgentId())
-                    || lease.getLockedAt() == null || clock.nowMillis() < Math.addExact(lease.getLockedAt(), RETENTION)) return null;
+            if (!renewal.lockExpiredFinishing(scope, leaseId, String.valueOf(binding.getId()), binding.getAgentId())) return null;
             if (Set.of("completed", "cancelled", "archived").contains(root.getRewardStatus())) return null;
             if (discovery.related(scope.tenantId(), scope.clientId(), expected.getJiacn(),
                     expected.getAgentId(), taskId) != 1) return null; // assignment changed since discovery
