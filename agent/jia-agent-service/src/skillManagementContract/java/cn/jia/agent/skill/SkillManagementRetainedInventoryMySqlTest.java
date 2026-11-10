@@ -68,6 +68,11 @@ class SkillManagementRetainedInventoryMySqlTest extends SkillManagementTransacti
         current.setTenantId("0");current.setClientId(ACTOR.clientId());when(installations.lock(NEXT_RUNTIME)).thenReturn(current);
     }
     private SkillCapabilityLookup.Scope scope(String owner){return new SkillCapabilityLookup.Scope("0",ACTOR.clientId(),owner,AGENT);}
+    @Override protected cn.jia.agent.security.AgentRuntimeAuthenticationService.Proof proof() {
+        return new cn.jia.agent.security.AgentRuntimeAuthenticationService.Proof(
+                new cn.jia.agent.security.AgentRuntimeAuthentication.Scope("0",ACTOR.clientId(),runtime.getOwnerJiacn(),AGENT,"runtime-1"),
+                runtime.getRuntimeInstallationId(),"host-1",1L,"b".repeat(64),1L,1L);
+    }
     private void assertHistoryUnchanged(){assertEquals(originalAuthorization,jdbc.queryForMap("SELECT * FROM agent_skill_installation_authorization WHERE installation_id=?",installation));}
 
     @Test void retainedNewOwnerGetsDescriptorsWithoutReinstallingOrRewritingOldAuthorization() throws Exception {
