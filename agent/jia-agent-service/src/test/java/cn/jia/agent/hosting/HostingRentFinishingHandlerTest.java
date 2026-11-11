@@ -58,6 +58,8 @@ class HostingRentFinishingHandlerTest {
                 context.registerBean(HostingRentManagedStop.class,()->stop);
                 context.registerBean(ManagedHostingProvisioner.class,()->runtime);
                 context.registerBean(SkillManagementService.class,()->skills);
+                context.registerBean(cn.jia.agent.skill.SkillRelationshipAuthorizations.class,
+                        () -> mock(cn.jia.agent.skill.SkillRelationshipAuthorizations.class));
                 context.registerBean(HostingRentHandoverCompletion.class,()->completion);
                 context.register(HostingRentFinishingHandler.class,cn.jia.task.config.JobAutoConfiguration.class);context.refresh();
                 context.getBean("jobHandlerInitializer",org.springframework.boot.CommandLineRunner.class).run();
