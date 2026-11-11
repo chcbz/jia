@@ -658,7 +658,8 @@ class HostingRentLedgerServiceRealTransactionTest {
         assertEquals(quotes, count("economy_hosting_rent_quote"));
         assertEquals(transactions, count("economy_transaction"));
         var after = ledgerMapper.selectUserWalletSnapshot(TENANT, CLIENT, USER);
-        assertEquals(wallet.getBalanceWen(), after.getBalanceWen());
+        assertEquals(wallet.getAvailableWen(), after.getAvailableWen());
+        assertEquals(wallet.getHeldWen(), after.getHeldWen());
         assertEquals(wallet.getVersion(), after.getVersion());
         assertEquals(originalLease, jdbc.queryForMap("SELECT * FROM economy_hosting_lease WHERE lease_id=?", first.leaseId()));
     }
