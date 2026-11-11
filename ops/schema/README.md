@@ -52,7 +52,7 @@ java -Dloader.main=cn.jia.chat.config.ChatTypedDeliberationSchemaInitializer \
 
 ## 存量租约切换入口（2026-11-11 候选）
 
-`cn.jia.maintenance.HostingRentCutover`是显式的一次性入口，不能用JiaApplication启用schema-maintenance代替。只装配原身份/安装/租约服务、明确Mapper、数据源、SSL bundle和同事务调度存储，不启动worker、HTTP或其他schema initializer。入口/隔离上下文11项已在API4dca063976通过；真实MySQL+Runtime组合验证及生产执行另记。
+`cn.jia.maintenance.HostingRentCutover`是显式的一次性入口，不能用JiaApplication启用schema-maintenance代替。只装配原身份/安装/租约服务、明确Mapper、数据源、SSL bundle和同事务调度存储，不启动worker、HTTP或其他schema initializer。入口/隔离上下文及真实CLI→MySQL→静态Runtime组合12项已在API6f1d07298a通过（cutover-api-3，107.361秒）；preview无写入、重复apply不重置赠送期且零资金流水。Runtime执行器为合成fixture，生产执行及完整生命周期验收另记。
 
 使用已验证的同批JAR及独立维护配置（环境变量或`SPRING_CONFIG_ADDITIONAL_LOCATION`，密码不放命令参数），配置原固定tenant/client、数据源、租费套餐描述、economy scope及可信hosting-control UDS/mTLS路由。`--preview`只读校验明确主体及配置路由，不证明外部ADOPTED或数据库套餐已经准备；不需要运行正常业务服务。先按现有授权流程固定真实备份、迁移DDL/正常套餐、控制端点与停旧writer，再apply；脚本不会自动执行这些前置操作。
 
