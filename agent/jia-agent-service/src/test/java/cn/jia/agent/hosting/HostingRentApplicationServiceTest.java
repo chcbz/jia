@@ -224,6 +224,7 @@ class HostingRentApplicationServiceTest {
         var confirmOrder = inOrder(bindings, rent);
         confirmOrder.verify(bindings).findByIdForUpdate(17L);
         confirmOrder.verify(rent).selectLeaseForUpdate("0", "Client-A", "hrl-test");
+        verify(identities, never()).requireActiveBinding(any(), any());
     }
 
     @Test void newInitialQuoteRejectsAnyUnreleasedLeaseIncludingFinishing() {

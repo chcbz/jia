@@ -34,31 +34,4 @@ public class AgentHostedRuntimePublicationWorker {
         return current;
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
-    public AgentRuntimeEntity revalidateDetachedForPublication(
-            AgentOwnerScope scope, String agentId, long runtimeId) {
-        if (scope == null || agentId == null || agentId.isBlank()
-                || !agentId.equals(agentId.strip()) || runtimeId <= 0) {
-            return null;
-        }
-        AgentRuntimeEntity current = runtimeDao.findByAgentId(agentId);
-        if (current == null
-                || !Objects.equals(current.getId(), runtimeId)
-                || !Objects.equals(current.getAgentId(), agentId)
-                || !Objects.equals(current.getTenantId(), scope.tenantId())
-                || current.getBindingId() != null
-                || current.getClientId() != null
-                || current.getOwnerJiacn() != null
-                || current.getPersonaCode() != null
-                || current.getPersonaName() != null
-                || current.getEndpoint() != null
-                || current.getTokenHash() != null
-                || current.getCurrentTaskId() != null
-                || current.getCurrentTaskTitle() != null
-                || current.getErrorMessage() != null
-                || !Objects.equals(current.getStatus(), "offline")) {
-            return null;
-        }
-        return current;
-    }
 }

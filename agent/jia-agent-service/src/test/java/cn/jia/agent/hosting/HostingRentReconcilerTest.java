@@ -141,6 +141,7 @@ class HostingRentReconcilerTest {
         verify(mapper, never()).selectPendingIntents(anyString(), any(), anyLong());
         verify(mapper, never()).selectPendingReprovisions(anyString(), any(), anyLong());
         verify(ledger, never()).capture(any()); verify(ledger, never()).refund(any());
+        verify(identities, never()).requireActiveBinding(any(), any());
     }
 
     @Test void terminalDurableCallbackDoesNotQueryProviderOrRescanBusinessTables() {
@@ -256,6 +257,7 @@ class HostingRentReconcilerTest {
         verify(ledger, never()).confirmProvisioningSucceeded(any());
         verify(ledger, never()).confirmProvisioningFailedNoEffect(any());
         verify(ledger, never()).capture(any()); verify(ledger, never()).refund(any());
+        verify(identities, never()).requireActiveBinding(any(), any());
         verifyNoInteractions(credentials);
     }
 
@@ -371,6 +373,7 @@ class HostingRentReconcilerTest {
         });
         worker.reconcileOne(intent, provider);
         verify(ledger, never()).capture(any()); verify(ledger, never()).refund(any());
+        verify(identities, never()).requireActiveBinding(any(), any());
     }
 
     @Test

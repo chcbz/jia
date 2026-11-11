@@ -433,6 +433,8 @@ def managedHostingRegressionSourceSet = sourceSets.create('managedHostingRegress
     java {
         include 'cn/jia/agent/api/EconomyOperationWireTest.java'
         srcDir 'src/test/java'
+        srcDir rootProject.file('agent/jia-agent-mapper/src/test/java')
+        include 'cn/jia/agent/schema/AgentPersonaBindingMapperContractTest.java'
         srcDir rootProject.file('economy/jia-economy-service/src/test/java')
         include 'cn/jia/economy/config/EconomyMySqlTestFixture.java'
         include 'cn/jia/agent/security/AgentRuntimePersistentSessionFenceTest.java'
@@ -444,6 +446,8 @@ def managedHostingRegressionSourceSet = sourceSets.create('managedHostingRegress
         include 'cn/jia/agent/hosting/ManagedHostingCredentialsTest.java'
         include 'cn/jia/agent/hosting/HostingRentApplicationServiceTest.java'
         include 'cn/jia/agent/service/impl/AgentIdentityServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/AgentPersonaPublicScopeTest.java'
+        include 'cn/jia/agent/skill/AgentGetSkillRosterProjectionTest.java'
         include 'cn/jia/agent/config/AgentSchemaInitializerTest.java'
         include 'cn/jia/agent/api/AgentControllerTest.java'
         include 'cn/jia/agent/hosting/HostingRentBalanceWakeupTest.java'

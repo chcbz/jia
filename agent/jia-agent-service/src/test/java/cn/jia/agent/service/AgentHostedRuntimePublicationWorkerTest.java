@@ -14,23 +14,14 @@ class AgentHostedRuntimePublicationWorkerTest {
                 "revalidateForPublication", AgentOwnerScope.class, String.class, long.class);
         var boundTransaction = boundMethod.getAnnotation(
                 org.springframework.transaction.annotation.Transactional.class);
-        var detachedMethod = AgentHostedRuntimePublicationWorker.class.getMethod(
-                "revalidateDetachedForPublication", AgentOwnerScope.class, String.class, long.class);
-        var detachedTransaction = detachedMethod.getAnnotation(
-                org.springframework.transaction.annotation.Transactional.class);
-
         assertNotNull(boundTransaction);
         assertEquals(org.springframework.transaction.annotation.Propagation.REQUIRES_NEW,
                 boundTransaction.propagation());
         assertTrue(boundTransaction.readOnly());
-        assertNotNull(detachedTransaction);
-        assertEquals(org.springframework.transaction.annotation.Propagation.REQUIRES_NEW,
-                detachedTransaction.propagation());
-        assertTrue(detachedTransaction.readOnly());
     }
 
     @Test
-    void hostedPublicationKeepsBoundAndDetachedRuntimeContractsDistinct() {
+    void hostedPublicationRejectsDetachedOrForeignRuntime() {
         AgentRuntimeDao runtimeDao = mock(AgentRuntimeDao.class);
         AgentHostedRuntimePublicationWorker worker =
                 new AgentHostedRuntimePublicationWorker(runtimeDao);
@@ -50,8 +41,7 @@ class AgentHostedRuntimePublicationWorkerTest {
         assertSame(bound, worker.revalidateForPublication(SCOPE, AGENT_ID, 12L));
         assertNull(worker.revalidateForPublication(SCOPE, AGENT_ID, 12L));
         assertNull(worker.revalidateForPublication(SCOPE, AGENT_ID, 12L));
-        assertSame(detached,
-                worker.revalidateDetachedForPublication(SCOPE, AGENT_ID, 31L));
+        assertNull(worker.revalidateForPublication(SCOPE, AGENT_ID, 12L));
     }
 
     private static AgentRuntimeEntity runtime(String status) {

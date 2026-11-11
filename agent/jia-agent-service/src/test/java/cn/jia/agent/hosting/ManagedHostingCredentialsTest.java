@@ -93,6 +93,7 @@ class ManagedHostingCredentialsTest {
         order.verify(bindings).findByIdForUpdate(17L);
         order.verify(rent).selectIntentForUpdate(anyString(), anyString(), anyString());
         order.verify(rent).selectLeaseForUpdate(anyString(), anyString(), anyString());
+        verify(identities, never()).requireActiveBinding(any(), any());
     }
     @Test void installationAssociationDoesNotHoldIntentWhileWaitingForBindingFence() throws Exception {
         jdbc.execute("CREATE TABLE binding_fence(id INT PRIMARY KEY)"); jdbc.update("INSERT INTO binding_fence VALUES(17)");
