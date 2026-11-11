@@ -140,6 +140,20 @@ class HostingRentRenewalMySqlTest {
     @Test
     @EnabledIfEnvironmentVariable(named = "CYF_GSS_RUNTIME_TEST_SOURCE", matches = ".+")
     void actualRuntimeHandoverClosesOldRelationshipAndCapturesNewInvitation() throws Exception {
+        actualRuntimeHandover(false);
+    }
+
+    @Test
+    @EnabledIfEnvironmentVariable(named = "CYF_GSS_RUNTIME_TEST_SOURCE", matches = ".+")
+    void actualSelfHostedRentHandoverCapturesFiftyWenAndRetainedSkillOnReinvite() throws Exception {
+        actualRuntimeHandover(true);
+    }
+
+    /** Both configured price plans use the same real wallet/lease/Runtime path. Transport is
+     * local UDS here; static adoption and mutual TLS have their own actual-adapter tests. */
+    private void actualRuntimeHandover(boolean selfHosted) throws Exception {
+        long recurringWen = selfHosted ? 50L : 500L;
+        String expectedPlan = selfHosted ? "agent-self-hosted" : "agent-hosting-preview";
         var identities = identityFixture();
         String schema = new ClassPathResource("db/schema.sql").getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
         for (String table : List.of("agent_persona", "agent_runtime", "agent_task_meta", "agent_task_member")) {
@@ -246,7 +260,8 @@ class HostingRentRenewalMySqlTest {
                     ((Number)endpoint.get("uid")).longValue(), "tenant", "client", "*", 10000,
                     ((Number)endpoint.get("gid")).longValue(), null);
             var channel = new HostingControlChannel(new cn.jia.agent.config.HostingControlRemoteProperties(
-                    (String)endpoint.get("hostId"), java.util.Map.of(), java.util.Set.of()), channelConfig, mock(cn.jia.agent.dao.AgentRuntimeDao.class),
+                    (String)endpoint.get("hostId"), java.util.Map.of(), selfHosted
+                            ? java.util.Set.of((String)endpoint.get("hostId")) : java.util.Set.of()), channelConfig, mock(cn.jia.agent.dao.AgentRuntimeDao.class),
                     beans.getBeanProvider(org.springframework.boot.ssl.SslBundles.class));
             var provider = new UnixManagedHostingProvisioner(properties, channelConfig, credentials, auth, channel);
             beans.addBean("provider", provider);
@@ -261,9 +276,10 @@ class HostingRentRenewalMySqlTest {
                     reconciler, manager, true);
             var owner = new HostingRentHttp.Actor("user", "tenant", "client", "owner");
             var quote = application.quote(owner, "wuyong", java.util.UUID.randomUUID().toString(), java.util.Map.of("purpose", "INITIAL"));
-            assertEquals("500", quote.amountWen()); assertEquals(1000, balance());
+            assertEquals(expectedPlan, quote.planId());
+            assertEquals(Long.toString(recurringWen), quote.amountWen()); assertEquals(1000, balance());
             var first = confirmLifecycleQuote(application, owner, quote);
-            assertEquals(500, balance());
+            assertEquals(1000 - recurringWen, balance());
             awaitLifecycleActive(reconciler, provider, first.intentId(), httpFailure, log);
             var original = leases.selectIntent("tenant", "client", first.intentId());
             var publicRow = runtimeRows.findInScope("tenant", "client", first.agentId());
@@ -301,12 +317,17 @@ class HostingRentRenewalMySqlTest {
             var history = jdbc.queryForMap("SELECT * FROM agent_identity_registry WHERE id=?", oldIdentity.getId());
             var successor = new HostingRentHttp.Actor("next-user", "tenant", "client", "next-owner");
             var nextQuote = application.quote(successor, "wuyong", java.util.UUID.randomUUID().toString(), java.util.Map.of("purpose", "INITIAL"));
-            assertEquals(first.agentId(), nextQuote.agentId()); assertEquals("550", nextQuote.amountWen());
-            assertEquals("1", nextQuote.initialSkillCount()); assertEquals("500", nextQuote.recurringAmountWen());
+            assertEquals(first.agentId(), nextQuote.agentId());
+            assertEquals(expectedPlan, nextQuote.planId());
+            assertEquals(Long.toString(recurringWen + 50), nextQuote.amountWen());
+            assertEquals("1", nextQuote.initialSkillCount());
+            assertEquals("50", nextQuote.initialSkillAmountWen());
+            assertEquals(Long.toString(recurringWen), nextQuote.recurringAmountWen());
             var next = confirmLifecycleQuote(application, successor, nextQuote);
             awaitLifecycleActive(reconciler, provider, next.intentId(), httpFailure, log);
-            assertEquals(450L, jdbc.queryForObject("SELECT balance_wen FROM economy_account WHERE owner_type='USER' AND owner_id='next-user'", Long.class));
-            assertEquals(500, balance());
+            assertEquals(1000 - recurringWen - 50, jdbc.queryForObject("SELECT balance_wen FROM economy_account WHERE owner_type='USER' AND owner_id='next-user'", Long.class));
+            assertEquals(1000 - recurringWen, balance());
+            assertEquals(recurringWen, leases.selectLeaseForUpdate("tenant", "client", next.leaseId()).getAmountWen());
             var readmitted = runtimeRows.findInScope("tenant", "client", first.agentId());
             assertEquals(publicRow.getId(), readmitted.getId()); assertEquals("next-owner", readmitted.getOwnerJiacn());
             assertNotEquals(original.getRuntimeInstallationId(), readmitted.getRuntimeInstallationId());
@@ -330,7 +351,8 @@ class HostingRentRenewalMySqlTest {
     private HostingRentApplicationService.MutationView confirmLifecycleQuote(HostingRentApplicationService application,
             HostingRentHttp.Actor actor, HostingRentApplicationService.QuoteView quote) {
         return (HostingRentApplicationService.MutationView)application.bind(actor, "wuyong", java.util.UUID.randomUUID().toString(),
-                java.util.Map.of("mode", "server", "hostingAction", "INITIAL", "agentId", quote.agentId(), "quoteId", quote.quoteId(),
+                java.util.Map.of("mode", cn.jia.agent.config.AgentHostingRentProperties.modeForPlan(quote.planId()),
+                        "hostingAction", "INITIAL", "agentId", quote.agentId(), "quoteId", quote.quoteId(),
                         "expectedPlanVersion", quote.planVersion(), "expectedAmountWen", quote.amountWen(), "expectedPeriodSeconds", quote.periodSeconds()));
     }
 
