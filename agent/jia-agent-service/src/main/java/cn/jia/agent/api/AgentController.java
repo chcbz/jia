@@ -26,6 +26,7 @@ import cn.jia.agent.hosting.HostingRentHttp;
 import cn.jia.agent.service.AbilityEvaluationService;
 import cn.jia.agent.service.AgentOwnerScope;
 import cn.jia.agent.service.AgentService;
+import cn.jia.agent.service.HostingRentAdmissionException;
 import cn.jia.agent.service.AgentTaskExecutionGrantException;
 import cn.jia.agent.service.AgentTaskExecutionGrantService;
 import cn.jia.agent.service.funding.FundedBountyException;
