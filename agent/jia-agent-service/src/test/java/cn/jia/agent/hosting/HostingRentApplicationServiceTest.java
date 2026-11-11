@@ -188,18 +188,80 @@ class HostingRentApplicationServiceTest {
         verifyNoInteractions(ledger,bindings,identities,reconciler); assertEquals(0,count());
     }
 
-    private void existingInvitation() {
-        var binding = new AgentPersonaBindingEntity().setId(17L).setAgentId(AGENT).setPersonaCode("wuyong")
+    private void existingInvitation() { existingInvitation(AGENT); }
+
+    private void existingInvitation(String agent) {
+        var binding = new AgentPersonaBindingEntity().setId(17L).setAgentId(agent).setPersonaCode("wuyong")
                 .setJiacn("Tenant-A").setStatus(1);
         binding.setClientId("Client-A");
-        var identity = new AgentIdentityRegistryEntity().setCanonicalAgentId(AGENT).setBindingId(17L);
+        var identity = new AgentIdentityRegistryEntity().setCanonicalAgentId(agent).setBindingId(17L);
         when(roots.lockBindings("Client-A", "wuyong")).thenReturn(List.of(binding));
         when(bindings.findByIdForUpdate(17L)).thenReturn(binding);
-        when(identities.requireRegistrationIdentityInScope("0", "Client-A", "Tenant-A", AGENT)).thenReturn(identity);
+        when(identities.requireRegistrationIdentityInScope("0", "Client-A", "Tenant-A", agent)).thenReturn(identity);
         when(identities.requireActiveBinding(identity, null)).thenReturn(binding);
         when(rent.selectPlanForUpdate(anyString(), anyString(), anyString(), eq(1L)))
                 .thenReturn(new EconomyHostingRentPlanEntity().setPlanId("plan").setPlanVersion(1L)
                         .setAmountWen(1000000000L).setPeriodSeconds(2592000L).setStatus("ACTIVE"));
+    }
+
+    @Test void existingCanonicalIdentityDoesNotNeedTheNewIdGeneratorPrefix() {
+        String agent = "jyt-fixture-likui";
+        var identity = new AgentIdentityRegistryEntity().setCanonicalAgentId(agent).setBindingId(17L);
+        when(identities.requireRegistrationIdentityInScope("0", "Client-A", "Tenant-A", agent)).thenReturn(identity);
+        var view = application.lookup(ACTOR, agent);
+        assertFalse(view.managed());
+        verify(rent).selectLatestLease("0", "Client-A", agent);
+        verifyNoInteractions(ledger, reconciler, provider);
+        assertEquals(0, count());
+    }
+
+    @Test void existingCanonicalLeaseRenewalUsesTheSameLedgerWithoutRenamingIdentity() {
+        String agent = "jyt-fixture-likui";
+        existingInvitation(agent);
+        when(rent.selectLeaseForUpdate("0", "Client-A", "hrl-test")).thenReturn(new EconomyHostingLeaseEntity()
+                .setLeaseId("hrl-test").setAgentId(agent).setPersonaCode("wuyong")
+                .setPrincipalId("login-sub").setPrincipalType("USER"));
+        when(ledger.quote(any())).thenAnswer(call -> {
+            HostingRentQuoteCommand command = call.getArgument(0);
+            assertEquals(agent, command.agentId());
+            assertEquals(HostingRentQuotePurpose.RENEWAL, command.purpose());
+            return new HostingRentQuoteReceipt("hrq-renew", HostingRentQuotePurpose.RENEWAL,
+                    "plan", 1L, 1000000000L, 2592000L, "wuyong", agent, "hrl-test", 4L, 1800000000000L,
+                    1000000000L, null);
+        });
+        assertEquals(agent, application.renewalQuote(ACTOR, "hrl-test", KEY,
+                Map.of("agentId", agent, "expectedLeaseVersion", "4")).agentId());
+        verify(identities).requireRegistrationIdentityInScope("0", "Client-A", "Tenant-A", agent);
+        verify(ledger, never()).reserve(any());
+        verifyNoInteractions(runtimes, reconciler, provider);
+        assertEquals(0, count());
+    }
+
+    @Test void existingLeaseLookupNeverAcceptsAnAliasAsCanonicalIdentity() {
+        String alias = "jyt-fixture-alias";
+        when(identities.requireRegistrationIdentityInScope("0", "Client-A", "Tenant-A", alias))
+                .thenReturn(new AgentIdentityRegistryEntity().setCanonicalAgentId(AGENT));
+        assertEquals("HOSTING_RENT_NOT_FOUND_OR_FORBIDDEN", assertThrows(HostingRentApplicationException.class,
+                () -> application.lookup(ACTOR, alias)).code());
+        verify(rent, never()).selectLatestLease(anyString(), anyString(), anyString());
+        verifyNoInteractions(ledger, reconciler, provider);
+    }
+
+    @Test void existingLeaseLookupStillRequiresScopedIdentityAuthorization() {
+        String agent = "jyt-fixture-likui";
+        var denied = new SecurityException("fixture: different owner");
+        when(identities.requireRegistrationIdentityInScope("0", "Client-A", "Tenant-A", agent)).thenThrow(denied);
+        assertSame(denied, assertThrows(SecurityException.class, () -> application.lookup(ACTOR, agent)));
+        verify(rent, never()).selectLatestLease(anyString(), anyString(), anyString());
+        verifyNoInteractions(ledger, reconciler, provider);
+    }
+
+    @Test void invalidExistingIdentityInputIsRejectedBeforeRegistryOrLeaseReads() {
+        for (String agent : java.util.Arrays.asList(null, "", " padded", "trailing ", "bad\nline", "x".repeat(101))) {
+            assertThrows(HostingRentApplicationException.class, () -> application.lookup(ACTOR, agent));
+        }
+        verifyNoInteractions(identities, ledger, reconciler, provider);
+        verify(rent, never()).selectLatestLease(anyString(), anyString(), anyString());
     }
 
     @Test void manualRenewalQuoteAndConfirmationLockBindingBeforeLease() {

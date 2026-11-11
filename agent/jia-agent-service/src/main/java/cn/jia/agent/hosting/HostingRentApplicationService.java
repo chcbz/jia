@@ -226,7 +226,7 @@ public final class HostingRentApplicationService {
 
     public QuoteView renewalQuote(Actor actor, String leaseId, String idempotencyKey, Map<String, String> body) {
         requireEnabled(actor); key(idempotencyKey); exact(leaseId, 100);
-        String agentId = required(body, "agentId"); requireCanonicalShape(agentId);
+        String agentId = required(body, "agentId"); requireAgentId(agentId);
         long version = positive(required(body, "expectedLeaseVersion"));
         byte[] hash = hash("RENEWAL:" + leaseId, body);
         return transactions.execute(status -> {
@@ -270,7 +270,7 @@ public final class HostingRentApplicationService {
     public RemovalView remove(Actor actor, String personaCode, String agentId, String leaseId) {
         if (!schemaEnabled) throw new HostingRentApplicationException(503, "HOSTING_RENT_NOT_READY");
         preview.requireMutationAllowed(actor.tenantId(), actor.clientId());
-        exact(personaCode, 100); requireCanonicalShape(agentId); exact(leaseId, 100);
+        exact(personaCode, 100); requireAgentId(agentId); exact(leaseId, 100);
         return transactions.execute(status -> {
             String owner = owners.requireOwner(actor);
             var identity = identities.lockRegistrationIdentityInScope(
@@ -289,7 +289,7 @@ public final class HostingRentApplicationService {
     public record RemovalView(String agentId, String leaseId, String status) { }
 
     public LeaseView lookup(Actor actor, String agentId) {
-        requireEnabled(actor); requireCanonicalShape(agentId);
+        requireEnabled(actor); requireAgentId(agentId);
         return reads.execute(status -> {
             String owner = owners.requireOwner(actor);
             var identity = identities.requireRegistrationIdentityInScope(actor.tenantId(), actor.clientId(), owner, agentId);
@@ -321,7 +321,7 @@ public final class HostingRentApplicationService {
     private ReprovisionView reprovision(Actor actor, String personaCode, String idempotencyKey, Map<String, String> body) {
         if (!Set.of("mode", "hostingAction", "agentId", "leaseId", "expectedLeaseVersion")
                 .containsAll(body.keySet())) throw badRequest();
-        String agentId = required(body, "agentId"); requireCanonicalShape(agentId);
+        String agentId = required(body, "agentId"); requireAgentId(agentId);
         String leaseId = required(body, "leaseId");
         long version = positive(required(body, "expectedLeaseVersion"));
         byte[] requestHash = hash("REPROVISION:" + personaCode, body);
@@ -419,7 +419,6 @@ public final class HostingRentApplicationService {
     }
 
     private AgentPersonaBindingEntity requireExisting(Actor actor, String owner, String agentId, String personaCode) {
-        requireCanonicalShape(agentId);
         AgentIdentityRegistryEntity identity = identities.requireRegistrationIdentityInScope(
                 actor.tenantId(), actor.clientId(), owner, agentId);
         if (!agentId.equals(identity.getCanonicalAgentId())) throw forbidden();
@@ -481,6 +480,12 @@ public final class HostingRentApplicationService {
             String plan, long version, HostingRentQuotePurpose purpose, String lease, Long leaseVersion, HostingRentInitialSkills skills) {
         return new HostingRentQuoteCommand(actor.scope(), actor.principal(), key, hash, purpose,
                 plan, version, persona, agent, lease, leaseVersion, skills);
+    }
+    /** Existing identity syntax is owned by the registry, not by the new-ID generator.
+     * Never resolve aliases here: the scoped registry result must equal the requested ID. */
+    private static void requireAgentId(String agentId) {
+        try { exact(agentId, 100); }
+        catch (IllegalArgumentException invalid) { throw badRequest(); }
     }
     private static void requireCanonicalShape(String agentId) {
         if (agentId == null || !agentId.matches("agt_[0-9a-f]{32}")) throw badRequest();
