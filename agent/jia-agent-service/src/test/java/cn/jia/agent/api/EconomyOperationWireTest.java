@@ -59,4 +59,43 @@ class EconomyOperationWireTest {
         assertTrue(value.get("personalMark").get("viewedResultRef").isNull());
         assertEquals(9007199254740993L,input.personalMark().revision());
     }
+    @Test void leaseProjectionIncludesImmutablePricingPlan() {
+        var lease = new HostingRentApplicationService.LeaseSnapshot("lease", "agent", "linchong", "binding", "2",
+                "ACTIVE", "1", "50", "2592000", "1000", "2592001000", "WEN", "agent-self-hosted");
+        var value = json.readTree(json.writeValueAsString(EconomyOperationWire.from(lease)));
+        assertEquals("agent-self-hosted", value.get("planId").asText());
+        assertEquals("50", value.get("amountWen").asText());
+        assertEquals(2592001000L, value.get("paidThrough").asLong());
+    }
+
+    @Test void bothModesUseActualPaidHttpBoundaryWithoutFreeBindingFallback() throws Exception {
+        var service = mock(HostingRentApplicationService.class);
+        var agents = mock(cn.jia.agent.service.AgentService.class);
+        var controller = new AgentController(agents, mock(cn.jia.agent.service.AbilityEvaluationService.class));
+        controller.setHostingRent(service);
+        when(service.bind(any(), eq("linchong"), anyString(), any())).thenReturn(
+                new HostingRentApplicationService.MutationView("agent", "intent", "lease", "quote", "tx",
+                        "FUNDS_RESERVED", "WEN", "50", "2592000", "2000"));
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller)
+                .setControllerAdvice(new cn.jia.core.config.ApiEnvelopeAdvice(), new cn.jia.core.config.ApiRequestEnvelopeAdvice(), new cn.jia.core.config.ExceptionHandlerAdvice())
+                .addFilters(new cn.jia.core.filter.RequestIdFilter()).build();
+        var jwt = org.springframework.security.oauth2.jwt.Jwt.withTokenValue("fixture").claim("tenant_id", "0").header("alg", "none")
+                .subject("owner").claim("jiacn", "owner").claim("client_id", "client").build();
+        var auth = new org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken(jwt);
+        auth.setAuthenticated(true);
+        for (String mode : java.util.List.of("server", "local")) {
+            mvc.perform(post("/agent/personas/linchong/bind").principal(auth)
+                    .header("Idempotency-Key", "00000000-0000-4000-8000-000000000001").contentType("application/json")
+                    .content("{\"protocolVersion\":1,\"requestId\":\"bind-test\",\"data\":{\"mode\":\"" + mode + "\",\"hostingAction\":\"INITIAL\"}}"))
+                    .andExpect(status().isAccepted()).andExpect(jsonPath("$.data.status").value("FUNDS_RESERVED"))
+                    .andExpect(jsonPath("$.data.occurredAt").value(2000));
+            verify(service).bind(any(), eq("linchong"), anyString(), eq(java.util.Map.of("mode", mode, "hostingAction", "INITIAL")));
+        }
+        mvc.perform(post("/agent/personas/linchong/bind").principal(auth).contentType("application/json")
+                .content("{\"protocolVersion\":1,\"requestId\":\"free-test\",\"data\":{\"mode\":\"local\"}}"))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(agents);
+        verifyNoMoreInteractions(service);
+    }
+
 }

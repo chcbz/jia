@@ -34,7 +34,7 @@ class HostingRentHttpTest {
 
     @BeforeEach
     void setUp() {
-        var controller = new AgentController(agents, mock(AbilityEvaluationService.class), provisioning);
+        var controller = new AgentController(agents, mock(AbilityEvaluationService.class));
         controller.setHostingRent(application);
         mvc = MockMvcBuilders.standaloneSetup(controller, new AgentHostingRentController(application)).build();
     }
@@ -126,20 +126,12 @@ class HostingRentHttpTest {
     }
 
     @Test
-    void localAndDefaultBindingUseExactAuthenticatedProvisioningWithoutRent() throws Exception {
-        for (String body : List.of("null", "{}", "{\"mode\":null}", "{\"mode\":\" \"}")) {
+    void localAndDefaultWithoutPaidConfirmationCannotBind() throws Exception {
+        for (String body : List.of("null", "{}", "{\"mode\":null}", "{\"mode\":\"local\"}")) {
             mvc.perform(post(BIND).principal(jwt()).contentType(MediaType.APPLICATION_JSON).content(body))
-                    .andExpect(status().isOk());
+                    .andExpect(status().isBadRequest());
         }
-        mvc.perform(post(BIND).principal(jwt()).contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"mode\":\"local\"}"))
-                .andExpect(status().isOk());
-        var scope = new cn.jia.agent.service.AgentOwnerScope(
-                "0", "Client-A", "Tenant-A");
-        verify(provisioning, times(2)).bind(scope, "wuyong", null);
-        verify(provisioning).bind(scope, "wuyong", " ");
-        verify(provisioning, times(2)).bind(scope, "wuyong", "local");
-        verifyNoInteractions(application, agents);
+        verifyNoInteractions(application, provisioning, agents);
     }
 
     @Test

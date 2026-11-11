@@ -8,7 +8,6 @@ import cn.jia.agent.entity.AbilityCompareRequestDTO;
 import cn.jia.agent.entity.AbilityEvaluationRequestDTO;
 import cn.jia.agent.entity.AgentCapabilityDTO;
 import cn.jia.agent.entity.AgentAbilitiesUpdateDTO;
-import cn.jia.agent.entity.AgentPersonaBindRequestDTO;
 import cn.jia.agent.entity.AgentRegisterDTO;
 import cn.jia.agent.entity.AgentRosterSearchDTO;
 import cn.jia.agent.entity.AgentStatusDTO;
@@ -26,11 +25,9 @@ import cn.jia.agent.hosting.HostingRentErrors;
 import cn.jia.agent.hosting.HostingRentHttp;
 import cn.jia.agent.service.AbilityEvaluationService;
 import cn.jia.agent.service.AgentOwnerScope;
-import cn.jia.agent.service.AgentPersonaProvisioningService;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.AgentTaskExecutionGrantException;
 import cn.jia.agent.service.AgentTaskExecutionGrantService;
-import cn.jia.agent.service.HostingRentAdmissionException;
 import cn.jia.agent.service.funding.FundedBountyException;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import cn.jia.core.entity.JsonResult;
@@ -58,7 +55,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -70,22 +66,15 @@ import java.util.Set;
 public class AgentController {
     private final AgentService agentService;
     private final AbilityEvaluationService abilityEvaluationService;
-    private final AgentPersonaProvisioningService personaProvisioningService;
     private cn.jia.agent.skill.SkillRosterProjection skillRoster;
     private HostingRentApplicationService hostingRent;
     private AgentTaskExecutionGrantService taskExecutionGrants;
 
-    public AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService) {
-        this(agentService, abilityEvaluationService, null);
-    }
-
     @Autowired
-    public AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService,
-            AgentPersonaProvisioningService personaProvisioningService) {
+    public AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService) {
         this.agentService = Objects.requireNonNull(agentService, "agentService");
         this.abilityEvaluationService = Objects.requireNonNull(
                 abilityEvaluationService, "abilityEvaluationService");
-        this.personaProvisioningService = personaProvisioningService;
     }
 
     @Autowired
@@ -140,54 +129,27 @@ public class AgentController {
     @PostMapping("/personas/{personaCode}/bind")
     public Object bindPersonaHttp(@PathVariable String personaCode, Authentication authentication,
             HttpServletRequest servletRequest, @cn.jia.core.annotation.ApiJsonData @RequestBody(required = false) byte[] rawBody) {
-        if (rawBody == null || rawBody.length == 0
-                || "null".equals(new String(rawBody, StandardCharsets.UTF_8).strip())) {
-            return bindPersona(personaCode, null, authentication);
-        }
+        var actor = HostingRentHttp.actor(authentication);
         Map<String, String> body = HostingRentHttp.body(rawBody,
                 Set.of("mode", "hostingAction", "agentId", "quoteId", "leaseId",
-                        "expectedLeaseVersion", "expectedPlanVersion", "expectedAmountWen",
-                        "expectedPeriodSeconds"),
-                Set.of("mode", "agentId", "leaseId"));
-        String mode = body.get("mode");
-        if (mode != null && "server".equalsIgnoreCase(mode.strip())) {
-            if (hostingRent == null) {
-                throw new HostingRentAdmissionException(
-                        HostingRentAdmissionException.Reason.HOSTING_RENT_NOT_READY);
-            }
-            try {
-                Object receipt = hostingRent.bind(HostingRentHttp.actor(authentication), personaCode,
-                        HostingRentHttp.key(servletRequest), body);
-                return ResponseEntity.accepted()
-                        .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
-                        .body(JsonResult.success(EconomyOperationWire.hosting(receipt)));
-            } catch (RuntimeException failure) {
-                return HostingRentErrors.response(failure);
-            }
+                        "expectedLeaseVersion", "expectedPlanVersion", "expectedAmountWen", "expectedPeriodSeconds"),
+                Set.of());
+        if (!"server".equals(body.get("mode")) && !"local".equals(body.get("mode"))) throw HostingRentHttp.badRequest();
+        String key = HostingRentHttp.key(servletRequest);
+        if (hostingRent == null) throw new HostingRentApplicationException(503, "HOSTING_RENT_NOT_READY");
+        try {
+            Object receipt = hostingRent.bind(actor, personaCode, key, body);
+            return ResponseEntity.accepted().header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                    .body(JsonResult.success(EconomyOperationWire.hosting(receipt)));
+        } catch (RuntimeException failure) {
+            return HostingRentErrors.response(failure);
         }
-        if (body.keySet().stream().anyMatch(name -> !"mode".equals(name))) {
-            throw HostingRentHttp.badRequest();
-        }
-        AgentPersonaBindRequestDTO request = new AgentPersonaBindRequestDTO();
-        request.setMode(mode);
-        return bindPersona(personaCode, request, authentication);
     }
 
     @ExceptionHandler({HostingRentApplicationException.class, HostingRentException.class,
             EconomyPostingException.class})
     public Object rentFailure(RuntimeException failure) {
         return HostingRentErrors.response(failure);
-    }
-
-    public Object bindPersona(String personaCode, AgentPersonaBindRequestDTO request,
-            Authentication authentication) {
-        AgentOwnerScope scope = requireJwtScope(authentication);
-        String mode = request == null ? "local" : request.getMode();
-        if (mode != null && "server".equalsIgnoreCase(mode.strip())) {
-            throw new HostingRentAdmissionException(
-                    HostingRentAdmissionException.Reason.HOSTING_RENT_NOT_READY);
-        }
-        return JsonResult.success(requirePersonaProvisioningService().bind(scope, personaCode, mode));
     }
 
     @DeleteMapping("/personas/{personaCode}/bind")
@@ -198,14 +160,6 @@ public class AgentController {
         if (hostingRent == null) throw new HostingRentApplicationException(503, "HOSTING_RENT_NOT_READY");
         return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, "private, no-store")
                 .body(JsonResult.success(hostingRent.remove(actor, personaCode, HostingRentHttp.required(body, "agentId"), HostingRentHttp.required(body, "leaseId"))));
-    }
-
-    private AgentPersonaProvisioningService requirePersonaProvisioningService() {
-        if (personaProvisioningService == null) {
-            throw new AgentBizException(AgentErrorConstants.AGENT_ERROR,
-                    "Persona provisioning is unavailable");
-        }
-        return personaProvisioningService;
     }
 
     public static AgentOwnerScope requireJwtScope(Authentication authentication) {

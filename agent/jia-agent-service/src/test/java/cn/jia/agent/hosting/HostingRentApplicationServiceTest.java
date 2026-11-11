@@ -601,4 +601,13 @@ class HostingRentApplicationServiceTest {
         verifyNoInteractions(provider, reconciler);
     }
 
+    @Test void missingOrNullDeploymentModeIsAnInputRejectionWithoutEffects() {
+        var body = new java.util.HashMap<>(confirmation());
+        body.put("mode", null);
+        assertThrows(HostingRentApplicationException.class, () -> application.bind(ACTOR, "wuyong", KEY, body));
+        body.remove("mode");
+        assertThrows(HostingRentApplicationException.class, () -> application.bind(ACTOR, "wuyong", KEY, body));
+        verifyNoInteractions(ledger, provider, bindings, identities, reconciler);
+    }
+
 }

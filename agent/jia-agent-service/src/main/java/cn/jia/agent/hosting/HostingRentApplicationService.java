@@ -143,7 +143,7 @@ public final class HostingRentApplicationService {
     public BindView bind(Actor actor, String personaCode, String idempotencyKey, Map<String, String> body) {
         requireEnabled(actor);
         key(idempotencyKey); exact(personaCode, 100);
-        if (!Set.of("server", "local").contains(body.getOrDefault("mode", ""))) throw badRequest();
+        if (!"server".equals(body.get("mode")) && !"local".equals(body.get("mode"))) throw badRequest();
         if ("REPROVISION".equals(body.get("hostingAction"))) return reprovision(actor, personaCode, idempotencyKey, body);
         if (!"INITIAL".equals(body.get("hostingAction"))) throw badRequest();
         if (!Set.of("mode", "hostingAction", "agentId", "quoteId", "expectedPlanVersion",
@@ -318,7 +318,7 @@ public final class HostingRentApplicationService {
             };
             return new LeaseView(true, new LeaseSnapshot(lease.getLeaseId(), agentId, lease.getPersonaCode(),
                     lease.getBindingId(), number(lease.getVersion()), lease.getStatus(), number(lease.getPlanVersion()),
-                    number(lease.getAmountWen()), number(lease.getPeriodSeconds()), number(lease.getPaidFrom()), number(lease.getPaidThrough()), intent.getSettlementKind()),
+                    number(lease.getAmountWen()), number(lease.getPeriodSeconds()), number(lease.getPaidFrom()), number(lease.getPaidThrough()), intent.getSettlementKind(), lease.getPlanId()),
                     new IntentSnapshot(intent.getIntentId(), number(intent.getVersion()), intent.getStatus(),
                             number(intent.getServiceReadyAt()), intent.getReserveTransactionId(), intent.getCaptureTransactionId(),
                             intent.getRefundTransactionId()), admission, reprovisionSnapshot(rent.selectLatestReprovision(
@@ -543,7 +543,7 @@ public final class HostingRentApplicationService {
     }
     public record LeaseSnapshot(String leaseId, String agentId, String personaCode, String bindingId, String version,
                                 String status, String planVersion, String amountWen, String periodSeconds,
-                                String paidFrom, String paidThrough, String settlementKind) { }
+                                String paidFrom, String paidThrough, String settlementKind, String planId) { }
     public record IntentSnapshot(String intentId, String version, String status, String serviceReadyAt,
                                  String reserveTransactionId, String captureTransactionId, String refundTransactionId) { }
 }

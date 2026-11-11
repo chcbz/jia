@@ -31,8 +31,8 @@ final class EconomyOperationWire {
     record LeaseView(boolean managed, LeaseSnapshot lease, IntentSnapshot intent, String admission, ReprovisionSnapshot reprovision) { }
     static LeaseView from(HostingRentApplicationService.LeaseView v) { return v == null ? null : new LeaseView(v.managed(), from(v.lease()), from(v.intent()), v.admission(), from(v.reprovision())); }
     @JsonInclude(JsonInclude.Include.ALWAYS)
-    record LeaseSnapshot(String leaseId, String agentId, String personaCode, String bindingId, String version, String status, String planVersion, String amountWen, String periodSeconds, Long paidFrom, Long paidThrough, String settlementKind) { }
-    static LeaseSnapshot from(HostingRentApplicationService.LeaseSnapshot v) { return v == null ? null : new LeaseSnapshot(v.leaseId(), v.agentId(), v.personaCode(), v.bindingId(), v.version(), v.status(), v.planVersion(), v.amountWen(), v.periodSeconds(), epoch(v.paidFrom()), epoch(v.paidThrough()), v.settlementKind()); }
+    record LeaseSnapshot(String leaseId, String agentId, String personaCode, String bindingId, String version, String status, String planVersion, String amountWen, String periodSeconds, Long paidFrom, Long paidThrough, String settlementKind, String planId) { }
+    static LeaseSnapshot from(HostingRentApplicationService.LeaseSnapshot v) { return v == null ? null : new LeaseSnapshot(v.leaseId(), v.agentId(), v.personaCode(), v.bindingId(), v.version(), v.status(), v.planVersion(), v.amountWen(), v.periodSeconds(), epoch(v.paidFrom()), epoch(v.paidThrough()), v.settlementKind(), v.planId()); }
     @JsonInclude(JsonInclude.Include.ALWAYS)
     record IntentSnapshot(String intentId, String version, String status, Long serviceReadyAt, String reserveTransactionId, String captureTransactionId, String refundTransactionId) { }
     static IntentSnapshot from(HostingRentApplicationService.IntentSnapshot v) { return v == null ? null : new IntentSnapshot(v.intentId(), v.version(), v.status(), epoch(v.serviceReadyAt()), v.reserveTransactionId(), v.captureTransactionId(), v.refundTransactionId()); }

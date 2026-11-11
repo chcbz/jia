@@ -1,6 +1,5 @@
 package cn.jia.agent.api;
 
-import cn.jia.agent.entity.AgentPersonaBindRequestDTO;
 import cn.jia.agent.hosting.HostingRentApplicationService;
 import cn.jia.agent.hosting.HostingRentApplicationException;
 import cn.jia.agent.hosting.HostingRentHttp;
@@ -31,7 +30,7 @@ class AgentControllerTest {
     private final AgentService agentService = mock(AgentService.class);
     private final AgentPersonaProvisioningService provisioning = mock(AgentPersonaProvisioningService.class);
     private final AgentController controller = new AgentController(
-            agentService, mock(AbilityEvaluationService.class), provisioning);
+            agentService, mock(AbilityEvaluationService.class));
 
     @Test
     void retiredHostedRepairRouteIsNotMappedAndCannotMutateBinding() throws Exception {
@@ -67,18 +66,15 @@ class AgentControllerTest {
     @Test
     void bindPersonaNeverAllowsSensitiveOutput() throws Exception {
         Method method = AgentController.class.getDeclaredMethod(
-                "bindPersona", String.class, AgentPersonaBindRequestDTO.class, Authentication.class);
+                "bindPersonaHttp", String.class, Authentication.class, byte[].class, jakarta.servlet.http.HttpServletRequest.class);
         assertNull(method.getAnnotation(AllowSensitiveOutput.class));
     }
 
     @Test
     void exactJwtScopeIsForwardedByteExactForEveryPublicOperation() {
         JwtAuthenticationToken auth = jwt("Owner-A", "Client-A");
-        AgentPersonaBindRequestDTO request = new AgentPersonaBindRequestDTO();
-        request.setMode("local");
 
         Object catalogResponse = controller.personaCatalog(auth);
-        controller.bindPersona("wuyong", request, auth);
         var rent = mock(HostingRentApplicationService.class);
         controller.setHostingRent(rent);
         var removal = assertInstanceOf(ResponseEntity.class, controller.unbindPersona("wuyong", auth,
@@ -93,7 +89,7 @@ class AgentControllerTest {
         var scope = new cn.jia.agent.service.AgentOwnerScope(
                 "0", "Client-A", "Owner-A");
         verify(agentService).listPersonaCatalog("0", "Client-A", "Owner-A");
-        verify(provisioning).bind(scope, "wuyong", "local");
+        verifyNoInteractions(provisioning);
         verifyNoMoreInteractions(provisioning);
     }
 
@@ -162,16 +158,31 @@ class AgentControllerTest {
     }
 
     @Test
-    void directServerModeCannotBypassPaidHostingRentBoundary() {
-        AgentPersonaBindRequestDTO request = new AgentPersonaBindRequestDTO();
-        request.setMode("server");
-
-        var failure = assertThrows(cn.jia.agent.service.HostingRentAdmissionException.class,
-                () -> controller.bindPersona("wuyong", request, jwt("owner", "client")));
-
-        assertEquals(cn.jia.agent.service.HostingRentAdmissionException.Reason.HOSTING_RENT_NOT_READY,
-                failure.reason());
+    void bothDeploymentModesUsePaidBoundaryWithExactActor() {
+        var rent = mock(HostingRentApplicationService.class); controller.setHostingRent(rent);
+        when(rent.bind(any(), anyString(), anyString(), any())).thenReturn(
+                new HostingRentApplicationService.MutationView("agent", "intent", "lease", "quote", "tx", "FUNDS_RESERVED",
+                        "WEN", "50", "2592000", "2000"));
+        for (String mode : List.of("server", "local")) {
+            var request = new org.springframework.mock.web.MockHttpServletRequest();
+            request.addHeader("Idempotency-Key", "00000000-0000-0000-0000-000000000001");
+            var body = ("{\"mode\":\"" + mode + "\",\"hostingAction\":\"INITIAL\"}").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            var response = assertInstanceOf(ResponseEntity.class, controller.bindPersonaHttp("wuyong", jwt("Owner-A", "Client-A"), body, request));
+            assertEquals(202, response.getStatusCode().value());
+            verify(rent).bind(new HostingRentHttp.Actor("login-sub", "0", "Client-A", "Owner-A"), "wuyong",
+                    "00000000-0000-0000-0000-000000000001", java.util.Map.of("mode", mode, "hostingAction", "INITIAL"));
+        }
         verifyNoInteractions(provisioning, agentService);
+    }
+
+    @Test
+    void nullDefaultAndLocalWithoutQuoteKeyCannotCreateFreeRelationship() {
+        var rent = mock(HostingRentApplicationService.class); controller.setHostingRent(rent);
+        for (String body : List.of("null", "{}", "{\"mode\":null}", "{\"mode\":\" \"}", "{\"mode\":\"local\"}")) {
+            assertThrows(HostingRentApplicationException.class, () -> controller.bindPersonaHttp("wuyong", jwt("Owner-A", "Client-A"),
+                    body.getBytes(java.nio.charset.StandardCharsets.UTF_8), new org.springframework.mock.web.MockHttpServletRequest()));
+        }
+        verifyNoInteractions(rent, provisioning, agentService);
     }
 
     @Test
@@ -190,13 +201,11 @@ class AgentControllerTest {
         invalid.add(jwt("0", "client"));
         invalid.add(jwt("o".repeat(51), "client"));
 
-        AgentPersonaBindRequestDTO request = new AgentPersonaBindRequestDTO();
-        request.setMode("server");
         for (Authentication authentication : invalid) {
             assertThrows(AgentBizException.class,
                     () -> controller.personaCatalog(authentication));
-            assertThrows(AgentBizException.class,
-                    () -> controller.bindPersona("wuyong", request, authentication));
+            assertThrows(HostingRentApplicationException.class,
+                    () -> controller.bindPersonaHttp("wuyong", authentication, "{}".getBytes(java.nio.charset.StandardCharsets.UTF_8), new org.springframework.mock.web.MockHttpServletRequest()));
             assertThrows(HostingRentApplicationException.class,
                     () -> controller.unbindPersona("wuyong", authentication, "{}".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
         }
