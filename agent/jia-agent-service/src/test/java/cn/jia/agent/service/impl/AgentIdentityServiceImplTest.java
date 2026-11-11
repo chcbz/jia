@@ -65,6 +65,44 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
         verify(registryDao).insert(result);
     }
 
+    @Test void retainedLegacyCanonicalKeepsIdAndTypeForNewRelationshipWithoutChangingHistory() {
+        String agent = "jyt-fixture-likui";
+        var binding = binding(agent);
+        var previous = registry(binding, agent, AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL,
+                AgentConstants.IDENTITY_STATUS_SUSPENDED);
+        previous.setBindingId(4L); previous.setOwnerJiacn("former-owner");
+        when(registryDao.findReleasedCanonical(TENANT, CLIENT, agent)).thenReturn(previous);
+        var current = service.provisionRetainedIdentity(binding, "paid public re-invitation");
+        assertEquals(agent, current.getCanonicalAgentId());
+        assertEquals(AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL, current.getCanonicalType());
+        assertEquals(OWNER, current.getOwnerJiacn());
+        assertEquals(binding.getId(), current.getBindingId());
+        assertEquals(AgentConstants.IDENTITY_STATUS_PROVISIONED, current.getLifecycleStatus());
+        assertEquals("former-owner", previous.getOwnerJiacn());
+        assertEquals(4L, previous.getBindingId());
+        verify(registryDao).insert(current);
+        verify(registryDao, never()).updateById(any());
+        org.mockito.Mockito.verifyNoInteractions(aliasDao);
+    }
+
+    @Test void newLegacyAndUnknownRetainedIdsCannotMintUnprovenIdentities() {
+        var binding = binding("jyt-fixture-likui");
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.provisionOpaqueIdentity(binding, "new"));
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.provisionRetainedIdentity(binding, "retained"));
+        verify(registryDao, never()).insert(any());
+        org.mockito.Mockito.verifyNoInteractions(aliasDao);
+    }
+
+    @Test void retainedIdentityReplayUsesCurrentRelationshipWithoutResurrectingOldRow() {
+        var binding = binding("jyt-fixture-likui");
+        var current = registry(binding, binding.getAgentId(), AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL,
+                AgentConstants.IDENTITY_STATUS_PROVISIONED);
+        when(registryDao.findExactByBindingInScope(TENANT, CLIENT, OWNER, binding.getId())).thenReturn(current);
+        assertSame(current, service.provisionRetainedIdentity(binding, "replay"));
+        verify(registryDao, never()).findReleasedCanonical(any(), any(), any());
+        verify(registryDao, never()).insert(any());
+    }
+
     @Test
     void suspendedOrRetiredIdentityCannotBeReprovisioned() {
         for (String lifecycle : new String[]{

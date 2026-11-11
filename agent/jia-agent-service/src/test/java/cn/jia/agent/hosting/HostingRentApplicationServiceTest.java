@@ -107,6 +107,13 @@ class HostingRentApplicationServiceTest {
             identity.setTenantId("0");
             return identity;
         });
+        when(identities.provisionRetainedIdentity(any(), anyString())).thenAnswer(call -> {
+            jdbc.update("INSERT INTO effects VALUES('identity')");
+            AgentPersonaBindingEntity binding = call.getArgument(0);
+            var identity = new AgentIdentityRegistryEntity().setCanonicalAgentId(binding.getAgentId()).setOwnerJiacn("Tenant-A");
+            identity.setTenantId("0");
+            return identity;
+        });
         when(runtimes.insert(any())).thenAnswer(call -> { jdbc.update("INSERT INTO effects VALUES('runtime')"); return 1; });
         when(rent.attachBinding("0", "Client-A", "hrl-test", "17")).thenReturn(1);
     }
@@ -144,7 +151,7 @@ class HostingRentApplicationServiceTest {
         var order=inOrder(renewal,ledger,bindings,identities,runtimes,reconciler);
         order.verify(renewal).completedHandover(ACTOR.scope(),AGENT,"original-installation");
         order.verify(ledger).reserve(any()); order.verify(bindings).insert(any());
-        order.verify(identities).provisionOpaqueIdentity(any(),anyString());
+        order.verify(identities).provisionRetainedIdentity(any(),anyString());
         order.verify(runtimes).attachReleasedBinding(eq(23L),eq(17L),eq("Tenant-A"),anyLong());
         order.verify(reconciler).wakeInitial(eq(ACTOR.clientId()), anyString());
     }

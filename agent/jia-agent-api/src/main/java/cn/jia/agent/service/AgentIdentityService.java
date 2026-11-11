@@ -10,6 +10,11 @@ public interface AgentIdentityService {
     AgentIdentityRegistryEntity provisionOpaqueIdentity(
             AgentPersonaBindingEntity binding, String auditReason);
 
+    /** Re-invites a retained public instance after the caller has completed its handover.
+     * Only an exact previously registered canonical identity may retain its original ID/type. */
+    AgentIdentityRegistryEntity provisionRetainedIdentity(
+            AgentPersonaBindingEntity binding, String auditReason);
+
     AgentIdentityRegistryEntity requireRegistrationIdentityInScope(
             String tenantId, String clientId, String ownerJiacn, String requestedAgentId);
 

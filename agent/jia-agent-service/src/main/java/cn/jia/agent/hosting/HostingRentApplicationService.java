@@ -188,8 +188,10 @@ public final class HostingRentApplicationService {
                 binding.setPersonaCode(personaCode); binding.setAgentId(quote.getAgentId());
                 binding.setBoundAt(receipt.occurredAt()); binding.setStatus(AgentConstants.BINDING_STATUS_ACTIVE);
                 if (bindings.insert(binding) != 1) throw conflict("HOSTING_RENT_CONFLICT");
-                AgentIdentityRegistryEntity identity = identities.provisionOpaqueIdentity(binding,
-                        "R01 paid admission: " + receipt.intentId());
+                String auditReason = "R01 paid admission: " + receipt.intentId();
+                AgentIdentityRegistryEntity identity = released == null
+                        ? identities.provisionOpaqueIdentity(binding, auditReason)
+                        : identities.provisionRetainedIdentity(binding, auditReason);
                 if (!quote.getAgentId().equals(identity.getCanonicalAgentId())
                         || !actor.tenantId().equals(identity.getTenantId()) || !owner.equals(identity.getOwnerJiacn())) {
                     throw forbidden();

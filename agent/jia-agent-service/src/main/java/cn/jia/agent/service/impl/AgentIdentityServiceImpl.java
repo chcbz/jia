@@ -39,9 +39,21 @@ public class AgentIdentityServiceImpl implements AgentIdentityService {
     @Transactional(rollbackFor = Exception.class)
     public AgentIdentityRegistryEntity provisionOpaqueIdentity(
             AgentPersonaBindingEntity binding, String auditReason) {
+        return provisionIdentity(binding, auditReason, false);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public AgentIdentityRegistryEntity provisionRetainedIdentity(
+            AgentPersonaBindingEntity binding, String auditReason) {
+        return provisionIdentity(binding, auditReason, true);
+    }
+
+    private AgentIdentityRegistryEntity provisionIdentity(
+            AgentPersonaBindingEntity binding, String auditReason, boolean retained) {
         requireBindingProjection(binding);
         requireExactText(auditReason, "auditReason", 1000);
-        if (!OPAQUE_ID.matcher(binding.getAgentId()).matches()) {
+        if (!retained && !OPAQUE_ID.matcher(binding.getAgentId()).matches()) {
             throw forbidden("New bindings require an opaque canonical Agent ID");
         }
         if (binding.getId() == null) {
@@ -61,10 +73,18 @@ public class AgentIdentityServiceImpl implements AgentIdentityService {
             return existing;
         }
 
+        String canonicalType = AgentConstants.IDENTITY_TYPE_OPAQUE;
+        if (retained) {
+            // Business handover/instance reuse is authorized by the caller; identity provenance belongs here.
+            var previous = registryDao.findReleasedCanonical(tenantId, binding.getClientId(), binding.getAgentId());
+            if (previous == null) throw forbidden("Retained Agent requires an existing released canonical identity");
+            validateRegistry(previous, tenantId, binding.getClientId(), previous.getOwnerJiacn(), binding.getAgentId(), true);
+            canonicalType = previous.getCanonicalType();
+        }
         long now = System.currentTimeMillis();
         AgentIdentityRegistryEntity identity = new AgentIdentityRegistryEntity();
         identity.setCanonicalAgentId(binding.getAgentId());
-        identity.setCanonicalType(AgentConstants.IDENTITY_TYPE_OPAQUE);
+        identity.setCanonicalType(canonicalType);
         identity.setLifecycleStatus(AgentConstants.IDENTITY_STATUS_PROVISIONED);
         identity.setClientId(binding.getClientId());
         identity.setOwnerJiacn(binding.getJiacn());

@@ -7,6 +7,9 @@ public interface AgentIdentityRegistryDao extends IBaseDao<AgentIdentityRegistry
     AgentIdentityRegistryEntity findExactByCanonicalInScope(String tenantId, String clientId,
             String ownerJiacn, String canonicalAgentId);
 
+    /** Identity provenance for public-instance re-invitation, not an owner read/registration grant. */
+    AgentIdentityRegistryEntity findReleasedCanonical(String tenantId, String clientId, String canonicalAgentId);
+
     /** Historical read grant, never a registration/dispatch authorization. */
     AgentIdentityRegistryEntity findActivatedByCanonicalInScope(String tenantId, String clientId,
             String ownerJiacn, String canonicalAgentId);

@@ -471,6 +471,36 @@ class HostingRentRenewalMySqlTest {
                 "UPDATE agent_identity_registry SET owner_jiacn='other' WHERE id=?", old.getId()));
     }
 
+    @Test void legacyRetainedCanonicalReinvitationPreservesHistoricalIdentityAndUsesNewOwner() throws Exception {
+        var identities = identityFixture();
+        String agent = "jyt-fixture-likui";
+        jdbc.update("INSERT INTO agent_persona_binding (id,jiacn,persona_code,agent_id,bound_at,status,tenant_id,client_id) VALUES (17,'old-owner','wuyong',?,1,2,'tenant','client')", agent);
+        var previous = new cn.jia.agent.entity.AgentIdentityRegistryEntity();
+        previous.setCanonicalAgentId(agent); previous.setCanonicalType("LEGACY_CANONICAL");
+        previous.setLifecycleStatus("SUSPENDED"); previous.setBindingId(17L);
+        previous.setTenantId("tenant"); previous.setClientId("client"); previous.setOwnerJiacn("old-owner");
+        previous.setProvisionedAt(1L); previous.setActivatedAt(2L); previous.setSuspendedAt(3L);
+        previous.setAuditReason("existing canonical migration fixture");
+        identityRegistry.insert(previous);
+        var history = jdbc.queryForMap("SELECT * FROM agent_identity_registry WHERE id=?", previous.getId());
+        jdbc.update("INSERT INTO agent_persona_binding (id,jiacn,persona_code,agent_id,bound_at,status,tenant_id,client_id) VALUES (18,'new-owner','wuyong',?,4,1,'tenant','client')", agent);
+        var binding = new cn.jia.agent.entity.AgentPersonaBindingEntity();
+        binding.setId(18L); binding.setAgentId(agent); binding.setPersonaCode("wuyong"); binding.setJiacn("new-owner");
+        binding.setTenantId("tenant"); binding.setClientId("client"); binding.setStatus(1); binding.setBoundAt(4L);
+        var current = identities.provisionRetainedIdentity(binding, "authorized completed-handover re-invitation");
+        assertEquals(agent, current.getCanonicalAgentId()); assertEquals("LEGACY_CANONICAL", current.getCanonicalType());
+        assertNotEquals(previous.getId(), current.getId());
+        assertEquals(current.getId(), identities.provisionRetainedIdentity(binding, "same relationship replay").getId());
+        assertEquals(current.getId(), identities.requireRegistrationIdentityInScope("tenant", "client", "new-owner", agent).getId());
+        assertThrows(RuntimeException.class, () -> identities.requireRegistrationIdentityInScope("tenant", "client", "old-owner", agent));
+        assertEquals(history, jdbc.queryForMap("SELECT * FROM agent_identity_registry WHERE id=?", previous.getId()));
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM agent_identity_registry", Integer.class));
+        assertNull(identityRegistry.findReleasedCanonical("other-tenant", "client", agent));
+        assertNull(identityRegistry.findReleasedCanonical("tenant", "other-client", agent));
+        assertNull(identityRegistry.findReleasedCanonical("tenant", "client", agent.toUpperCase(java.util.Locale.ROOT)));
+        assertThrows(IllegalArgumentException.class, () -> identityRegistry.findReleasedCanonical("tenant", "client", agent + " "));
+    }
+
     private cn.jia.agent.service.impl.AgentIdentityServiceImpl identityFixture() throws Exception {
         jdbc.execute("""
                 CREATE TABLE agent_persona_binding (

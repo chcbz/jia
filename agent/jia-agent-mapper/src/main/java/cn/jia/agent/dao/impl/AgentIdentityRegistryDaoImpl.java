@@ -41,6 +41,19 @@ public class AgentIdentityRegistryDaoImpl
     }
 
     @Override
+    public AgentIdentityRegistryEntity findReleasedCanonical(String tenantId, String clientId, String canonicalAgentId) {
+        requireExact(tenantId, "tenantId", 200);
+        requireExact(clientId, "clientId", 200);
+        requireExact(canonicalAgentId, "canonicalAgentId", 400);
+        QueryWrapper<AgentIdentityRegistryEntity> query = new QueryWrapper<>();
+        IdentityExactQuerySupport.exact(query, "tenant_id", tenantId, 200);
+        IdentityExactQuerySupport.exact(query, "client_id", clientId, 200);
+        IdentityExactQuerySupport.exact(query, "canonical_agent_id", canonicalAgentId, 400);
+        return baseMapper.selectOne(query.in("lifecycle_status", "SUSPENDED", "RETIRED")
+                .orderByDesc("id").last("limit 1"));
+    }
+
+    @Override
     public AgentIdentityRegistryEntity findActivatedByCanonicalInScope(
             String tenantId, String clientId, String ownerJiacn, String canonicalAgentId) {
         requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
