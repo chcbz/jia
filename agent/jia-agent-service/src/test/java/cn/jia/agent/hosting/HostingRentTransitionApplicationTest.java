@@ -58,6 +58,14 @@ class HostingRentTransitionApplicationTest {
     private HostingRentTransitionApplication.Request request() {
         return new HostingRentTransitionApplication.Request(actor, agent, installation, cutover);
     }
+    @Test void previewChecksOriginalSubjectButNeverAdoptsOrCreatesFinancialFacts() {
+        var terms = application.preview(request());
+        assertEquals("agent-self-hosted", terms.planId());
+        assertEquals(cutover, terms.cutoverAt());
+        assertEquals(installation, terms.installationId());
+        verify(provider, never()).adoptExisting(any(), any());
+        verifyNoInteractions(renewal);
+    }
     @Test void originalSelfHostedInstallationIsAdoptedOutsideTransactionAndStableTermsRegisteredInside() {
         assertEquals(application.register(request()), application.register(request()));
         assertEquals(2, registered.size()); assertEquals(registered.getFirst(), registered.getLast());

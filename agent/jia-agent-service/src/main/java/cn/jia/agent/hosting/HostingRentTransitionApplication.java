@@ -46,11 +46,20 @@ public final class HostingRentTransitionApplication {
     private record Snapshot(HostingRentRenewalService.Transition terms,
                             ManagedHostingProvisioner.Preparation association, ManagedHostingProvisioner.Candidate candidate) { }
 
-    public String register(Request request) {
+    /** Read-only operator preflight. Locks are released before returning; no Runtime mutation or grant. */
+    public HostingRentRenewalService.Transition preview(Request request) {
+        requireRequest(request);
+        return transactions.execute(tx -> inspect(request).terms());
+    }
+    private static void requireRequest(Request request) {
+        Objects.requireNonNull(request);
         if (TransactionSynchronizationManager.isActualTransactionActive())
             throw new IllegalStateException("Transition Runtime adoption must be outside transactions");
         if (request.cutoverAt() <= 0 || request.cutoverAt() > System.currentTimeMillis())
             throw new IllegalArgumentException("Cutover input must contain the actual fixed cutover time");
+    }
+    public String register(Request request) {
+        requireRequest(request);
         var original = transactions.execute(tx -> inspect(request));
         if (!provider.adoptExisting(original.association(), original.candidate()))
             throw new IllegalStateException("Original Runtime adoption unconfirmed; retry the fixed cutover input");
