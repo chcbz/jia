@@ -190,13 +190,16 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    public <T> T withInstallationAuthorization(String authorization,
+            java.util.function.Function<AgentRuntimeV1InstallationView, T> operation) {
+        return operation.apply(view(lockAuthenticatedInstallation(authorization), null));
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
     public AgentRuntimeV1SessionResponse session(String authorization, AgentRuntimeV1SessionRequest request, long now) {
-        AgentRuntimeV1InstallationEntity found = authenticate(authorization);
-        requireAdmitted(found.getTenantId(), found.getClientId());
-        AgentRuntimeV1InstallationEntity installation = installations.lock(found.getInstallationId());
-        if (installation == null || !"ACTIVE".equals(installation.getStatus())
-                || !MessageDigest.isEqual(digest(authorization), installation.getRuntimeAuthorizationHash())
-                || request == null || !sameRuntimeIdentity(installation, request.tenantId(), request.clientId(), request.canonicalAgentId())
+        AgentRuntimeV1InstallationEntity installation = lockAuthenticatedInstallation(authorization);
+        if (request == null || !sameRuntimeIdentity(installation, request.tenantId(), request.clientId(), request.canonicalAgentId())
                 || !Objects.equals(installation.getInstallationId(), request.installationId())
                 || !Objects.equals(installation.getManifestVersion(), request.manifestVersion())
                 || !Objects.equals(installation.getManifestSha256(), request.manifestSha256())) {
@@ -264,6 +267,17 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
             }
             return result;
         });
+    }
+
+    private AgentRuntimeV1InstallationEntity lockAuthenticatedInstallation(String authorization) {
+        var found = authenticate(authorization);
+        requireAdmitted(found.getTenantId(), found.getClientId());
+        var installation = installations.lock(found.getInstallationId());
+        if (installation == null || !"ACTIVE".equals(installation.getStatus())
+                || installation.getRuntimeAuthorizationHash() == null
+                || !MessageDigest.isEqual(digest(authorization), installation.getRuntimeAuthorizationHash()))
+            throw forbidden("Runtime v1 authorization rejected");
+        return installation;
     }
 
     private AgentRuntimeV1InstallationEntity authenticate(String authorization) {

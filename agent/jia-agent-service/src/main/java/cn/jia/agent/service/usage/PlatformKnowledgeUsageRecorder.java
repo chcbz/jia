@@ -24,17 +24,19 @@ public final class PlatformKnowledgeUsageRecorder {
                            String requestedModel, String requestedTier, JsonNode evidence) { }
     private static final ObjectMapper JSON = new ObjectMapper();
     private final HostingRentFinishingMapper relationships;
+    private final cn.jia.agent.dao.AgentPersonaBindingDao bindings;
+    private final cn.jia.economy.hosting.HostingRentRenewalService renewal;
     private final UsageCostService costs;
     private final ModelPriceCatalog prices;
-    public PlatformKnowledgeUsageRecorder(HostingRentFinishingMapper relationships, UsageCostService costs, ModelPriceCatalog prices) {
+    public PlatformKnowledgeUsageRecorder(HostingRentFinishingMapper relationships, UsageCostService costs, ModelPriceCatalog prices,
+            cn.jia.agent.dao.AgentPersonaBindingDao bindings, cn.jia.economy.hosting.HostingRentRenewalService renewal) {
         this.relationships = relationships; this.costs = costs; this.prices = prices;
+        this.bindings = bindings; this.renewal = renewal;
     }
-    public UsageCostService.Receipt record(AuthenticatedRuntimeOperation.Scope scope, String leaseId,
-                                           String handoverId, Evidence evidence) {
-        var relationship = relationships.findFinishingBinding(scope.tenantId(), scope.clientId(), leaseId);
-        if (relationship == null || !Objects.equals(scope.ownerJiacn(), relationship.getJiacn())
-                || !Objects.equals(scope.agentId(), relationship.getAgentId()))
-            throw new PersonalWorkspaceExecutionService.Failure(PersonalWorkspaceExecutionService.Reason.NOT_FOUND);
+    /** Caller owns the authenticated installation lock, then binding -> intent -> lease. */
+    public UsageCostService.Receipt record(cn.jia.agent.entity.AgentRuntimeV1InstallationView installation,
+                                           String leaseId, String handoverId, Evidence evidence) {
+        var scope = authorizeMaintenance(installation, leaseId, handoverId);
         var binding = UsageCostService.platformBinding(new EconomyScope(scope.tenantId(), scope.clientId()),
                 "PUBLIC_KNOWLEDGE_EXTRACTION", JSON.writeValueAsString(List.of(scope.agentId(), leaseId,
                         handoverId, evidence.batchId(), evidence.stage())));
@@ -60,5 +62,39 @@ public final class PlatformKnowledgeUsageRecorder {
         }
         return costs.record(new UsageCostService.Observation(binding, receiptId, starting ? 0 : 1, raw,
                 starting ? null : ResponsesUsageNormalizer.normalize(evidence.channel(), evidence.evidence()), price, 0));
+    }
+    private AuthenticatedRuntimeOperation.Scope authorizeMaintenance(
+            cn.jia.agent.entity.AgentRuntimeV1InstallationView installation, String leaseId, String handoverId) {
+        var partition = new EconomyScope(installation.tenantId(), installation.clientId());
+        var discovered = relationships.findFinishingBinding(partition.tenantId(), partition.clientId(), leaseId);
+        require(discovered != null && discovered.getId() != null);
+        var binding = bindings.findByIdForUpdate(discovered.getId());
+        require(binding != null && Integer.valueOf(1).equals(binding.getStatus())
+                && Objects.equals(partition.tenantId(), binding.getTenantId())
+                && Objects.equals(partition.clientId(), binding.getClientId())
+                && Objects.equals(installation.canonicalAgentId(), binding.getAgentId()));
+        var initial = renewal.initialHandoverIntent(partition, leaseId);
+        require(initial != null);
+        var financial = renewal.lockHandover(partition, initial.getIntentId(), leaseId);
+        var intent = financial.intent(); var lease = financial.lease();
+        require(intent != null && lease != null && "ACTIVE".equals(installation.status())
+                && "INITIAL".equals(intent.getQuotePurpose()) && "ACTIVE".equals(intent.getStatus())
+                && "USER".equals(intent.getPrincipalType()) && intent.getRefundTransactionId() == null
+                && Objects.equals(installation.installationId(), intent.getRuntimeInstallationId())
+                && Objects.equals(installation.manifestSha256(), intent.getRuntimeManifestSha256())
+                && Objects.equals(leaseId, intent.getLeaseId()) && Objects.equals(binding.getAgentId(), intent.getAgentId())
+                && "FINISHING".equals(lease.getStatus()) && lease.getExecutorStoppedAt() != null
+                && Objects.equals(handoverId, lease.getHandoverId())
+                && Objects.equals(leaseId, lease.getLeaseId())
+                && Objects.equals(String.valueOf(binding.getId()), lease.getBindingId())
+                && Objects.equals(binding.getAgentId(), lease.getAgentId())
+                && Objects.equals(binding.getPersonaCode(), lease.getPersonaCode())
+                && Objects.equals(intent.getPrincipalType(), lease.getPrincipalType())
+                && Objects.equals(intent.getPrincipalId(), lease.getPrincipalId()));
+        return new AuthenticatedRuntimeOperation.Scope(partition.tenantId(), partition.clientId(),
+                binding.getJiacn(), binding.getAgentId());
+    }
+    private static void require(boolean valid) {
+        if (!valid) throw new PersonalWorkspaceExecutionService.Failure(PersonalWorkspaceExecutionService.Reason.NOT_FOUND);
     }
 }

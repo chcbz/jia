@@ -42,13 +42,13 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request;
 
-/** Real Node -> native filter/controller/normalizer -> independent Spring/MySQL ledger.
+/** Real Node -> installation authorization/controller/normalizer -> independent Spring/MySQL ledger.
  * Identity repositories and FINISHING discovery are seeded mocks; provider is synthetic.
  * This does not claim production identity SQL, full release orchestration or paid-model acceptance. */
 @EnabledIfEnvironmentVariable(named = EconomyMySqlTestFixture.URL_ENV, matches = ".+")
 @EnabledIfEnvironmentVariable(named = "CYF_KNOWLEDGE_NODE_FIXTURE", matches = ".+")
 class PlatformKnowledgeUsageHttpMySqlTest {
-    @Test void realNativeReceiptsKeepOriginalTariffAndPlatformOwnershipAfterLostAck() throws Exception {
+    @Test void installationReceiptsSurviveDisabledOwnerAndKeepOriginalTariffAfterLostAck() throws Exception {
         try (var fixture = new EconomyMySqlTestFixture()) {
             fixture.start(); var db = fixture.newDatabase("knowledge");
             new EconomyUsageCostSchemaInitializer(db.dataSource()).afterPropertiesSet();
@@ -61,15 +61,21 @@ class PlatformKnowledgeUsageHttpMySqlTest {
             proxy.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
             var costs = (UsageCostService) proxy.getProxy();
             var identity = new AgentRuntimePersistentSessionFenceTest(); identity.setup();
-            var runtime = mock(AgentRuntimeV1Service.class);
-            when(runtime.session(anyString(), any(), anyLong())).thenAnswer(invocation -> {
-                assertEquals("rta1_" + "d".repeat(64), invocation.getArgument(0));
-                AgentRuntimeV1SessionRequest session = invocation.getArgument(1);
-                return identity.auth.issue(identity.installation, session, invocation.getArgument(2));
-            });
-            var relations = mock(HostingRentFinishingMapper.class);
-            when(relations.findFinishingBinding("0", "client", "lease")).thenReturn(new AgentPersonaBindingEntity()
-                    .setJiacn("owner").setAgentId(AgentRuntimePersistentSessionFenceTest.AGENT));
+            var relationship = new cn.jia.agent.service.usage.PlatformKnowledgeMaintenanceFixture(
+                    "0", "client", AgentRuntimePersistentSessionFenceTest.AGENT, AgentRuntimePersistentSessionFenceTest.ID);
+            identity.installation.setManifestVersion("1").setManifestSha256(relationship.installation.manifestSha256());
+            identity.installation.setRuntimeAuthorizationHash(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(("rta1_" + "d".repeat(64)).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            when(identity.installations.findActiveByAuthorizationHash(any())).thenReturn(identity.installation);
+            // The old account cannot authenticate; installation maintenance must still deliver only platform evidence.
+            when(identity.accounts.findUniqueByExactJiacn("owner")).thenReturn(Optional.of(new cn.jia.user.security.AccountSecuritySnapshot(7, "owner", cn.jia.user.security.AccountState.DISABLED, 3)));
+            var runtimeTarget = new cn.jia.agent.service.impl.AgentRuntimeV1ServiceImpl(identity.installations,
+                    identity.identities, identity.registry, mock(org.springframework.beans.factory.ObjectProvider.class),
+                    identity.auth, mock(org.springframework.beans.factory.ObjectProvider.class),
+                    new cn.jia.core.security.FixedTenantAdmissionPolicy("0", "client"));
+            var runtimeProxy = new ProxyFactory(runtimeTarget);
+            runtimeProxy.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
+            var runtime = (AgentRuntimeV1Service)runtimeProxy.getProxy();
             var oldPrice = new ModelTokenPrice("platform", "gpt-6-luna", "standard", "v1", "synthetic-cny",
                     Map.of(INPUT, new BigDecimal("1"), CACHED_INPUT, new BigDecimal("0.1"), OUTPUT, new BigDecimal("5")), null, Map.of());
             var newPrice = new ModelTokenPrice("platform", "gpt-6-luna", "standard", "v2", "synthetic-cny",
@@ -77,17 +83,18 @@ class PlatformKnowledgeUsageHttpMySqlTest {
             var current = new AtomicReference<>(oldPrice);
             var catalog = mock(ModelPriceCatalog.class);
             when(catalog.find("platform", "gpt-6-luna", "standard")).thenAnswer(call -> Optional.of(current.get()));
-            var recorder = new PlatformKnowledgeUsageRecorder(relations, costs, catalog);
+            var recorder = new PlatformKnowledgeUsageRecorder(relationship.relationships, costs, catalog, relationship.bindings, relationship.renewal);
             var servletPrincipal = new SecurityContextHolderAwareRequestFilter(); servletPrincipal.afterPropertiesSet();
             var nativeFilter = new AgentRuntimeAuthenticationFilter(identity.auth);
             // Production HttpSecurity mounts this closed filter only on its native matcher.
             // The installation-Bearer session exchange is a different credential lane.
             jakarta.servlet.Filter nativeLane = (request, response, chain) -> {
-                if (AgentRuntimeAuthenticationFilter.selectsRuntimeCredentialLane((jakarta.servlet.http.HttpServletRequest) request))
+                if (!cn.jia.agent.config.AgentRuntimeSecurityConfiguration.selectsRuntimeV1ClientLane((jakarta.servlet.http.HttpServletRequest) request)
+                        && AgentRuntimeAuthenticationFilter.selectsRuntimeCredentialLane((jakarta.servlet.http.HttpServletRequest) request))
                     nativeFilter.doFilter(request, response, chain);
                 else chain.doFilter(request, response);
             };
-            var mvc = MockMvcBuilders.standaloneSetup(new PlatformKnowledgeUsageController(recorder, identity.auth), new AgentRuntimeV1Controller(runtime))
+            var mvc = MockMvcBuilders.standaloneSetup(new PlatformKnowledgeUsageController(recorder, runtime), new AgentRuntimeV1Controller(runtime))
                     .setControllerAdvice(new ApiEnvelopeAdvice(), new ApiRequestEnvelopeAdvice())
                     .addFilters(new RequestIdFilter(), nativeLane, servletPrincipal).build();
             var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -103,9 +110,10 @@ class PlatformKnowledgeUsageHttpMySqlTest {
                     var data = body.get("data");
                     if (exchange.getRequestURI().getPath().endsWith("knowledge-usage") && result.getStatus() == 200) {
                         assertFalse(new String(bytes, java.nio.charset.StandardCharsets.UTF_8).contains("Synthetic private lesson"));
-                        if ("handover".equals(data.path("handoverId").asString())) {
-                            if ("STARTED".equals(data.path("observation").path("phase").asString())) current.set(newPrice);
-                            else if (responses.incrementAndGet() == 1) { exchange.close(); return; } // real commit, lost network ACK
+                        if ("STARTED".equals(data.path("observation").path("phase").asString())) current.set(newPrice);
+                        if ("gpt-6-luna".equals(data.path("observation").path("requestedModel").asString())
+                                && data.path("observation").path("evidence").path("usage").has("total_tokens")) {
+                            if (responses.incrementAndGet() == 1) { exchange.close(); return; } // real commit, lost network ACK
                         }
                     }
                     for (String key : result.getHeaderNames()) exchange.getResponseHeaders().put(key, new java.util.ArrayList<>(result.getHeaders(key)));
@@ -128,7 +136,8 @@ class PlatformKnowledgeUsageHttpMySqlTest {
                 int exit = node.waitFor();
                 assertNull(serverError.get(), () -> String.valueOf(serverError.get()));
                 assertEquals(0, exit, () -> read(log));
-                assertTrue(read(log).contains("\"providerCalls\":3"));
+                assertTrue(read(log).contains("\"providerCalls\":1"));
+                verify(identity.accounts, times(1)).findUniqueByExactJiacn("owner");
                 assertEquals(2, responses.get(), "one paid response, same receipt after lost ACK");
                 assertEquals(3L, db.jdbc().queryForObject("SELECT COUNT(*) FROM economy_usage_attempt", Long.class));
                 assertEquals(6L, db.jdbc().queryForObject("SELECT COUNT(*) FROM economy_usage_revision", Long.class));

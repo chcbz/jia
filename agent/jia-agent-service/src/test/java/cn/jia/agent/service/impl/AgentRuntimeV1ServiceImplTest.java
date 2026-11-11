@@ -414,6 +414,23 @@ class AgentRuntimeV1ServiceImplTest {
     }
 
 
+    @Test void installationMaintenanceDoesNotIssueSessionAndRechecksRevocationUnderLock() {
+        var active = installation("ACTIVE").setRuntimeAuthorizationHash(sha("maintenance"));
+        when(installations.findActiveByAuthorizationHash(any())).thenReturn(active);
+        when(installations.lock(active.getInstallationId())).thenReturn(active);
+        assertEquals(active.getInstallationId(), service.withInstallationAuthorization("maintenance", value -> value.installationId()));
+        verifyNoInteractions(identities, registry, sessions);
+        var revoked = installation("REVOKED").setRuntimeAuthorizationHash(sha("maintenance"));
+        when(installations.lock(active.getInstallationId())).thenReturn(revoked);
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.withInstallationAuthorization("maintenance", value -> {
+            fail("revoked installation executed maintenance"); return null;
+        }));
+        when(installations.lock(active.getInstallationId())).thenReturn(active);
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.withInstallationAuthorization("forged", value -> null));
+        active.setTenantId("foreign");
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.withInstallationAuthorization("maintenance", value -> null));
+    }
+
     @Test void tenantOneEnrollmentSessionHeartbeatStayBoundAndCrossTenantCallbacksFail() {
         service = new AgentRuntimeV1ServiceImpl(installations, identities, registry,
                 provider(acks), sessions, mock(ObjectProvider.class),

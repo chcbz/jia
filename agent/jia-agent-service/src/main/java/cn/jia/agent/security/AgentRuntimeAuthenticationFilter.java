@@ -47,8 +47,7 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
         String path = request.getRequestURI().substring(request.getContextPath().length());
         // No matrix parameters, encoded separators, dot-segments or alternate dispatch paths.
         String id = "[A-Za-z0-9][A-Za-z0-9._:-]{0,99}";
-        return "POST".equals(request.getMethod()) && path.matches("/internal/agent/hosting-leases/" + id + "/knowledge-usage")
-                || "POST".equals(request.getMethod()) && path.equals("/internal/agent/skill-management/results")
+        return "POST".equals(request.getMethod()) && path.equals("/internal/agent/skill-management/results")
                 || "GET".equals(request.getMethod()) && (path.equals("/internal/archive/v1/jobs") || path.matches("/internal/archive/v1/jobs/"+id+"/(?:source|result)"))
                 || "POST".equals(request.getMethod()) && path.matches("/internal/archive/v1/jobs/"+id+"/result")
                 || "GET".equals(request.getMethod()) && (path.equals("/internal/agent/position-skills") || path.matches("/internal/agent/position-skills/"+id+"/receipt"))
@@ -90,8 +89,7 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
         if (!"POST".equals(request.getMethod()) || request.getQueryString() != null) return false;
         String path = request.getRequestURI().substring(request.getContextPath().length());
         String id = "[A-Za-z0-9][A-Za-z0-9._:-]{0,99}";
-        return path.matches("/internal/agent/hosting-leases/" + id + "/knowledge-usage")
-                || path.equals("/internal/agent/skill-management/results")
+        return path.equals("/internal/agent/skill-management/results")
                 || path.matches("/internal/agent/chat/dispatches/" + id + "/usage")
                 || path.matches("/internal/agent/tasks/" + id + "/runs/" + id + "/conversation/(?:usage|provider-usage)");
     }

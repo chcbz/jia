@@ -21,11 +21,12 @@ import static org.mockito.Mockito.*;
 
 class PlatformKnowledgeUsageRecorderTest {
     final ObjectMapper json = new ObjectMapper();
-    final HostingRentFinishingMapper relationships = mock(HostingRentFinishingMapper.class);
+    final PlatformKnowledgeMaintenanceFixture fixture = new PlatformKnowledgeMaintenanceFixture("tenant", "client", "agent", "installation");
+    final HostingRentFinishingMapper relationships = fixture.relationships;
     final UsageCostService costs = mock(UsageCostService.class);
     final ModelPriceCatalog prices = mock(ModelPriceCatalog.class);
-    final PlatformKnowledgeUsageRecorder recorder = new PlatformKnowledgeUsageRecorder(relationships, costs, prices);
-    final AuthenticatedRuntimeOperation.Scope scope = new AuthenticatedRuntimeOperation.Scope("tenant", "client", "owner", "agent");
+    final PlatformKnowledgeUsageRecorder recorder = new PlatformKnowledgeUsageRecorder(relationships, costs, prices, fixture.bindings, fixture.renewal);
+    final cn.jia.agent.entity.AgentRuntimeV1InstallationView scope = fixture.installation;
     final ModelTokenPrice price = new ModelTokenPrice("platform", "gpt-6-luna", "standard", "v1", "fixture-cny",
             Map.of(INPUT, new BigDecimal("1"), CACHED_INPUT, new BigDecimal("0.1"), OUTPUT, new BigDecimal("5")), null, Map.of());
     PlatformKnowledgeUsageRecorder.Evidence evidence(PlatformKnowledgeUsageRecorder.Phase phase) {
@@ -34,10 +35,7 @@ class PlatformKnowledgeUsageRecorderTest {
                  "usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":20},"output_tokens":10,"total_tokens":110}}
                 """));
     }
-    void authorize() {
-        when(relationships.findFinishingBinding("tenant", "client", "lease"))
-                .thenReturn(new AgentPersonaBindingEntity().setJiacn("owner").setAgentId("agent"));
-    }
+    void authorize() { /* Fixture holds the exact original stopped relationship. */ }
     UsageCostService.Observation capture() {
         var captor = ArgumentCaptor.forClass(UsageCostService.Observation.class);
         verify(costs).record(captor.capture()); return captor.getValue();
@@ -91,13 +89,18 @@ class PlatformKnowledgeUsageRecorderTest {
         assertThrows(UsageCostConflict.class, () -> recorder.record(scope, "lease", "handover", evidence(RESPONDED)));
         verify(costs, never()).record(any()); verifyNoInteractions(prices);
     }
-    @Test void otherOwnerAgentOrNonFinishingRelationshipNeverTouchesCosts() {
-        for (var relation : new AgentPersonaBindingEntity[]{null,
-                new AgentPersonaBindingEntity().setJiacn("other").setAgentId("agent"),
-                new AgentPersonaBindingEntity().setJiacn("owner").setAgentId("other")}) {
-            when(relationships.findFinishingBinding("tenant", "client", "lease")).thenReturn(relation);
-            assertThrows(PersonalWorkspaceExecutionService.Failure.class, () -> recorder.record(scope, "lease", "handover", evidence(STARTED)));
-        }
+    @Test void wrongInstallationAndUnstoppedOrClosedLeaseNeverTouchCosts() {
+        fixture.intent.setRuntimeInstallationId("other");
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class, () -> recorder.record(scope, "lease", "handover", evidence(STARTED)));
+        fixture.intent.setRuntimeInstallationId(scope.installationId());
+        fixture.lease.setExecutorStoppedAt(null);
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class, () -> recorder.record(scope, "lease", "handover", evidence(STARTED)));
+        fixture.lease.setExecutorStoppedAt(100L); fixture.lease.setStatus("CLOSED");
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class, () -> recorder.record(scope, "lease", "handover", evidence(STARTED)));
+        fixture.lease.setStatus("FINISHING");
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class, () -> recorder.record(scope, "lease", "other-handover", evidence(STARTED)));
+        fixture.binding.setAgentId("other");
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class, () -> recorder.record(scope, "lease", "handover", evidence(STARTED)));
         verifyNoInteractions(costs, prices);
     }
     @Test void incompleteOrInconsistentCountersAndMissingActualIdentityRemainUnknown() {

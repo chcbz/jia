@@ -51,6 +51,6 @@ public class AgentRuntimeSecurityConfiguration {
         if ("/agent/runtime/v1/enroll".equals(path)
                 || "/agent/runtime/v1/session".equals(path)
                 || "/agent/runtime/v1/heartbeat".equals(path)) return true;
-        return false;
+        return path.matches("/internal/agent/hosting-leases/[A-Za-z0-9][A-Za-z0-9._:-]{0,99}/knowledge-usage");
     }
 }
