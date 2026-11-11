@@ -619,6 +619,8 @@ public final class HostingRentLedgerServiceImpl implements HostingRentLedgerServ
                 || !exact(lease.getPrincipalId(), command.principal().id())
                 || !exact(lease.getPersonaCode(), command.command().personaCode())
                 || !exact(lease.getAgentId(), command.command().agentId())
+                // Renewal can select a new price version, not a different deployment plan.
+                || !exact(lease.getPlanId(), command.command().planId())
                 || lease.getVersion() == null
                 || !lease.getVersion().equals(command.command().expectedLeaseVersion())) {
             throw new HostingRentException(NOT_FOUND_OR_FORBIDDEN, "lease is not visible");

@@ -642,6 +642,28 @@ class HostingRentLedgerServiceRealTransactionTest {
     }
 
     @Test
+    void renewalCannotSwitchDeploymentPlanEvenWhenOwnerAndLeaseVersionMatch() {
+        var first = activeLease("agent-plan-bound");
+        seedPlan("self-hosted-plan", 1, 50L, V1_PERIOD_SECONDS, 300);
+        var wallet = ledgerMapper.selectUserWalletSnapshot(TENANT, CLIENT, USER);
+        int quotes = count("economy_hosting_rent_quote");
+        int transactions = count("economy_transaction");
+        var originalLease = jdbc.queryForMap("SELECT * FROM economy_hosting_lease WHERE lease_id=?", first.leaseId());
+
+        var command = new HostingRentQuoteCommand(scope(), principal(),
+                "00000000-0000-0000-0000-000000000231", hash(231), HostingRentQuotePurpose.RENEWAL,
+                "self-hosted-plan", 1, "persona-renew", "agent-plan-bound", first.leaseId(), 2L, null);
+        var failure = assertThrows(HostingRentException.class, () -> service.quote(command));
+        assertEquals(HostingRentException.Reason.NOT_FOUND_OR_FORBIDDEN, failure.reason());
+        assertEquals(quotes, count("economy_hosting_rent_quote"));
+        assertEquals(transactions, count("economy_transaction"));
+        var after = ledgerMapper.selectUserWalletSnapshot(TENANT, CLIENT, USER);
+        assertEquals(wallet.getBalanceWen(), after.getBalanceWen());
+        assertEquals(wallet.getVersion(), after.getVersion());
+        assertEquals(originalLease, jdbc.queryForMap("SELECT * FROM economy_hosting_lease WHERE lease_id=?", first.leaseId()));
+    }
+
+    @Test
     void competingRenewalQuotesExtendExactlyOnceAndLoserCannotDebit() throws Exception {
         HostingRentMutationReceipt first = activeLease("agent-renew-race");
         HostingRentQuoteReceipt one = service.quote(renewalQuote(first.leaseId(), "agent-renew-race", 2, 1, 111));
