@@ -241,7 +241,7 @@ class HostingRentRenewalMySqlTest {
             } finally { exchange.close(); }
         });
         Path source = Path.of(System.getenv("CYF_GSS_RUNTIME_TEST_SOURCE")).toRealPath();
-        Path log = Path.of(System.getProperty("java.io.tmpdir")).resolve("runtime-lifecycle-node.log");
+        Path log = Path.of(System.getProperty("java.io.tmpdir")).resolve("runtime-lifecycle-" + expectedPlan + "-node.log");
         Process child = null;
         try {
             server.start();
