@@ -106,7 +106,7 @@ public final class HostingRentCutover {
     /** Only this profile can register the explicit maintenance graph in the normal classpath. */
     @Configuration(proxyBeanMethods = false)
     @Profile("hosting-rent-cutover")
-    @EnableTransactionManagement
+    @EnableTransactionManagement(proxyTargetClass = true)
     @ImportAutoConfiguration({DataSourceAutoConfiguration.class, SslAutoConfiguration.class})
     @EnableConfigurationProperties({AgentHostingRentProperties.class, ManagedHostingAdapterProperties.class,
             HostingControlRemoteProperties.class, AgentTaskEventsProperties.class, EconomyPreviewProperties.class})
