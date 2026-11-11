@@ -315,7 +315,7 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     private void requireInstallationOwner(AgentRuntimeV1InstallationEntity installation,
             String tenantId, String clientId, String ownerJiacn) {
         try {
-            new cn.jia.agent.service.AgentHostedBindingTransaction.Scope(tenantId, clientId, ownerJiacn);
+            new cn.jia.agent.service.AgentOwnerScope(tenantId, clientId, ownerJiacn);
         } catch (IllegalArgumentException invalidScope) {
             throw forbidden("Runtime v1 installation is unavailable");
         }

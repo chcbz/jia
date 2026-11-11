@@ -135,6 +135,215 @@ class HostingRentRenewalMySqlTest {
         wallet("tenant", "client", "user", 1000);
     }
     @AfterEach void dropSchema() { if (database != null) admin.execute("DROP DATABASE `" + database + "`"); }
+    /** Actual funds/identity/installation SQL + Java UDS + Runtime storage lifecycle. Only
+     * account directory, executor channel registration and knowledge provider are synthetic. */
+    @Test
+    @EnabledIfEnvironmentVariable(named = "CYF_GSS_RUNTIME_TEST_SOURCE", matches = ".+")
+    void actualRuntimeHandoverClosesOldRelationshipAndCapturesNewInvitation() throws Exception {
+        var identities = identityFixture();
+        String schema = new ClassPathResource("db/schema.sql").getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+        for (String table : List.of("agent_persona", "agent_runtime", "agent_task_meta", "agent_task_member")) {
+            int begin = schema.indexOf("CREATE TABLE IF NOT EXISTS " + table + " (");
+            assertTrue(begin >= 0, table);
+            jdbc.execute(schema.substring(begin, schema.indexOf(";\n", begin)));
+        }
+        new ResourceDatabasePopulator(new ClassPathResource("db/agent-runtime-session-fence-v1.sql"),
+                new ClassPathResource("db/agent-runtime-v1-schema.sql")).execute(java.util.Objects.requireNonNull(jdbc.getDataSource()));
+        jdbc.update("INSERT INTO agent_persona(persona_code,name,active,system_agent,tenant_id,client_id) VALUES ('wuyong','吴用',1,0,'tenant','client')");
+        wallet("tenant", "client", "next-user", 1000);
+        var config = new MybatisConfiguration(); config.setMapUnderscoreToCamelCase(true);
+        config.addMapper(cn.jia.agent.mapper.AgentRuntimeV1InstallationMapper.class);
+        config.addMapper(cn.jia.agent.mapper.HostingRentFinishingMapper.class);
+        var factory = new MybatisSqlSessionFactoryBean(); factory.setDataSource(jdbc.getDataSource()); factory.setConfiguration(config);
+        var template = new SqlSessionTemplate(factory.getObject());
+        var installations = new cn.jia.agent.dao.impl.AgentRuntimeV1InstallationDaoImpl();
+        ReflectionTestUtils.setField(installations, "baseMapper", template.getMapper(cn.jia.agent.mapper.AgentRuntimeV1InstallationMapper.class));
+        var runtimeRows = new cn.jia.agent.dao.impl.AgentRuntimeDaoImpl();
+        ReflectionTestUtils.setField(runtimeRows, "baseMapper", runtimeProjection);
+        var accountsDirectory = mock(cn.jia.user.security.AccountSecurityService.class);
+        when(accountsDirectory.findUniqueByExactJiacn("owner")).thenReturn(java.util.Optional.of(
+                new cn.jia.user.security.AccountSecuritySnapshot(1, "owner", cn.jia.user.security.AccountState.ACTIVE, 0)));
+        when(accountsDirectory.findUniqueByExactJiacn("next-owner")).thenReturn(java.util.Optional.of(
+                new cn.jia.user.security.AccountSecuritySnapshot(2, "next-owner", cn.jia.user.security.AccountState.ACTIVE, 0)));
+        var auth = new cn.jia.agent.security.AgentRuntimeAuthenticationService(runtimeRows, installations,
+                identityRegistry, identities, accountsDirectory, mock(cn.jia.agent.config.AgentTaskEventsGate.class), policy);
+        var beans = new org.springframework.beans.factory.support.StaticListableBeanFactory(); beans.addBean("schedules", schedules);
+        var runtimeTarget = new cn.jia.agent.service.impl.AgentRuntimeV1ServiceImpl(installations, identities, identityRegistry,
+                beans.getBeanProvider(cn.jia.agent.service.AgentCommandAckService.class), auth,
+                beans.getBeanProvider(cn.jia.agent.skill.SkillInstallAckService.class), policy);
+        var runtimeProxy = new org.springframework.aop.framework.ProxyFactory(runtimeTarget);
+        runtimeProxy.addAdvice(new org.springframework.transaction.interceptor.TransactionInterceptor(manager,
+                new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource()));
+        var runtime = (cn.jia.agent.service.AgentRuntimeV1Service) runtimeProxy.getProxy();
+        var tx = new org.springframework.transaction.support.TransactionTemplate(manager);
+        var json = new tools.jackson.databind.ObjectMapper();
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(
+                new cn.jia.agent.api.AgentRuntimeV1Controller(runtime))
+                .setControllerAdvice(new cn.jia.core.config.ApiEnvelopeAdvice(), new cn.jia.core.config.ApiRequestEnvelopeAdvice())
+                .addFilters(new cn.jia.core.filter.RequestIdFilter()).build();
+        var server = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        var httpFailure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        server.createContext("/", exchange -> {
+            try {
+                byte[] output; int status;
+                if (exchange.getRequestURI().getPath().equals("/fixture/register")) {
+                    // Synthetic executor registration only: real session verification, active identity,
+                    // persisted runtime row and channel proof; not a real WebSocket/executor acceptance.
+                    var h = exchange.getRequestHeaders();
+                    var proof = tx.execute(ignored -> auth.verify(new cn.jia.agent.security.AgentRuntimeAuthenticationFilter.SessionHeaders(
+                            h.getFirst("X-Agent-Id"), h.getFirst("X-Agent-Installation-Id"), h.getFirst("X-Agent-Host-Id"),
+                            h.getFirst("X-Agent-Runtime-Id"), Long.parseLong(h.getFirst("X-Agent-Session-Generation")),
+                            h.getFirst("Authorization").substring("AgentRuntime ".length()))));
+                    long registeredAt = System.currentTimeMillis();
+                    tx.executeWithoutResult(ignored -> {
+                        var s = proof.scope();
+                        identities.activateForFirstRegistration(identities.requireRegistrationIdentityInScope(
+                                s.tenantId(), s.clientId(), s.ownerJiacn(), s.agentId()));
+                        jdbc.update("UPDATE agent_runtime SET status='online',last_seen_at=? WHERE agent_id=?", registeredAt, s.agentId());
+                    });
+                    auth.bind("synthetic-channel-" + proof.scope().ownerJiacn(), proof, () -> true);
+                    output = json.writeValueAsBytes(java.util.Map.of("installationId", proof.installationId(),
+                            "tenantId", "tenant", "clientId", "client", "canonicalAgentId", proof.scope().agentId(),
+                            "hostId", proof.hostId(), "runtimeInstanceId", proof.scope().runtimeInstanceId(),
+                            "sessionGeneration", Long.toString(proof.sessionGeneration()), "registeredAt", registeredAt,
+                            "serviceReadyAt", registeredAt, "executorReady", true));
+                    // Map.of permits ten fields; durable readiness is the synthetic executor's responsibility.
+                    var ready = json.readValue(output, new tools.jackson.core.type.TypeReference<java.util.Map<String,Object>>() {});
+                    ready.put("durableReady", true); output = json.writeValueAsBytes(ready); status = 200;
+                } else {
+                    var request = org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request(
+                            org.springframework.http.HttpMethod.valueOf(exchange.getRequestMethod()), exchange.getRequestURI())
+                            .content(exchange.getRequestBody().readAllBytes());
+                    exchange.getRequestHeaders().forEach((key, values) -> request.header(key, values.toArray()));
+                    var response = mvc.perform(request).andReturn().getResponse();
+                    output = response.getContentAsByteArray(); status = response.getStatus();
+                    for (String name : response.getHeaderNames()) exchange.getResponseHeaders().put(name, new java.util.ArrayList<>(response.getHeaders(name)));
+                }
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                exchange.sendResponseHeaders(status, output.length); exchange.getResponseBody().write(output);
+            } catch (Throwable failure) {
+                httpFailure.compareAndSet(null, failure);
+                try { exchange.sendResponseHeaders(500, -1); } catch (Exception ignored) { }
+            } finally { exchange.close(); }
+        });
+        Path source = Path.of(System.getenv("CYF_GSS_RUNTIME_TEST_SOURCE")).toRealPath();
+        Path log = Path.of(System.getProperty("java.io.tmpdir")).resolve("runtime-lifecycle-node.log");
+        Process child = null;
+        try {
+            server.start();
+            child = new ProcessBuilder(System.getenv("CYF_GSS_NODE_BIN"),
+                    source.resolve("conf/cyf-agent-runtime-v1/test/hosting-java-lifecycle-fixture.mjs").toString(),
+                    "http://127.0.0.1:" + server.getAddress().getPort()).redirectError(log.toFile()).start();
+            var reader = new java.io.BufferedReader(new java.io.InputStreamReader(child.getInputStream(), java.nio.charset.StandardCharsets.UTF_8));
+            String line = reader.readLine(); assertNotNull(line, () -> read(log));
+            var endpoint = json.readValue(line, new tools.jackson.core.type.TypeReference<java.util.Map<String,Object>>() {});
+            var properties = new cn.jia.agent.config.AgentHostingRentProperties(true, "1", "500", "2592000");
+            var owners = mock(HostingRentOwnerResolver.class);
+            when(owners.requireOwner(any())).thenAnswer(call -> ((HostingRentHttp.Actor)call.getArgument(0)).ownerJiacn());
+            var credentials = new ManagedHostingCredentials(beans.getBeanProvider(cn.jia.oauth.service.ApiKeyService.class),
+                    leases, owners, identities, identityBindings, manager, runtime);
+            var provider = new UnixManagedHostingProvisioner(properties,
+                    new cn.jia.agent.config.ManagedHostingAdapterProperties((String)endpoint.get("socketPath"),
+                            ((Number)endpoint.get("uid")).longValue(), "tenant", "client", "*", 10000,
+                            ((Number)endpoint.get("gid")).longValue(), null), credentials, auth);
+            beans.addBean("provider", provider);
+            var gate = new EconomyPreviewGate(new EconomyPreviewProperties(true,
+                    List.of(new EconomyPreviewProperties.AllowedScope("tenant", "client"))));
+            var ledger = new HostingRentLedgerServiceImpl(leases, accounts, posting, manager);
+            var reconciler = new HostingRentReconciler(properties, gate, leases, ledger, identities, owners,
+                    beans.getBeanProvider(ManagedHostingProvisioner.class), credentials, manager, identityBindings,
+                    policy, true, beans.getBeanProvider(ScheduleService.class));
+            var application = new HostingRentApplicationService(properties, gate, owners, leases, ledger, service,
+                    admissionRoots, identityBindings, runtimeRows, identities, beans.getBeanProvider(ManagedHostingProvisioner.class),
+                    reconciler, manager, true);
+            var owner = new HostingRentHttp.Actor("user", "tenant", "client", "owner");
+            var quote = application.quote(owner, "wuyong", java.util.UUID.randomUUID().toString(), java.util.Map.of("purpose", "INITIAL"));
+            assertEquals("500", quote.amountWen()); assertEquals(1000, balance());
+            var first = confirmLifecycleQuote(application, owner, quote);
+            assertEquals(500, balance());
+            awaitLifecycleActive(reconciler, provider, first.intentId(), httpFailure, log);
+            var original = leases.selectIntent("tenant", "client", first.intentId());
+            var publicRow = runtimeRows.findInScope("tenant", "client", first.agentId());
+            assertNotNull(original.getCaptureTransactionId());
+            Path root = Path.of((String)endpoint.get("root"));
+            Path home;
+            try (var files = Files.walk(root.resolve("managed"))) {
+                home = files.filter(p -> p.getFileName().toString().equals("home")).findFirst().orElseThrow();
+            }
+            Path skill = home.resolve("skills/public-retained/SKILL.md"); Files.createDirectories(skill.getParent());
+            Files.writeString(skill, "---\nname: public-retained\ndescription: Public retained integration skill.\n---\nPublic instructions.\n");
+            Path privateSession = home.resolve("sessions/private-fixture.jsonl"); Files.createDirectories(privateSession.getParent());
+            Files.writeString(privateSession, "{\"private\":\"old-owner-only\"}\n");
+            var oldIdentity = identities.requireRegistrationIdentityInScope("tenant", "client", "owner", first.agentId());
+            application.remove(owner, "wuyong", first.agentId(), first.leaseId());
+            var completionTarget = new HostingRentHandoverCompletion(installations, identityBindings, service, identities,
+                    runtimeRows, runtime, template.getMapper(cn.jia.agent.mapper.HostingRentFinishingMapper.class),
+                    beans.getBeanProvider(cn.jia.oauth.service.ApiKeyService.class), policy);
+            var completionProxy = new org.springframework.aop.framework.ProxyFactory(completionTarget);
+            completionProxy.addAdvice(new org.springframework.transaction.interceptor.TransactionInterceptor(manager,
+                    new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource()));
+            var completion = (HostingRentHandoverCompletion)completionProxy.getProxy();
+            var preparation = new ManagedHostingProvisioner.Preparation("tenant", "client", "owner", first.agentId(),
+                    first.intentId(), first.leaseId(), publicRow.getBindingId().toString(), original.getReservedAt());
+            var stopped = new HostingRentManagedStop(provider, completion).stop(preparation);
+            assertNotNull(stopped, () -> read(log));
+            assertTrue(provider.flushEvidence(stopped.preparation(), stopped.candidate(), first.leaseId()));
+            assertTrue(provider.cleanup(stopped.preparation(), stopped.candidate(), first.leaseId()));
+            completion.completeManaged(stopped); completion.completeManaged(stopped);
+            assertFalse(Files.exists(privateSession)); assertTrue(Files.isRegularFile(skill));
+            assertEquals("CLOSED", leases.selectLeaseForUpdate("tenant", "client", first.leaseId()).getStatus());
+            assertEquals("REVOKED", installations.lock(original.getRuntimeInstallationId()).getStatus());
+            var released = runtimeRows.findInScope("tenant", "client", first.agentId());
+            assertEquals(publicRow.getId(), released.getId()); assertNull(released.getOwnerJiacn());
+            var history = jdbc.queryForMap("SELECT * FROM agent_identity_registry WHERE id=?", oldIdentity.getId());
+            var successor = new HostingRentHttp.Actor("next-user", "tenant", "client", "next-owner");
+            var nextQuote = application.quote(successor, "wuyong", java.util.UUID.randomUUID().toString(), java.util.Map.of("purpose", "INITIAL"));
+            assertEquals(first.agentId(), nextQuote.agentId()); assertEquals("550", nextQuote.amountWen());
+            assertEquals("1", nextQuote.initialSkillCount()); assertEquals("500", nextQuote.recurringAmountWen());
+            var next = confirmLifecycleQuote(application, successor, nextQuote);
+            awaitLifecycleActive(reconciler, provider, next.intentId(), httpFailure, log);
+            assertEquals(450L, jdbc.queryForObject("SELECT balance_wen FROM economy_account WHERE owner_type='USER' AND owner_id='next-user'", Long.class));
+            assertEquals(500, balance());
+            var readmitted = runtimeRows.findInScope("tenant", "client", first.agentId());
+            assertEquals(publicRow.getId(), readmitted.getId()); assertEquals("next-owner", readmitted.getOwnerJiacn());
+            assertNotEquals(original.getRuntimeInstallationId(), readmitted.getRuntimeInstallationId());
+            assertEquals(1L, readmitted.getRuntimeSessionGeneration());
+            assertEquals(history, jdbc.queryForMap("SELECT * FROM agent_identity_registry WHERE id=?", oldIdentity.getId()));
+            completion.completeManaged(stopped); // old completion replay must not detach the new relationship
+            assertEquals(readmitted, runtimeRows.findInScope("tenant", "client", first.agentId()));
+            assertTrue(Files.isRegularFile(skill)); assertFalse(Files.exists(privateSession));
+            assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM economy_transaction WHERE business_type='CAPTURE_HOSTING_RENT'", Integer.class));
+            assertEquals(0L, jdbc.queryForObject("SELECT SUM(signed_amount_wen) FROM economy_entry", Long.class));
+            assertNull(httpFailure.get());
+        } finally {
+            if (child != null) {
+                child.getOutputStream().close();
+                if (!child.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) { child.destroy(); child.waitFor(); }
+            }
+            server.stop(0);
+        }
+    }
+
+    private HostingRentApplicationService.MutationView confirmLifecycleQuote(HostingRentApplicationService application,
+            HostingRentHttp.Actor actor, HostingRentApplicationService.QuoteView quote) {
+        return (HostingRentApplicationService.MutationView)application.bind(actor, "wuyong", java.util.UUID.randomUUID().toString(),
+                java.util.Map.of("mode", "server", "hostingAction", "INITIAL", "agentId", quote.agentId(), "quoteId", quote.quoteId(),
+                        "expectedPlanVersion", quote.planVersion(), "expectedAmountWen", quote.amountWen(), "expectedPeriodSeconds", quote.periodSeconds()));
+    }
+
+    private void awaitLifecycleActive(HostingRentReconciler reconciler, ManagedHostingProvisioner provider, String intentId,
+            java.util.concurrent.atomic.AtomicReference<Throwable> httpFailure, Path log) throws Exception {
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30);
+        do {
+            assertNull(httpFailure.get(), () -> String.valueOf(httpFailure.get()));
+            var intent = leases.selectIntent("tenant", "client", intentId);
+            if ("ACTIVE".equals(intent.getStatus())) return;
+            reconciler.reconcileOne(intent, provider);
+            Thread.sleep(25);
+        } while (System.nanoTime() < deadline);
+        fail("Runtime lifecycle did not become ACTIVE: " + read(log));
+    }
+
     @Test void reinvitationPreservesOriginalReadGrantAndUsesFreshPrivateRelationship() throws Exception {
         var identities = identityFixture();
         String agent = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

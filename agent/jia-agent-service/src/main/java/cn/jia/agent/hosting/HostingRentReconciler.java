@@ -202,8 +202,7 @@ public final class HostingRentReconciler implements ScheduledJobHandler {
                 initial.getPrincipalId(), row.getTenantId(), row.getClientId(), owner);
         if (!owner.equals(owners.requireOwner(actor))) return null;
         var identity = identities.requireRegistrationIdentityInScope(actor.tenantId(), actor.clientId(), owner, row.getAgentId());
-        var canonicalBinding = identities.requireActiveBinding(identity, null);
-        if (!row.getAgentId().equals(identity.getCanonicalAgentId()) || !lease.getBindingId().equals(canonicalBinding.getId().toString())) return null;
+        if (!row.getAgentId().equals(identity.getCanonicalAgentId()) || !lease.getBindingId().equals(String.valueOf(identity.getBindingId()))) return null;
         var request = mapper.selectReprovisionForUpdate(actor.tenantId(), actor.clientId(), row.getRequestId());
         if (request == null || !row.getIntentId().equals(request.getIntentId()) || !row.getLeaseId().equals(request.getLeaseId())
                 || !row.getAgentId().equals(request.getAgentId()) || !actor.actorId().equals(request.getPrincipalId())
@@ -250,10 +249,8 @@ public final class HostingRentReconciler implements ScheduledJobHandler {
                 intent.getPrincipalId(), intent.getTenantId(), intent.getClientId(), owner);
         if (!owner.equals(owners.requireOwner(actor))) return null;
         var identity = identities.requireRegistrationIdentityInScope(actor.tenantId(), actor.clientId(), owner, intent.getAgentId());
-        var binding = identities.requireActiveBinding(identity, null);
         if (!intent.getAgentId().equals(identity.getCanonicalAgentId())
-                || !lease.getBindingId().equals(binding.getId().toString())
-                || !intent.getPersonaCode().equals(binding.getPersonaCode())) return null;
+                || !lockedBinding.getId().equals(identity.getBindingId())) return null;
         var quote = mapper.selectQuoteInventory(actor.tenantId(), actor.clientId(), intent.getQuoteId());
         if (quote == null || quote.getInventoryHostId() == null || quote.getInventorySha256() == null) return null;
         var preparation = new ManagedHostingProvisioner.Preparation(actor.tenantId(), actor.clientId(), owner,

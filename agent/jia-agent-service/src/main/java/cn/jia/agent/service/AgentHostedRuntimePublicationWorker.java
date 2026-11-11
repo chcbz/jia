@@ -17,7 +17,7 @@ public class AgentHostedRuntimePublicationWorker {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     public AgentRuntimeEntity revalidateForPublication(
-            AgentHostedBindingTransaction.Scope scope, String agentId, long bindingId) {
+            AgentOwnerScope scope, String agentId, long bindingId) {
         if (scope == null || agentId == null || agentId.isBlank()
                 || !agentId.equals(agentId.strip()) || bindingId <= 0) {
             return null;
@@ -36,7 +36,7 @@ public class AgentHostedRuntimePublicationWorker {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     public AgentRuntimeEntity revalidateDetachedForPublication(
-            AgentHostedBindingTransaction.Scope scope, String agentId, long runtimeId) {
+            AgentOwnerScope scope, String agentId, long runtimeId) {
         if (scope == null || agentId == null || agentId.isBlank()
                 || !agentId.equals(agentId.strip()) || runtimeId <= 0) {
             return null;

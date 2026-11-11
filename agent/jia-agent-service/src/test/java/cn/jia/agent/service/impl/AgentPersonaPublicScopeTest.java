@@ -3,7 +3,7 @@ package cn.jia.agent.service.impl;
 import cn.jia.agent.common.WaterMarginPersonaCatalog;
 import cn.jia.agent.dao.AgentPersonaDao;
 import cn.jia.agent.entity.AgentPersonaEntity;
-import cn.jia.agent.service.AgentHostedBindingTransaction;
+import cn.jia.agent.service.AgentOwnerScope;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -24,7 +24,7 @@ class AgentPersonaPublicScopeTest {
         override.setName("private name");
         when(dao.findCatalogProjection(tenant, "client")).thenReturn(List.of(override));
         List<AgentPersonaEntity> catalog = ReflectionTestUtils.invokeMethod(service, "loadPersonaCatalog",
-                new AgentHostedBindingTransaction.Scope(tenant, "client", "owner"));
+                new AgentOwnerScope(tenant, "client", "owner"));
         assertNotNull(catalog);
         assertEquals(108, catalog.size());
         assertEquals("private name", catalog.stream().filter(p -> "wuyong".equals(p.getPersonaCode()))

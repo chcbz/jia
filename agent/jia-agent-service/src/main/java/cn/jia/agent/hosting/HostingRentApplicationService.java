@@ -294,7 +294,6 @@ public final class HostingRentApplicationService {
             String owner = owners.requireOwner(actor);
             var identity = identities.requireRegistrationIdentityInScope(actor.tenantId(), actor.clientId(), owner, agentId);
             if (!agentId.equals(identity.getCanonicalAgentId())) throw forbidden();
-            identities.requireActiveBinding(identity, null);
             EconomyHostingLeaseEntity latest = rent.selectLatestLease(actor.tenantId(), actor.clientId(), agentId);
             if (latest == null) return new LeaseView(false, null, null, "NOT_MANAGED");
             EconomyHostingLeaseEntity lease = latest;
@@ -428,9 +427,8 @@ public final class HostingRentApplicationService {
         if (locked == null || !Integer.valueOf(AgentConstants.BINDING_STATUS_ACTIVE).equals(locked.getStatus())
                 || !agentId.equals(locked.getAgentId()) || !actor.clientId().equals(locked.getClientId())
                 || !owner.equals(locked.getJiacn())) throw forbidden();
-        AgentPersonaBindingEntity binding = identities.requireActiveBinding(identity, null);
-        if (personaCode != null && !personaCode.equals(binding.getPersonaCode())) throw forbidden();
-        return binding;
+        if (personaCode != null && !personaCode.equals(locked.getPersonaCode())) throw forbidden();
+        return locked;
     }
 
     private EconomyHostingRentQuoteEntity actorQuote(Actor actor, String key) {

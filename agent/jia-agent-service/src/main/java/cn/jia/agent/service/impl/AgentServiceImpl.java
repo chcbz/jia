@@ -54,7 +54,7 @@ import cn.jia.agent.mapper.AgentTaskStatsRow;
 import cn.jia.agent.mapper.AgentTaskStatusCountRow;
 import cn.jia.agent.mapper.AgentTaskStatsScope;
 import cn.jia.agent.service.AgentIdentityService;
-import cn.jia.agent.service.AgentHostedBindingTransaction;
+import cn.jia.agent.service.AgentOwnerScope;
 import cn.jia.agent.service.AgentHostedRuntimePublicationWorker;
 import cn.jia.agent.service.AgentHostingWorkAdmission;
 import cn.jia.agent.service.AgentSceneService;
@@ -462,8 +462,8 @@ public class AgentServiceImpl implements AgentService {
     @Override
     public List<AgentRuntimeDTO> listPersonaCatalog(
             String tenantId, String clientId, String ownerJiacn) {
-        AgentHostedBindingTransaction.Scope scope =
-                new AgentHostedBindingTransaction.Scope(tenantId, clientId, ownerJiacn);
+        AgentOwnerScope scope =
+                new AgentOwnerScope(tenantId, clientId, ownerJiacn);
         List<CatalogEntry> catalog = personaCatalogCache.get(
                 scope.tenantId(), scope.clientId(),
                 () -> loadPersonaCatalog(scope)).entries();
@@ -474,7 +474,7 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private Map<String, AgentPersonaCatalogBindingRow> loadCatalogBindings(
-            AgentHostedBindingTransaction.Scope scope, List<CatalogEntry> catalog) {
+            AgentOwnerScope scope, List<CatalogEntry> catalog) {
         List<AgentPersonaCatalogBindingRow> rows = Optional.ofNullable(
                 agentPersonaBindingDao.findCatalogOverlay(
                         scope.tenantId(), scope.clientId(), scope.ownerJiacn()))
@@ -502,7 +502,7 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private void requireCatalogOverlay(
-            AgentHostedBindingTransaction.Scope scope, AgentPersonaCatalogBindingRow row) {
+            AgentOwnerScope scope, AgentPersonaCatalogBindingRow row) {
         if (row == null || row.getBindingStatus() == null
                 || row.getBindingStatus() != AgentConstants.BINDING_STATUS_ACTIVE
                 || !Objects.equals(scope.tenantId(), row.getBindingTenantId())
@@ -610,8 +610,8 @@ public class AgentServiceImpl implements AgentService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentRuntimeDTO bindPersona(String tenantId, String clientId, String jiacn, String personaCode) {
-        AgentHostedBindingTransaction.Scope exactScope =
-                new AgentHostedBindingTransaction.Scope(tenantId, clientId, jiacn);
+        AgentOwnerScope exactScope =
+                new AgentOwnerScope(tenantId, clientId, jiacn);
         AgentPersonaEntity persona = requireScopedPersona(
                 exactScope.tenantId(), exactScope.clientId(), personaCode);
         if (Boolean.TRUE.equals(persona.getSystemAgent())) {
@@ -865,7 +865,7 @@ public class AgentServiceImpl implements AgentService {
 
     @Override
     public List<AgentPersonaEntity> listPersonas() {
-        return loadPersonaCatalog(new AgentHostedBindingTransaction.Scope(
+        return loadPersonaCatalog(new AgentOwnerScope(
                 resolveCurrentTenantId(), resolveCurrentClientId(), resolveCurrentJiacn()));
     }
 
@@ -1887,7 +1887,7 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private List<AgentPersonaEntity> loadPersonaCatalog(
-            AgentHostedBindingTransaction.Scope scope) {
+            AgentOwnerScope scope) {
         List<AgentPersonaEntity> scopedRows = Optional.ofNullable(
                 agentPersonaDao.findCatalogProjection(scope.tenantId(), scope.clientId()))
                 .orElseGet(Collections::emptyList);
@@ -2073,7 +2073,7 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private AgentRuntimeDTO toCatalogDTO(CatalogEntry persona,
-            AgentPersonaCatalogBindingRow binding, AgentHostedBindingTransaction.Scope scope) {
+            AgentPersonaCatalogBindingRow binding, AgentOwnerScope scope) {
         if (persona.systemAgent() && binding != null) {
             throw personaCatalogForbidden("System persona must not have a user binding");
         }
@@ -2171,7 +2171,7 @@ public class AgentServiceImpl implements AgentService {
             return RuntimeBatchEnrichment.empty();
         }
         List<AgentPersonaEntity> personas = loadPersonaCatalog(
-                new AgentHostedBindingTransaction.Scope(tenantId, clientId, resolveCurrentJiacn()));
+                new AgentOwnerScope(tenantId, clientId, resolveCurrentJiacn()));
         LinkedHashMap<String, AgentPersonaEntity> personasByCode = new LinkedHashMap<>();
         LinkedHashMap<String, AgentPersonaEntity> personasByName = new LinkedHashMap<>();
         for (AgentPersonaEntity persona : personas) {
@@ -2975,8 +2975,8 @@ public class AgentServiceImpl implements AgentService {
             String agentId, long bindingId) {
         publishOptionalAfterCommit(operation, () ->
                 scopePublicationCoordinator.execute(clientId, ownerJiacn, () -> {
-                    AgentHostedBindingTransaction.Scope scope =
-                            new AgentHostedBindingTransaction.Scope(tenantId, clientId, ownerJiacn);
+                    AgentOwnerScope scope =
+                            new AgentOwnerScope(tenantId, clientId, ownerJiacn);
                     AgentRuntimeEntity current = runtimePublicationWorker
                             .revalidateForPublication(scope, agentId, bindingId);
                     if (current == null) {

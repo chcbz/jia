@@ -134,7 +134,7 @@ class HostingRentHttpTest {
         mvc.perform(post(BIND).principal(jwt()).contentType(MediaType.APPLICATION_JSON)
                         .content("{\"mode\":\"local\"}"))
                 .andExpect(status().isOk());
-        var scope = new cn.jia.agent.service.AgentHostedBindingTransaction.Scope(
+        var scope = new cn.jia.agent.service.AgentOwnerScope(
                 "0", "Client-A", "Tenant-A");
         verify(provisioning, times(2)).bind(scope, "wuyong", null);
         verify(provisioning).bind(scope, "wuyong", " ");

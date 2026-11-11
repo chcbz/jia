@@ -90,7 +90,7 @@ class AgentControllerTest {
 
         ResponseEntity<?> response = assertInstanceOf(ResponseEntity.class, catalogResponse);
         assertEquals("private, no-store", response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL));
-        var scope = new cn.jia.agent.service.AgentHostedBindingTransaction.Scope(
+        var scope = new cn.jia.agent.service.AgentOwnerScope(
                 "0", "Client-A", "Owner-A");
         verify(agentService).listPersonaCatalog("0", "Client-A", "Owner-A");
         verify(provisioning).bind(scope, "wuyong", "local");

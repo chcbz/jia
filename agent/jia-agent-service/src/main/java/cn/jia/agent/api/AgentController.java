@@ -25,7 +25,7 @@ import cn.jia.agent.hosting.HostingRentApplicationService;
 import cn.jia.agent.hosting.HostingRentErrors;
 import cn.jia.agent.hosting.HostingRentHttp;
 import cn.jia.agent.service.AbilityEvaluationService;
-import cn.jia.agent.service.AgentHostedBindingTransaction;
+import cn.jia.agent.service.AgentOwnerScope;
 import cn.jia.agent.service.AgentPersonaProvisioningService;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.AgentTaskExecutionGrantException;
@@ -130,7 +130,7 @@ public class AgentController {
 
     @GetMapping("/personas/catalog")
     public Object personaCatalog(Authentication authentication) {
-        AgentHostedBindingTransaction.Scope scope = requireJwtScope(authentication);
+        AgentOwnerScope scope = requireJwtScope(authentication);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
                 .body(JsonResult.success(agentService.listPersonaCatalog(
@@ -181,7 +181,7 @@ public class AgentController {
 
     public Object bindPersona(String personaCode, AgentPersonaBindRequestDTO request,
             Authentication authentication) {
-        AgentHostedBindingTransaction.Scope scope = requireJwtScope(authentication);
+        AgentOwnerScope scope = requireJwtScope(authentication);
         String mode = request == null ? "local" : request.getMode();
         if (mode != null && "server".equalsIgnoreCase(mode.strip())) {
             throw new HostingRentAdmissionException(
@@ -208,7 +208,7 @@ public class AgentController {
         return personaProvisioningService;
     }
 
-    public static AgentHostedBindingTransaction.Scope requireJwtScope(Authentication authentication) {
+    public static AgentOwnerScope requireJwtScope(Authentication authentication) {
         if (authentication == null || !authentication.isAuthenticated()
                 || !(authentication instanceof JwtAuthenticationToken jwt)) {
             throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
@@ -230,7 +230,7 @@ public class AgentController {
             throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
                     "Authenticated JWT scope is invalid");
         }
-        return new AgentHostedBindingTransaction.Scope(tenantId, clientId, jiacn);
+        return new AgentOwnerScope(tenantId, clientId, jiacn);
     }
 
     private static boolean validExactScopeComponent(String value) {
@@ -392,7 +392,7 @@ public class AgentController {
             @RequestBody JsonRequest<AgentTaskTeamRecommendationRequestDTO> protocolRequest,
             Authentication authentication) {
         AgentTaskTeamRecommendationRequestDTO request = protocolRequest == null ? null : protocolRequest.data();
-        AgentHostedBindingTransaction.Scope scope = requireJwtScope(authentication);
+        AgentOwnerScope scope = requireJwtScope(authentication);
         AgentTaskTeamRecommendationDTO recommendation = agentService.recommendTaskTeam(
                 scope.tenantId(), scope.clientId(), taskId, request);
         return ResponseEntity.ok()
@@ -512,7 +512,7 @@ public class AgentController {
     private static AgentTaskExecutionGrantService.Scope requireTaskGrantScope(
             Authentication authentication) {
         try {
-            AgentHostedBindingTransaction.Scope scope = requireJwtScope(authentication);
+            AgentOwnerScope scope = requireJwtScope(authentication);
             return new AgentTaskExecutionGrantService.Scope(
                     scope.tenantId(), scope.clientId(), scope.ownerJiacn());
         } catch (AgentBizException invalidJwt) {

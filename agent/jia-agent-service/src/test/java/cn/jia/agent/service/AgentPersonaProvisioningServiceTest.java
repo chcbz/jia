@@ -1,33 +1,20 @@
 package cn.jia.agent.service;
-
-import cn.jia.agent.common.AgentHostedProfileState;
-import cn.jia.agent.entity.AgentHostedProfileEntity;
-import cn.jia.agent.entity.AgentPersonaEntity;
 import cn.jia.agent.entity.AgentRuntimeDTO;
-import cn.jia.agent.service.AgentHostedBindingTransaction.Prepared;
-import cn.jia.agent.service.AgentHostedBindingTransaction.Scope;
-import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import org.junit.jupiter.api.Test;
-
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
-
 class AgentPersonaProvisioningServiceTest {
-    private static final Scope SCOPE = new Scope("0", "client-a", "owner-a");
     private static final String AGENT_ID = "agt_0123456789abcdef0123456789abcdef";
-
     @Test
     void localBindProjectsTrustedScopeIntoRuntimeSetupWithoutLegacyCredentials() {
         AgentService agentService = mock(AgentService.class);
-        AgentHostedBindingTransaction transactions = mock(AgentHostedBindingTransaction.class);
-        AgentHostedProfilePublisher publisher = mock(AgentHostedProfilePublisher.class);
-        AgentRuntimeDTO runtime = runtime();
-        Scope nonDefaultClientScope = new Scope("1", "cyf-local", "owner-local");
+        AgentRuntimeDTO runtime = new AgentRuntimeDTO();
+        runtime.setAgentId(AGENT_ID);
+        AgentOwnerScope nonDefaultClientScope = new AgentOwnerScope("1", "cyf-local", "owner-local");
         when(agentService.bindPersona("1", "cyf-local", "owner-local", "wuyong"))
                 .thenReturn(runtime);
 
-        var result = new AgentPersonaProvisioningService(agentService, transactions, publisher)
+        var result = new AgentPersonaProvisioningService(agentService)
                 .bind(nonDefaultClientScope, "wuyong", "local");
 
         assertEquals("local", result.getMode());
@@ -51,171 +38,15 @@ class AgentPersonaProvisioningServiceTest {
         assertFalse(result.getCommands().toString().toLowerCase().contains("api key"));
         assertFalse(result.getCommands().toString().contains("codex-ws-agent"));
         verify(agentService).bindPersona("1", "cyf-local", "owner-local", "wuyong");
-        verifyNoInteractions(transactions, publisher);
     }
 
-    @Test
-    void tenantOneCannotEnterLegacyServerHostedBind() {
+    @Test void managedBindHasNoAlternateLegacyExecutionPath() {
         AgentService agentService = mock(AgentService.class);
-        AgentHostedBindingTransaction transactions = mock(AgentHostedBindingTransaction.class);
-        AgentHostedProfilePublisher publisher = mock(AgentHostedProfilePublisher.class);
-        AgentPersonaProvisioningService service =
-                new AgentPersonaProvisioningService(agentService, transactions, publisher);
-        Scope tenantOne = new Scope("1", "cyf-local", "owner-local");
-
-        assertThrows(IllegalArgumentException.class,
-                () -> service.bind(tenantOne, "wuyong", "server"));
-
-        verifyNoInteractions(agentService, transactions, publisher);
-    }
-
-    @Test
-    void idempotentActiveReturnsConfiguredExistingMetadataAndJsonSafeIdentifiers() {
-        AgentService agentService = mock(AgentService.class);
-        AgentHostedBindingTransaction transactions = mock(AgentHostedBindingTransaction.class);
-        AgentHostedProfilePublisher publisher = mock(AgentHostedProfilePublisher.class);
-        AgentHostedProfileEntity active = hosted(AgentHostedProfileState.ACTIVE, Long.MAX_VALUE - 2);
-        active.setBindingId(Long.MAX_VALUE - 1);
-        active.setProfileKey(AgentHostedBindingTransaction.scopeDigest(SCOPE) + active.getBindingId());
-        Prepared prepared = new Prepared(active, runtime(), persona(), "dedicated-secret");
-        AgentHostedProfilePublisher.PublishedPaths paths = paths(false, true);
-        when(transactions.prepareHosted(SCOPE, "wuyong")).thenReturn(prepared);
-        when(publisher.inspectExisting(active, Long.MAX_VALUE - 2)).thenReturn(paths);
-
-        var result = new AgentPersonaProvisioningService(agentService, transactions, publisher)
-                .bind(SCOPE, "wuyong", "server");
-
-        assertEquals(Long.toString(Long.MAX_VALUE - 1), result.getBindingId());
-        assertEquals(Long.toString(Long.MAX_VALUE - 2), result.getGeneration());
-        assertNull(result.getRuntimeSetup());
-        assertEquals("/configured/clients/" + AGENT_ID, result.getWorkdir());
-        assertEquals("/configured/runtime/.codex-hosted-profile", result.getCodexHome());
-        assertEquals("/configured/runtime/codex-profiles.conf", result.getProfilesFile());
-        assertFalse(result.getServerProfileCreated());
-        assertTrue(result.getServerProfileAlreadyExists());
-        verify(publisher).inspectExisting(active, Long.MAX_VALUE - 2);
-        verify(publisher, never()).publish(any(), any(), anyLong(), anyLong(), anyBoolean(), any());
-    }
-
-    @Test
-    void newActivationAggregatesCreatedMetadataAcrossDisabledAndEnabledStages() {
-        AgentService agentService = mock(AgentService.class);
-        AgentHostedBindingTransaction transactions = mock(AgentHostedBindingTransaction.class);
-        AgentHostedProfilePublisher publisher = mock(AgentHostedProfilePublisher.class);
-        AgentPersonaEntity persona = persona();
-        AgentRuntimeDTO runtime = runtime();
-        AgentHostedProfileEntity preparedHosted = hosted(AgentHostedProfileState.PREPARED, 0L);
-        AgentHostedProfileEntity staged = hosted(AgentHostedProfileState.STAGED_DISABLED, 1L);
-        AgentHostedProfileEntity fileEnabled = hosted(AgentHostedProfileState.FILE_ENABLED, 2L);
-        AgentHostedProfileEntity active = hosted(AgentHostedProfileState.ACTIVE, 2L);
-        when(transactions.prepareHosted(SCOPE, "wuyong"))
-                .thenReturn(new Prepared(preparedHosted, runtime, persona, "dedicated-secret"));
-        when(publisher.publish(preparedHosted, persona, 0L, 1L, false, "dedicated-secret"))
-                .thenReturn(paths(true, false));
-        when(transactions.transition(SCOPE, 19L, AgentHostedProfileState.PREPARED, 0L,
-                AgentHostedProfileState.STAGED_DISABLED, 1L, true)).thenReturn(staged);
-        when(publisher.publish(staged, persona, 1L, 2L, true, "dedicated-secret"))
-                .thenReturn(paths(false, true));
-        when(transactions.transition(SCOPE, 19L, AgentHostedProfileState.STAGED_DISABLED, 1L,
-                AgentHostedProfileState.FILE_ENABLED, 2L, true)).thenReturn(fileEnabled);
-        when(transactions.transition(SCOPE, 19L, AgentHostedProfileState.FILE_ENABLED, 2L,
-                AgentHostedProfileState.ACTIVE, 2L, true)).thenReturn(active);
-
-        var result = new AgentPersonaProvisioningService(agentService, transactions, publisher)
-                .bind(SCOPE, "wuyong", "server");
-
-        assertEquals(AgentHostedProfileState.ACTIVE, result.getHostedState());
-        assertNull(result.getRuntimeSetup());
-        assertTrue(result.getServerProfileCreated());
-        assertFalse(result.getServerProfileAlreadyExists());
-        assertEquals("/configured/runtime/codex-profiles.conf", result.getProfilesFile());
-        verify(publisher, never()).inspectExisting(any(), anyLong());
-    }
-
-    @Test
-    void staleLosingBindFailureMarksOnlyItsExpectedCheckpoint() {
-        AgentService agentService = mock(AgentService.class);
-        AgentHostedBindingTransaction transactions = mock(AgentHostedBindingTransaction.class);
-        AgentHostedProfilePublisher publisher = mock(AgentHostedProfilePublisher.class);
-        AgentHostedProfileEntity preparedHosted = hosted(AgentHostedProfileState.PREPARED, 0L);
-        AgentPersonaEntity persona = persona();
-        Prepared prepared = new Prepared(preparedHosted, runtime(), persona, "dedicated-secret");
-        AgentBizException conflict = new AgentBizException("AGENT_ERROR", "concurrent winner");
-        when(transactions.prepareHosted(SCOPE, "wuyong")).thenReturn(prepared);
-        when(publisher.publish(preparedHosted, persona, 0L, 1L, false, "dedicated-secret"))
-                .thenReturn(paths(false, true));
-        when(transactions.transition(SCOPE, 19L, AgentHostedProfileState.PREPARED, 0L,
-                AgentHostedProfileState.STAGED_DISABLED, 1L, true)).thenThrow(conflict);
-
-        AgentPersonaProvisioningService service =
-                new AgentPersonaProvisioningService(agentService, transactions, publisher);
-        assertSame(conflict, assertThrows(AgentBizException.class,
-                () -> service.bind(SCOPE, "wuyong", "server")));
-
-        verify(transactions).markRepair(SCOPE, 19L, AgentHostedProfileState.PREPARED,
-                null, 0L, AgentHostedProfileState.PREPARED, conflict);
-    }
-
-    @Test
-    void exhaustedPreparedGenerationPerformsNoPublisherOrDurableMutationCalls() {
-        AgentService agentService = mock(AgentService.class);
-        AgentHostedBindingTransaction transactions = mock(AgentHostedBindingTransaction.class);
-        AgentHostedProfilePublisher publisher = mock(AgentHostedProfilePublisher.class);
-        AgentHostedProfileEntity exhausted = hosted(AgentHostedProfileState.PREPARED, Long.MAX_VALUE);
-        when(transactions.prepareHosted(SCOPE, "wuyong"))
-                .thenReturn(new Prepared(exhausted, runtime(), persona(), "dedicated-secret"));
-
-        assertThrows(AgentBizException.class, () ->
-                new AgentPersonaProvisioningService(agentService, transactions, publisher)
-                        .bind(SCOPE, "wuyong", "server"));
-
-        verifyNoInteractions(publisher);
-        verify(transactions, never()).transition(any(), anyLong(), anyString(), anyLong(),
-                anyString(), anyLong(), anyBoolean());
-        verify(transactions, never()).markRepair(any(), anyLong(), anyString(),
-                any(), anyLong(), anyString(), any());
-    }
-
-    private static AgentHostedProfilePublisher.PublishedPaths paths(
-            boolean created, boolean alreadyExists) {
-        return new AgentHostedProfilePublisher.PublishedPaths(
-                "/configured/clients/" + AGENT_ID,
-                "/configured/runtime/.codex-hosted-profile",
-                "/configured/runtime/codex-profiles.conf",
-                created, alreadyExists);
-    }
-
-    private static AgentHostedProfileEntity hosted(String state, long generation) {
-        AgentHostedProfileEntity hosted = new AgentHostedProfileEntity();
-        hosted.setId(7L);
-        hosted.setBindingId(19L);
-        hosted.setTenantId(SCOPE.tenantId());
-        hosted.setClientId(SCOPE.clientId());
-        hosted.setOwnerJiacn(SCOPE.ownerJiacn());
-        hosted.setCanonicalAgentId(AGENT_ID);
-        hosted.setPersonaCode("wuyong");
-        hosted.setProfileKey(AgentHostedBindingTransaction.scopeDigest(SCOPE) + 19L);
-        hosted.setApiKeyId("key-19");
-        hosted.setLifecycleState(state);
-        hosted.setGeneration(generation);
-        hosted.setDesiredEnabled(!AgentHostedProfileState.SUSPENDING.equals(state));
-        return hosted;
-    }
-
-    private static AgentRuntimeDTO runtime() {
-        AgentRuntimeDTO runtime = new AgentRuntimeDTO();
-        runtime.setAgentId(AGENT_ID);
-        runtime.setName("Wu Yong");
-        runtime.setPersonaName("Wu Yong");
-        runtime.setTitle("Strategist");
-        return runtime;
-    }
-
-    private static AgentPersonaEntity persona() {
-        AgentPersonaEntity persona = new AgentPersonaEntity();
-        persona.setPersonaCode("wuyong");
-        persona.setName("Wu Yong");
-        persona.setTitle("Strategist");
-        return persona;
+        var service = new AgentPersonaProvisioningService(agentService);
+        for (String tenant : java.util.List.of("0", "1")) {
+            assertThrows(IllegalArgumentException.class,
+                () -> service.bind(new AgentOwnerScope(tenant, "client", "owner"), "wuyong", "server"));
+        }
+        verifyNoInteractions(agentService);
     }
 }

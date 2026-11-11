@@ -64,9 +64,8 @@ public final class ManagedHostingCredentials {
                     || !p.clientId().equals(locked.getClientId()) || !p.ownerJiacn().equals(locked.getJiacn())
                     || !intent.getPersonaCode().equals(locked.getPersonaCode())) throw unavailable();
             var identity = identities.requireRegistrationIdentityInScope(p.tenantId(), p.clientId(), p.ownerJiacn(), p.agentId());
-            var binding = identities.requireActiveBinding(identity, null);
-            if (identity == null || binding == null || !p.agentId().equals(identity.getCanonicalAgentId())
-                    || !Long.valueOf(bindingId).equals(identity.getBindingId()) || !Long.valueOf(bindingId).equals(binding.getId())) throw unavailable();
+            if (!p.agentId().equals(identity.getCanonicalAgentId())
+                    || !Long.valueOf(bindingId).equals(identity.getBindingId())) throw unavailable();
             if (p.operationId().equals(p.intentId())) {
                 if (candidate.provisionGeneration() != 1 || p.validUntil() != null || p.requestedAt() != p.reservedAt()
                         || !("PROVISIONING_UNKNOWN".equals(intent.getStatus()) || "SERVICE_READY".equals(intent.getStatus()))

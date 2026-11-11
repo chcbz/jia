@@ -3,7 +3,7 @@ package cn.jia.agent.skill;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.hosting.HostingRentHttp;
 import cn.jia.agent.hosting.HostingRentOwnerResolver;
-import cn.jia.agent.service.AgentHostedBindingTransaction;
+import cn.jia.agent.service.AgentOwnerScope;
 import cn.jia.agent.service.AgentService;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
@@ -35,7 +35,7 @@ public final class SkillRosterProjection {
     }
 
     public void project(Authentication authentication, List<AgentRuntimeDTO> rows) {
-        AgentHostedBindingTransaction.Scope scope = trustedScope(authentication);
+        AgentOwnerScope scope = trustedScope(authentication);
         HostingRentHttp.Actor legacyActor = null;
         if (scope != null && LEGACY_SKILL_TENANT.equals(scope.tenantId())) {
             try {
@@ -80,7 +80,7 @@ public final class SkillRosterProjection {
         }
     }
 
-    private static boolean sameOperableOwner(AgentHostedBindingTransaction.Scope scope,
+    private static boolean sameOperableOwner(AgentOwnerScope scope,
             AgentRuntimeDTO projected, AgentRuntimeDTO trusted) {
         return trusted != null
                 && Objects.equals(projected.getAgentId(), trusted.getAgentId())
@@ -90,7 +90,7 @@ public final class SkillRosterProjection {
                 && Boolean.TRUE.equals(trusted.getCanOperate());
     }
 
-    private static AgentHostedBindingTransaction.Scope trustedScope(Authentication authentication) {
+    private static AgentOwnerScope trustedScope(Authentication authentication) {
         if (!(authentication instanceof JwtAuthenticationToken jwt) || !authentication.isAuthenticated()) {
             return null;
         }
@@ -101,7 +101,7 @@ public final class SkillRosterProjection {
             if (!(rawClientId instanceof String clientId) || !(rawOwner instanceof String ownerJiacn)) {
                 return null;
             }
-            AgentHostedBindingTransaction.Scope scope = new AgentHostedBindingTransaction.Scope(
+            AgentOwnerScope scope = new AgentOwnerScope(
                     TenantClaimPolicy.resolve(claims),
                     clientId, ownerJiacn);
             EsContext context = EsContextHolder.getContext();
