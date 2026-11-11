@@ -416,11 +416,13 @@ class AgentRuntimeV1ServiceImplTest {
 
     @Test void installationMaintenanceDoesNotIssueSessionAndRechecksRevocationUnderLock() {
         var active = installation("ACTIVE").setRuntimeAuthorizationHash(sha("maintenance"));
+        active.setTenantId("0");
         when(installations.findActiveByAuthorizationHash(any())).thenReturn(active);
         when(installations.lock(active.getInstallationId())).thenReturn(active);
         assertEquals(active.getInstallationId(), service.withInstallationAuthorization("maintenance", value -> value.installationId()));
         verifyNoInteractions(identities, registry, sessions);
         var revoked = installation("REVOKED").setRuntimeAuthorizationHash(sha("maintenance"));
+        revoked.setTenantId("0");
         when(installations.lock(active.getInstallationId())).thenReturn(revoked);
         assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.withInstallationAuthorization("maintenance", value -> {
             fail("revoked installation executed maintenance"); return null;
