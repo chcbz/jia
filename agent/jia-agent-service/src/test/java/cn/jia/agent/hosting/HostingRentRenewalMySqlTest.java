@@ -245,10 +245,8 @@ class HostingRentRenewalMySqlTest {
             var provider = new UnixManagedHostingProvisioner(properties,
                     new cn.jia.agent.config.ManagedHostingAdapterProperties((String)endpoint.get("socketPath"),
                             ((Number)endpoint.get("uid")).longValue(), "tenant", "client", "*", 10000,
-                            // Native inventory cold-start is ~47s alone and exceeds the default
-                            // transport window under the combined JVM/MySQL fixture load. This
-                            // test-only window does not alter production transport configuration.
-                            ((Number)endpoint.get("gid")).longValue(), 120000), credentials, auth);
+                            // Exercise the production default; do not hide cold-start regressions.
+                            ((Number)endpoint.get("gid")).longValue(), null), credentials, auth);
             beans.addBean("provider", provider);
             var gate = new EconomyPreviewGate(new EconomyPreviewProperties(true,
                     List.of(new EconomyPreviewProperties.AllowedScope("tenant", "client"))));

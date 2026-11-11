@@ -83,6 +83,25 @@ class RedisScheduleCoordinatorTest {
         owner.close(); owner.stopped().get(5, TimeUnit.SECONDS);
         await(() -> b.get() == 1);
     }
+    @Test void lostClientStopsDiscoveryAndWatchdogTransfersOwnership() throws Exception {
+        // A real disconnected Redisson client cannot renew or release its lock.
+        // The survivor must wait for Redis expiry, rather than force-unlock it.
+        var settings = new Config(second.getConfig()); settings.setLockWatchdogTimeout(1500);
+        var disconnected = Redisson.create(settings);
+        var oldCalls = new AtomicInteger(); var newCalls = new AtomicInteger();
+        try {
+            var owner = start(disconnected, scope, "", () -> { oldCalls.incrementAndGet(); return Long.MAX_VALUE; }, 60000);
+            await(() -> oldCalls.get() == 1);
+            start(second, scope, "", () -> { newCalls.incrementAndGet(); return Long.MAX_VALUE; }, 60000);
+            Thread.sleep(100); assertEquals(0, newCalls.get());
+            disconnected.shutdown(0, 100, TimeUnit.MILLISECONDS);
+            owner.wake();
+            await(() -> newCalls.get() == 1);
+            assertEquals(1, oldCalls.get(), "Disconnected owner must not discover without Redis ownership");
+            owner.close(); owner.stopped().get(5, TimeUnit.SECONDS);
+            assertEquals(1, newCalls.get(), "Old cleanup cannot release the new owner's lock");
+        } finally { if (!disconnected.isShutdown()) disconnected.shutdown(); }
+    }
     @Test void remoteNoticeWakesBeforeFarDeadline() throws Exception {
         var calls = new AtomicInteger();
         start(first, scope, "", () -> { calls.incrementAndGet(); return 60000; }, 60000);
