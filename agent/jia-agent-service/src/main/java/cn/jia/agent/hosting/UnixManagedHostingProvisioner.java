@@ -407,7 +407,9 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
                     byte value = buffer.get();
                     if (value == '\n') {
                         if (buffer.hasRemaining()) throw new IOException("Multiple managed frames");
-                        return hostingResponse(message, JSON.readValue(response.toByteArray(), new TypeReference<Map<String, Object>>() { }));
+                        var decoded = hostingResponse(message, JSON.readValue(response.toByteArray(), new TypeReference<Map<String, Object>>() { }));
+                        if (!target.hostId().equals(decoded.get("hostId"))) throw new IOException("HOSTING_HOST_MISMATCH");
+                        return decoded;
                     }
                     if (response.size() >= MAX_FRAME) throw new IOException("Managed response too large");
                     response.write(value);

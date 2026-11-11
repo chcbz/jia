@@ -93,7 +93,9 @@ class UnixManagedHostingProvisionerTest {
             assertTrue(real.quiesce(initial, existing, "transition-finish"));
             assertFalse(real.flushEvidence(initial, existing, "transition-finish"));
             assertTrue(real.flushEvidence(initial, existing, "transition-finish"));
-            assertTrue(real.cleanup(initial, existing, "transition-finish"));
+            var cleanupRequest = UnixManagedHostingProvisioner.handoverRequest(initial, existing, "transition-finish", "cleanup");
+            var cleanupResponse = real.exchange(cleanupRequest, java.util.UUID.randomUUID().toString(), existing.hostId());
+            assertTrue(UnixManagedHostingProvisioner.decodeHandover(cleanupRequest, existing, cleanupResponse, "CLEANED"), cleanupResponse.toString());
             assertTrue(real.cleanup(initial, existing, "transition-finish"));
             verify(credentials, never()).ensureInstallation(any(), any()); verifyNoInteractions(sessions);
         } finally {
