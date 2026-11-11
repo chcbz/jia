@@ -97,6 +97,15 @@ public final class HostingRentRenewalServiceImpl implements HostingRentRenewalSe
                 .setCreateTime(command.cutoverAt()).setUpdateTime(command.cutoverAt());
         if (leases.insertLease(lease) != 1 || leases.insertTransitionIntent(initial) != 1)
             throw new HostingRentException(CONCURRENCY_CONFLICT, "transition registration failed");
+        // Free adoption may precede first wallet use. Create only the empty account, never a welcome
+        // credit or a financial posting; duplicate provisioning preserves the existing balance.
+        accounts.insertAccountIfAbsentAndLock(new EconomyAccountEntity()
+                .setAccountId("transition_wallet_" + UUID.nameUUIDFromBytes((scope.tenantId() + "\0"
+                        + scope.clientId() + "\0" + command.principal().id()).getBytes(StandardCharsets.UTF_8)))
+                .setOwnerType("USER").setOwnerId(command.principal().id()).setPurpose("AVAILABLE")
+                .setCurrency(EconomyConstants.CURRENCY_WEN).setBalanceWen(0L).setAllowNegative(0)
+                .setStatus("ACTIVE").setVersion(0L).setTenantId(scope.tenantId()).setClientId(scope.clientId())
+                .setCreateTime(command.cutoverAt()).setUpdateTime(command.cutoverAt()));
         publish(List.of(new HostingLeaseChangeListener.Change(scope, command.leaseId(), command.principal().id(),
                 "ACTIVE", through, null)));
         return command.leaseId();

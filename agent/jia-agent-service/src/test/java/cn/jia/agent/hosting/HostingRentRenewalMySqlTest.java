@@ -1427,6 +1427,25 @@ class HostingRentRenewalMySqlTest {
         assertEquals(renewed.getPaidThrough(), leases.selectLease("tenant", "client", command.leaseId()).getPaidThrough());
         assertEquals(1, charges());
     }
+    @Test void transitionWithoutWalletLocksAtExpiryAndFinishesAfterRetentionWithoutCharging() throws Exception {
+        jdbc.update("DELETE FROM economy_account WHERE owner_type='USER'");
+        var command = transition("empty", 50, now() - PERIOD - 1000);
+        grant(command); grant(command);
+        assertEquals(0, balance());
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM economy_account WHERE owner_type='USER'", Integer.class));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM economy_transaction", Integer.class));
+        trigger(); trigger();
+        var locked = leases.selectLease("tenant", "client", command.leaseId());
+        assertEquals("LOCKED", locked.getStatus());
+        assertEquals(command.cutoverAt() + PERIOD, locked.getLockedAt());
+        assertEquals(0, charges());
+        jdbc.update("UPDATE economy_hosting_lease SET locked_at=? WHERE lease_id=?",
+                now() - RETENTION - 1000, command.leaseId());
+        trigger();
+        assertEquals("FINISHING", leases.selectLease("tenant", "client", command.leaseId()).getStatus());
+        assertEquals(0, balance()); assertEquals(0, charges());
+    }
+
     @Test void transitionRegistrationRollsBackIfFirstDueWorkCannotCommit() {
         var command = transition("rollback", 50, now());
         service.setLeaseChangeListeners(List.of(change -> { leaseWakeup.changed(change); throw new IllegalStateException("fixture"); }));
