@@ -365,8 +365,12 @@ public interface AgentRuntimeMapper extends BaseMapper<AgentRuntimeEntity> {
             """)
     List<AgentRuntimeEntity> findMapVisibleByExactClient(@Param("tenantId") String tenantId, @Param("clientId") String clientId);
 
+    // Keep the predecessor installation through handover discovery; a new relationship
+    // starts a fresh session projection without rewriting historical installation facts.
     @Update("""
             UPDATE agent_runtime SET binding_id=#{bindingId}, owner_jiacn=#{ownerJiacn},
+                runtime_installation_id=NULL, runtime_host_id=NULL,
+                runtime_instance_id=NULL, runtime_session_generation=NULL,
                 status='offline', last_seen_at=#{attachedAt}, update_time=#{attachedAt}
             WHERE id=#{runtimeId} AND binding_id IS NULL AND owner_jiacn IS NULL
             """)

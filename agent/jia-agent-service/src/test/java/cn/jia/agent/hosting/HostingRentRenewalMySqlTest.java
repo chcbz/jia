@@ -170,21 +170,23 @@ class HostingRentRenewalMySqlTest {
         var old = inviteIdentity(identities, "old-owner", agent);
         new org.springframework.transaction.support.TransactionTemplate(manager).executeWithoutResult(tx ->
                 identities.activateForFirstRegistration(old));
+        seedRuntimeProjection();
+        jdbc.update("UPDATE agent_runtime SET agent_id=?, binding_id=? WHERE id=1", agent, old.getBindingId());
+        assertEquals(1, runtimeProjection.clearBindingAfterUnbind(1, agent, old.getBindingId(),
+                "client", "old-owner", 100));
+        assertEquals("old-installation", jdbc.queryForObject(
+                "SELECT runtime_installation_id FROM agent_runtime WHERE id=1", String.class));
         jdbc.update("UPDATE agent_persona_binding SET status=0 WHERE id=?", old.getBindingId());
         identities.suspendForBinding("tenant", "client", "old-owner", old.getBindingId());
         var historical = jdbc.queryForMap("SELECT * FROM agent_identity_registry WHERE id=?", old.getId());
         var next = inviteIdentity(identities, "new-owner", agent);
-        // Identity/binding SQL and session issuance are real; runtime persistence, installation
-        // and account collaborators are explicit fixtures, not a full Runtime handover acceptance.
-        var rows = mock(cn.jia.agent.dao.AgentRuntimeDao.class);
+        assertEquals(1, runtimeProjection.attachReleasedBinding(1, next.getBindingId(), "new-owner", 200));
+        // Identity, binding and Runtime persistence are real SQL. Installation and account
+        // remain explicit fixtures; this is not full API/UDS/Runtime handover acceptance.
+        var rows = new cn.jia.agent.dao.impl.AgentRuntimeDaoImpl();
+        ReflectionTestUtils.setField(rows, "baseMapper", runtimeProjection);
         var installations = mock(cn.jia.agent.dao.AgentRuntimeV1InstallationDao.class);
         var accounts = mock(cn.jia.user.security.AccountSecurityService.class);
-        var captured = new java.util.concurrent.atomic.AtomicReference<cn.jia.agent.entity.AgentRuntimeEntity>();
-        when(rows.insert(any())).thenAnswer(call -> {
-            cn.jia.agent.entity.AgentRuntimeEntity row = call.getArgument(0);
-            row.setId(1L); captured.set(row); return 1;
-        });
-        when(rows.findInScope("tenant", "client", agent)).thenAnswer(call -> captured.get());
         when(accounts.findUniqueByExactJiacn("new-owner")).thenReturn(java.util.Optional.of(
                 new cn.jia.user.security.AccountSecuritySnapshot(42, "new-owner", cn.jia.user.security.AccountState.ACTIVE, 3)));
         String installationId = "rti_" + "1".repeat(32);
@@ -199,8 +201,13 @@ class HostingRentRenewalMySqlTest {
         var session = new org.springframework.transaction.support.TransactionTemplate(manager)
                 .execute(tx -> auth.issue(installation, request, 1000));
         assertNotNull(session);
-        assertEquals("new-owner", captured.get().getOwnerJiacn());
-        assertEquals(next.getBindingId(), captured.get().getBindingId());
+        var persisted = rows.findInScope("tenant", "client", agent);
+        assertEquals("new-owner", persisted.getOwnerJiacn());
+        assertEquals(next.getBindingId(), persisted.getBindingId());
+        assertEquals(installationId, persisted.getRuntimeInstallationId());
+        assertEquals("host", persisted.getRuntimeHostId());
+        assertEquals("boot-new", persisted.getRuntimeInstanceId());
+        assertEquals(1L, persisted.getRuntimeSessionGeneration());
         var headers = new cn.jia.agent.security.AgentRuntimeAuthenticationFilter.SessionHeaders(agent,
                 installationId, "host", "boot-new", session.sessionGeneration(), session.sessionToken());
         assertEquals("new-owner", auth.verify(headers).scope().ownerJiacn());
@@ -303,6 +310,8 @@ class HostingRentRenewalMySqlTest {
     @Test void releasedPublicInstanceIsDiscoveredAndAttachedWithoutReplacingPublicData() {
         seedRuntimeProjection();
         assertEquals(1,runtimeProjection.clearBindingAfterUnbind(1,"agent",7,"client","old-owner",100));
+        assertEquals("old-installation", jdbc.queryForObject(
+                "SELECT runtime_installation_id FROM agent_runtime WHERE id=1", String.class));
         new org.springframework.transaction.support.TransactionTemplate(manager).executeWithoutResult(tx -> {
             var rows=admissionRoots.lockPublicInstances("tenant","client","wuyong");
             assertEquals(1,rows.size());assertEquals("agent",rows.getFirst().getAgentId());
@@ -316,6 +325,8 @@ class HostingRentRenewalMySqlTest {
         assertEquals("吴用",row.get("persona_name"));assertEquals("client",row.get("client_id"));
         assertEquals("new-owner",row.get("owner_jiacn"));assertEquals(8L,((Number)row.get("binding_id")).longValue());
         assertNull(row.get("endpoint"));assertNull(row.get("token_hash"));assertNull(row.get("current_task_title"));
+        for (String column : List.of("runtime_installation_id", "runtime_host_id", "runtime_instance_id",
+                "runtime_session_generation")) assertNull(row.get(column), column);
         assertEquals(0,runtimeProjection.clearBindingAfterUnbind(1,"agent",7,"client","old-owner",300));
         assertEquals(row,jdbc.queryForMap("SELECT * FROM agent_runtime WHERE id=1"));
     }
@@ -383,12 +394,15 @@ class HostingRentRenewalMySqlTest {
                     owner_jiacn VARCHAR(50), persona_code VARCHAR(50), persona_name VARCHAR(50), binding_id BIGINT,
                     endpoint VARCHAR(100), token_hash VARCHAR(100), current_task_id VARCHAR(100),
                     current_task_title VARCHAR(100), error_message VARCHAR(100), status VARCHAR(20),
-                    last_seen_at BIGINT, update_time BIGINT
+                    last_seen_at BIGINT, update_time BIGINT,
+                    runtime_installation_id VARCHAR(100), runtime_host_id VARCHAR(100),
+                    runtime_instance_id VARCHAR(100), runtime_session_generation BIGINT
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
                 """);
         jdbc.update("""
                 INSERT INTO agent_runtime VALUES (1,'agent','tenant','client','old-owner','wuyong','吴用',7,
-                    'private-endpoint','private-token','old-task','private-title','private-error','busy',1,1)
+                    'private-endpoint','private-token','old-task','private-title','private-error','busy',1,1,
+                    'old-installation','old-host','old-instance',7)
                 """);
     }
 
