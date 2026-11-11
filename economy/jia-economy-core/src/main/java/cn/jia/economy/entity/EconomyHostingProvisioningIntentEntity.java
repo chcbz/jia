@@ -18,7 +18,7 @@ public class EconomyHostingProvisioningIntentEntity {
     private Long amountWen;
     private Long periodSeconds;
     private String status;
-    /** RETAINED records preserve settled rights, not a current wallet payment. */
+    /** PAID is a payment; RETAINED preserves archived terms; TRANSITION is an explicit free cutover grant. */
     private String settlementKind = "PAID";
     private byte[] reserveIdempotencyKey;
     private byte[] reserveRequestHash;
@@ -48,4 +48,10 @@ public class EconomyHostingProvisioningIntentEntity {
     private String clientId;
     private Long createTime;
     private Long updateTime;
+
+    /** Runtime association epoch. TRANSITION has no financial reservation timestamp.
+     * The established hosting-v1 wire calls this association field reservedAt. */
+    public Long associationStartedAt() {
+        return "TRANSITION".equals(settlementKind) ? createTime : reservedAt;
+    }
 }

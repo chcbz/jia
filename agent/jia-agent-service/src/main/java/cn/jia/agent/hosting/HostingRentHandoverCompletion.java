@@ -98,7 +98,7 @@ public class HostingRentHandoverCompletion {
         require(intent!=null && "INITIAL".equals(intent.getQuotePurpose()) && "USER".equals(intent.getPrincipalType())
                 && "ACTIVE".equals(intent.getStatus()) && intent.getRefundTransactionId()==null
                 && p.agentId().equals(intent.getAgentId()) && p.leaseId().equals(intent.getLeaseId())
-                && Objects.equals(p.reservedAt(), intent.getReservedAt())
+                && Objects.equals(p.reservedAt(), intent.associationStartedAt())
                 && candidate.installationId().equals(intent.getRuntimeInstallationId())
                 && candidate.manifestSha256().equals(intent.getRuntimeManifestSha256()));
         require(lease!=null && "USER".equals(lease.getPrincipalType())

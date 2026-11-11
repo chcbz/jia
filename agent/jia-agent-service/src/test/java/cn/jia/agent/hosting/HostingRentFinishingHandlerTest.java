@@ -39,6 +39,13 @@ class HostingRentFinishingHandlerTest {
         when(skills.settleHandoverChanges(current)).thenReturn(true);
         when(runtime.cleanup(initial,candidate,"lease")).thenReturn(true);
     }
+    @Test void transitionUsesOriginalAssociationEpochWithoutInventingReservation() {
+        ready();
+        when(renewal.initialHandoverIntent(scope,"lease")).thenReturn(new EconomyHostingProvisioningIntentEntity()
+                .setIntentId("intent").setSettlementKind("TRANSITION").setCreateTime(1000L));
+        handler.executeScheduled(invocation);
+        verify(stop).stop(initial); verify(completion).completeManaged(current);
+    }
     @Test void springRegistersDurableFinishingHandlerOnlyWhenRentSchedulingEnabled() throws Exception {
         for(boolean enabled:new boolean[]{true,false}) {
             try(var context=new org.springframework.context.annotation.AnnotationConfigApplicationContext()) {

@@ -51,7 +51,7 @@ public final class ManagedHostingCredentials {
                     || !p.tenantId().equals(intent.getTenantId()) || !p.clientId().equals(intent.getClientId())
                     || !"INITIAL".equals(intent.getQuotePurpose()) || !"USER".equals(intent.getPrincipalType())
                     || !p.agentId().equals(intent.getAgentId()) || !p.leaseId().equals(intent.getLeaseId())
-                    || !Objects.equals(p.reservedAt(), intent.getReservedAt()) || intent.getRefundTransactionId() != null
+                    || !Objects.equals(p.reservedAt(), intent.associationStartedAt()) || intent.getRefundTransactionId() != null
                     || !("PROVISIONING_UNKNOWN".equals(intent.getStatus()) || "SERVICE_READY".equals(intent.getStatus())
                             || "ACTIVE".equals(intent.getStatus()))) throw unavailable();
             var actor = new HostingRentHttp.Actor(intent.getPrincipalId(), p.tenantId(), p.clientId(), p.ownerJiacn());
@@ -122,7 +122,7 @@ public final class ManagedHostingCredentials {
                 || !preparation.clientId().equals(intent.getClientId())
                 || !preparation.agentId().equals(intent.getAgentId())
                 || !preparation.leaseId().equals(intent.getLeaseId())
-                || !Objects.equals(preparation.reservedAt(), intent.getReservedAt())
+                || !Objects.equals(preparation.reservedAt(), intent.associationStartedAt())
                 || intent.getCaptureTransactionId() != null || intent.getRefundTransactionId() != null
                 || intent.getServiceReadyAt() != null
                 || intent.getRuntimeInstallationId() != null || intent.getRuntimeManifestSha256() != null

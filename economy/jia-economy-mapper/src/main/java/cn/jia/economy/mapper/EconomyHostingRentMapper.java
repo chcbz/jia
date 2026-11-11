@@ -41,6 +41,27 @@ public interface EconomyHostingRentMapper {
             @Param("planId") String planId,
             @Param("planVersion") long planVersion);
 
+    /** Plans are immutable. Cutover reads without acquiring a new plan lock after binding roots. */
+    @Select("SELECT * FROM economy_hosting_rent_plan WHERE " + EXACT_SCOPE
+            + " AND plan_id=#{planId} AND OCTET_LENGTH(plan_id)=OCTET_LENGTH(#{planId})"
+            + " AND plan_version=#{planVersion} LIMIT 1")
+    EconomyHostingRentPlanEntity selectPlan(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("planId") String planId, @Param("planVersion") long planVersion);
+
+    /** Nonfinancial original association: intentionally no quote, reserve, capture or readiness facts. */
+    @Insert("""
+            INSERT INTO economy_hosting_provisioning_intent(
+                intent_id,lease_id,quote_purpose,principal_type,principal_id,persona_code,agent_id,
+                amount_wen,period_seconds,status,settlement_kind,escrow_version,
+                runtime_installation_id,runtime_manifest_sha256,runtime_provision_generation,
+                outcome_evidence_ref,paid_from,paid_through,version,tenant_id,client_id,create_time,update_time)
+            VALUES(#{intentId},#{leaseId},'INITIAL','USER',#{principalId},#{personaCode},#{agentId},
+                0,#{periodSeconds},'ACTIVE','TRANSITION',0,
+                #{runtimeInstallationId},#{runtimeManifestSha256},1,
+                #{outcomeEvidenceRef},#{paidFrom},#{paidThrough},1,#{tenantId},#{clientId},#{createTime},#{updateTime})
+            """)
+    int insertTransitionIntent(EconomyHostingProvisioningIntentEntity intent);
+
     @Insert("""
             INSERT INTO economy_hosting_rent_quote(
                 quote_id,quote_purpose,plan_id,plan_version,amount_wen,recurring_amount_wen,initial_skill_count,inventory_sha256,inventory_host_id,inventory_snapshot_json,period_seconds,

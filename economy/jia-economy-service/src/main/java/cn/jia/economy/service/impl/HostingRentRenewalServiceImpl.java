@@ -45,6 +45,63 @@ public final class HostingRentRenewalServiceImpl implements HostingRentRenewalSe
         this.listeners = List.copyOf(listeners);
     }
 
+    @Override public String registerTransition(Transition command) {
+        if (!org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())
+            throw new IllegalStateException("Transition registration requires original installation/binding transaction");
+        Objects.requireNonNull(command);
+        if (listeners.isEmpty()) throw new IllegalStateException("Transition requires durable first-expiry scheduling");
+        var scope = Objects.requireNonNull(command.scope());
+        gate.requireMutationAllowed(scope.tenantId(), scope.clientId());
+        if (command.principal() == null || command.principal().type() != EconomyPrincipalType.USER
+                || command.cutoverAt() <= 0 || command.cutoverAt() > renewal.nowMillis())
+            throw new HostingRentException(INVALID_COMMAND, "transition requires a user and actual cutover time");
+        var plan = leases.selectPlan(scope.tenantId(), scope.clientId(), command.planId(), command.planVersion());
+        if (plan == null || !"ACTIVE".equals(plan.getStatus()) || !"WEN".equals(plan.getCurrency())
+                || plan.getAmountWen() == null || plan.getAmountWen() <= 0
+                || !Long.valueOf(PERIOD_MILLIS / 1000).equals(plan.getPeriodSeconds()))
+            throw new HostingRentException(NOT_CONFIGURED, "transition requires an immutable normal 30-day plan");
+        // The digest is migration provenance, not a payment or service-readiness receipt.
+        String provenance = "transition:" + HexFormat.of().formatHex(digest(String.join("\0",
+                scope.tenantId(), scope.clientId(), command.principal().id(), command.leaseId(), command.intentId(),
+                command.personaCode(), command.agentId(), command.bindingId(), command.planId(),
+                Long.toString(command.planVersion()), Long.toString(command.cutoverAt()),
+                command.installationId(), command.manifestSha256())));
+        var previous = leases.selectIntentForUpdate(scope.tenantId(), scope.clientId(), command.intentId());
+        var current = leases.selectLeaseForUpdate(scope.tenantId(), scope.clientId(), command.leaseId());
+        if (previous != null || current != null) {
+            if (previous == null || current == null || !"TRANSITION".equals(previous.getSettlementKind())
+                    || !provenance.equals(previous.getOutcomeEvidenceRef())
+                    || !command.leaseId().equals(previous.getLeaseId())
+                    || !command.bindingId().equals(current.getBindingId())
+                    || !command.agentId().equals(current.getAgentId()))
+                throw new HostingRentException(IDEMPOTENCY_CONFLICT, "cutover input differs from original grant");
+            return current.getLeaseId(); // never reset a term, a closed relationship or its schedule
+        }
+        if (leases.selectLiveLeaseByAgentForUpdate(scope.tenantId(), scope.clientId(), command.agentId()) != null)
+            throw new HostingRentException(LEASE_CONFLICT, "existing Agent already has a live lease");
+        long through = Math.addExact(command.cutoverAt(), PERIOD_MILLIS);
+        var lease = new EconomyHostingLeaseEntity().setLeaseId(command.leaseId())
+                .setPrincipalType("USER").setPrincipalId(command.principal().id())
+                .setPersonaCode(command.personaCode()).setAgentId(command.agentId()).setBindingId(command.bindingId())
+                .setPlanId(command.planId()).setPlanVersion(command.planVersion()).setAmountWen(plan.getAmountWen())
+                .setPeriodSeconds(plan.getPeriodSeconds()).setStatus("ACTIVE")
+                .setPaidFrom(command.cutoverAt()).setPaidThrough(through).setLatestIntentId(command.intentId())
+                .setVersion(1L).setTenantId(scope.tenantId()).setClientId(scope.clientId())
+                .setCreateTime(command.cutoverAt()).setUpdateTime(command.cutoverAt());
+        var initial = new cn.jia.economy.entity.EconomyHostingProvisioningIntentEntity()
+                .setIntentId(command.intentId()).setLeaseId(command.leaseId()).setPrincipalId(command.principal().id())
+                .setPersonaCode(command.personaCode()).setAgentId(command.agentId()).setPeriodSeconds(plan.getPeriodSeconds())
+                .setRuntimeInstallationId(command.installationId()).setRuntimeManifestSha256(command.manifestSha256())
+                .setOutcomeEvidenceRef(provenance).setPaidFrom(command.cutoverAt()).setPaidThrough(through)
+                .setTenantId(scope.tenantId()).setClientId(scope.clientId())
+                .setCreateTime(command.cutoverAt()).setUpdateTime(command.cutoverAt());
+        if (leases.insertLease(lease) != 1 || leases.insertTransitionIntent(initial) != 1)
+            throw new HostingRentException(CONCURRENCY_CONFLICT, "transition registration failed");
+        publish(List.of(new HostingLeaseChangeListener.Change(scope, command.leaseId(), command.principal().id(),
+                "ACTIVE", through, null)));
+        return command.leaseId();
+    }
+
     @Override public boolean lockExpiredFinishing(EconomyScope scope, String leaseId, String bindingId, String agentId) {
         gate.requireMutationAllowed(scope.tenantId(), scope.clientId());
         // Without the caller transaction the lease lock would disappear before task capture/release.

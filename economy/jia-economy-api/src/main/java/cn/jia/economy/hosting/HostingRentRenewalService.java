@@ -5,6 +5,14 @@ import cn.jia.economy.service.EconomyPrincipal;
 
 /** Internal reconciliation, never a caller-controlled HTTP charge. Period identity is the paid-through fact. */
 public interface HostingRentRenewalService {
+    /** Operator cutover only: caller has verified Runtime ADOPTED and holds the exact installation/binding
+     * roots in the current transaction. Registers free terms and first due work; never posts money.
+     * Stable lease/intent IDs and cutoverAt come from the fixed migration input, not retry time. */
+    String registerTransition(Transition command);
+    record Transition(EconomyScope scope, EconomyPrincipal principal, String leaseId, String intentId,
+                      String personaCode, String agentId, String bindingId, String planId, long planVersion,
+                      long cutoverAt, String installationId, String manifestSha256) { }
+
     /** Reconcile due/locked leases in expiry/key order; return the next authoritative user deadline. */
     Long reconcileUser(EconomyScope scope, String userId);
     Result reconcile(EconomyScope scope, String leaseId, long expectedPaidThrough);

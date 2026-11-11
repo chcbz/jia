@@ -1377,6 +1377,97 @@ class HostingRentRenewalMySqlTest {
         int paid = charges(); assertTrue(paid == 0 || paid == 1);
         trigger(); stop("a"); assertEquals(paid, charges()); assertEquals(1000 - 50L * paid, balance());
     }
+    private HostingRentRenewalService.Transition transition(String suffix, long price, long cutover) {
+        String planId = price == 50 ? "agent-self-hosted" : "agent-hosting-preview";
+        if (leases.selectPlan("tenant", "client", planId, 1L) == null) leases.insertPlanVersion(
+                new EconomyHostingRentPlanEntity().setPlanId(planId).setPlanVersion(1L).setAmountWen(price)
+                        .setPeriodSeconds(PERIOD / 1000).setQuoteTtlSeconds(600L).setCurrency("WEN").setStatus("ACTIVE")
+                        .setTenantId("tenant").setClientId("client").setCreateTime(cutover));
+        return new HostingRentRenewalService.Transition(scope,
+                new EconomyPrincipal(EconomyPrincipalType.USER, "user"), "transition-lease-" + suffix,
+                "transition-intent-" + suffix, "likui", "jyt-fixture-" + suffix, "binding-" + suffix,
+                planId, 1L, cutover, "rti_" + suffix, "a".repeat(64));
+    }
+    private String grant(HostingRentRenewalService.Transition command) {
+        return new org.springframework.transaction.support.TransactionTemplate(manager)
+                .execute(tx -> service.registerTransition(command));
+    }
+    @Test void transitionRegistersBothNormalPricesWithoutInventingPaymentOrReadiness() {
+        long cutover = now();
+        for (long price : new long[]{50, 500}) {
+            var command = transition("p" + price, price, cutover);
+            assertEquals(command.leaseId(), grant(command));
+            assertEquals(command.leaseId(), grant(command));
+            var initial = leases.selectInitialIntent("tenant", "client", command.leaseId());
+            assertEquals("TRANSITION", initial.getSettlementKind()); assertEquals("ACTIVE", initial.getStatus());
+            assertEquals(0L, initial.getAmountWen()); assertEquals(cutover, initial.associationStartedAt());
+            assertNull(initial.getQuoteId()); assertNull(initial.getReservedAt());
+            assertNull(initial.getReserveIdempotencyKey()); assertNull(initial.getReserveRequestHash());
+            assertNull(initial.getReserveTransactionId()); assertNull(initial.getCaptureTransactionId());
+            assertNull(initial.getRefundTransactionId()); assertNull(initial.getServiceReadyAt());
+            var lease = leases.selectLease("tenant", "client", command.leaseId());
+            assertEquals(price, lease.getAmountWen()); assertEquals(cutover + PERIOD, lease.getPaidThrough());
+        }
+        assertEquals(1000, balance()); assertEquals(0, charges());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM economy_hosting_rent_quote", Integer.class));
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM economy_hosting_lease", Integer.class));
+        assertEquals(cutover + PERIOD, jdbc.queryForObject(
+                "SELECT due_at FROM task_scheduled_work WHERE handler=?", Long.class, HostingRentBalanceWakeup.HANDLER));
+        new EconomyHostingRentSchemaInitializer(jdbc).afterPropertiesSet();
+    }
+    @Test void transitionExpirationUsesNormalRenewalWithNoHistoricalOrSkillCharge() throws Exception {
+        var command = transition("due", 50, now() - PERIOD - 1000);
+        grant(command); trigger(); trigger();
+        assertEquals(950, balance()); assertEquals(1, charges());
+        var renewed = leases.selectLease("tenant", "client", command.leaseId());
+        assertEquals("ACTIVE", renewed.getStatus());
+        assertTrue(renewed.getPaidFrom() > command.cutoverAt() + PERIOD);
+        assertEquals(PERIOD, renewed.getPaidThrough() - renewed.getPaidFrom());
+        assertEquals(command.leaseId(), grant(command));
+        assertEquals(renewed.getPaidThrough(), leases.selectLease("tenant", "client", command.leaseId()).getPaidThrough());
+        assertEquals(1, charges());
+    }
+    @Test void transitionRegistrationRollsBackIfFirstDueWorkCannotCommit() {
+        var command = transition("rollback", 50, now());
+        service.setLeaseChangeListeners(List.of(change -> { leaseWakeup.changed(change); throw new IllegalStateException("fixture"); }));
+        assertThrows(IllegalStateException.class, () -> grant(command));
+        assertNull(leases.selectLease("tenant", "client", command.leaseId()));
+        assertNull(leases.selectIntent("tenant", "client", command.intentId()));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM task_scheduled_work", Integer.class));
+        assertEquals(1000, balance());
+    }
+    @Test void transitionReplayRejectsChangedCutoverAndCannotOverrideAnotherLiveLease() {
+        long cutover = now() - 1000;
+        var first = transition("one", 50, cutover); grant(first);
+        assertThrows(HostingRentException.class, () -> grant(transition("one", 50, cutover + 1)));
+        var other = new HostingRentRenewalService.Transition(scope, first.principal(), "other-lease", "other-intent",
+                first.personaCode(), first.agentId(), first.bindingId(), first.planId(), first.planVersion(),
+                first.cutoverAt(), first.installationId(), first.manifestSha256());
+        assertThrows(HostingRentException.class, () -> grant(other));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM economy_hosting_lease", Integer.class));
+        assertEquals(cutover + PERIOD, leases.selectLease("tenant", "client", first.leaseId()).getPaidThrough());
+        assertEquals(1000, balance());
+    }
+    @Test void transitionMigrationPermitsAbsentFinancialFactsWithoutChangingExistingPaidRows() {
+        // Replay the explicit additive migration from the previous four NOT NULL columns.
+        jdbc.execute("ALTER TABLE economy_hosting_provisioning_intent MODIFY quote_id VARCHAR(100) NOT NULL,"
+                + " MODIFY reserve_idempotency_key VARBINARY(36) NOT NULL, MODIFY reserve_request_hash BINARY(32) NOT NULL,"
+                + " MODIFY reserved_at BIGINT NOT NULL");
+        var ledger = new HostingRentLedgerServiceImpl(leases, accounts, posting, manager);
+        var receipt = ledger.reserve(initialProvisionCommand(ledger));
+        var before = jdbc.queryForMap("SELECT * FROM economy_hosting_provisioning_intent WHERE intent_id=?", receipt.intentId());
+        new ResourceDatabasePopulator(new ClassPathResource("db/migration-hosting-transition-v1.sql"))
+                .execute(java.util.Objects.requireNonNull(jdbc.getDataSource()));
+        var after = jdbc.queryForMap("SELECT * FROM economy_hosting_provisioning_intent WHERE intent_id=?", receipt.intentId());
+        for (String key : before.keySet()) {
+            if (before.get(key) instanceof byte[] bytes) assertArrayEquals(bytes, (byte[]) after.get(key), key);
+            else assertEquals(before.get(key), after.get(key), key);
+        }
+        grant(transition("migrated", 50, now()));
+        new EconomyHostingRentSchemaInitializer(jdbc).afterPropertiesSet();
+        assertEquals(500, balance());
+    }
+
     @Test void catalogMatchesNewDdlAndDoesNotAddChecks() {
         new EconomyHostingRentSchemaInitializer(jdbc).afterPropertiesSet();
         assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema=DATABASE() AND constraint_type='CHECK'", Integer.class));
