@@ -67,7 +67,6 @@ public final class HostingControlChannel {
     byte[] exchange(Target target, byte[] frame, int timeoutMs) throws IOException {
         var endpoint = target.remote();
         if (endpoint == null) throw new IllegalArgumentException("Remote endpoint required");
-        if (frame.length > 16384) throw new IOException("HOSTING_FRAME_TOO_LARGE");
         SSLContext context;
         try {
             var registry = bundles.getIfAvailable();

@@ -331,7 +331,7 @@ public final class HostingRentApplicationService {
         var replay = rent.selectReprovisionReplay(actor.tenantId(), actor.clientId(), actor.actorId(), keyBytes);
         if (replay != null) return reprovisionReceipt(replay, requestHash);
         ManagedHostingProvisioner provider = provisioners.getIfAvailable();
-        if (provider == null || !provider.probeCapabilities(actor.tenantId(), actor.clientId(), owner)) throw new HostingRentApplicationException(503, "HOSTING_RENT_REPROVISION_NOT_READY");
+        if (provider == null || !provider.probeCapabilities(actor.tenantId(), actor.clientId(), owner, agentId)) throw new HostingRentApplicationException(503, "HOSTING_RENT_REPROVISION_NOT_READY");
         return transactions.execute(status -> {
             if (!owner.equals(owners.requireOwner(actor))) throw forbidden();
             var initial = rent.selectInitialIntent(actor.tenantId(), actor.clientId(), leaseId);

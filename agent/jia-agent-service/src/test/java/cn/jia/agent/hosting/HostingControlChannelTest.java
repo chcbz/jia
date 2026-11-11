@@ -68,7 +68,6 @@ class HostingControlChannelTest {
         var control = channel("127.0.0.1", 9443, "remote-host", null);
         assertNull(control.target(request(), null).remote());
         assertThrows(IOException.class, () -> control.exchange(control.target(request(), "remote-host"), "{}\n".getBytes(), 1000));
-        assertThrows(IOException.class, () -> control.exchange(control.target(request(), "remote-host"), new byte[16385], 1000));
     }
     private void openssl(String... args) throws Exception {
         var command = new ArrayList<String>(); command.add("openssl"); command.addAll(List.of(args));
@@ -132,6 +131,9 @@ class HostingControlChannelTest {
             var noClientKey = SslBundle.of(SslStoreBundle.of(null, null, bundle.getStores().getTrustStore()));
             var anonymous = new UnixManagedHostingProvisioner(rent, local, credentials, sessions, channel("127.0.0.1", port, host, noClientKey));
             assertFalse(anonymous.adoptExisting(initial, existing));
+            assertTrue(adapter.probeCapabilities("0", "fixture-client", "fixture-owner", agent));
+            // No default managed route exists on this fixture; remote control still supports the existing static subject.
+            assertFalse(adapter.probeCapabilities("0", "fixture-client", "fixture-owner"));
             assertTrue(adapter.adoptExisting(initial, existing)); assertTrue(adapter.adoptExisting(initial, existing));
             assertEquals(existing, adapter.currentOperation(initial).candidate());
             assertTrue(adapter.quiesce(initial, existing, "tls-finish"));

@@ -17,6 +17,10 @@ public interface ManagedHostingProvisioner {
             throw new IllegalStateException("Hosting capability I/O inside transaction");
         return availableFor(tenantId, clientId, ownerJiacn);
     }
+    /** Existing installations need their host control, not permission to create a new templated instance. */
+    default boolean probeCapabilities(String tenantId, String clientId, String ownerJiacn, String existingAgentId) {
+        return probeCapabilities(tenantId, clientId, ownerJiacn);
+    }
     /** Public installed inventory only, transaction-external; null is unknown, never zero fees. */
     SkillInventory inventory(String tenantId, String clientId, String ownerJiacn, String agentId);
     record ManagedSkillReference(String skillInstallationId, String productVersionId, String skillVersion,

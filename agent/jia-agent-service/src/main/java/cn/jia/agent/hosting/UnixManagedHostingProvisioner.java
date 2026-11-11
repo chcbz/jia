@@ -51,6 +51,9 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
         return available() && channel.availableFor(tenantId, clientId, ownerJiacn);
     }
     @Override public boolean probeCapabilities(String tenantId, String clientId, String ownerJiacn) {
+        return probeCapabilities(tenantId, clientId, ownerJiacn, null);
+    }
+    @Override public boolean probeCapabilities(String tenantId, String clientId, String ownerJiacn, String existingAgentId) {
         outsideTransaction();
         if (!availableFor(tenantId, clientId, ownerJiacn)) return false;
         String requestId = java.util.UUID.randomUUID().toString();
@@ -58,9 +61,16 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
             var request = new LinkedHashMap<String, Object>();
             request.put("protocol", PROTOCOL); request.put("method", "capabilities");
             request.put("tenantId", tenantId); request.put("clientId", clientId); request.put("ownerJiacn", ownerJiacn);
-            var response = exchange(request, requestId);
+            String preferredHost = null;
+            if (existingAgentId != null) {
+                var routeRequest = new LinkedHashMap<String, Object>(request);
+                routeRequest.put("canonicalAgentId", existingAgentId);
+                preferredHost = channel.target(routeRequest, null).hostId();
+            }
+            var response = exchange(request, requestId, preferredHost);
             return response != null && response.keySet().equals(Set.of("protocol", "method", "tenantId", "clientId", "ownerJiacn", "available", "hostId"))
-                    && echoes(request, response) && Boolean.TRUE.equals(response.get("available")) && exact(response.get("hostId"), 100);
+                    && echoes(request, response) && response.get("available") instanceof Boolean canCreate
+                    && (existingAgentId != null || canCreate) && exact(response.get("hostId"), 100);
         } catch (Exception unavailable) {
             LOG.warn("Managed capability unavailable requestId={} stage=capabilities errorCode=HOSTING_EXCHANGE_UNAVAILABLE causeClass={}", requestId, unavailable.getClass().getSimpleName());
             return false;

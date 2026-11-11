@@ -246,7 +246,7 @@ class HostingRentRenewalMySqlTest {
                     ((Number)endpoint.get("uid")).longValue(), "tenant", "client", "*", 10000,
                     ((Number)endpoint.get("gid")).longValue(), null);
             var channel = new HostingControlChannel(new cn.jia.agent.config.HostingControlRemoteProperties(
-                    (String)endpoint.get("hostId"), Map.of()), channelConfig, mock(cn.jia.agent.dao.AgentRuntimeDao.class),
+                    (String)endpoint.get("hostId"), java.util.Map.of()), channelConfig, mock(cn.jia.agent.dao.AgentRuntimeDao.class),
                     beans.getBeanProvider(org.springframework.boot.ssl.SslBundles.class));
             var provider = new UnixManagedHostingProvisioner(properties, channelConfig, credentials, auth, channel);
             beans.addBean("provider", provider);

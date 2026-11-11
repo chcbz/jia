@@ -61,7 +61,7 @@ class HostingRentApplicationServiceTest {
         when(providers.getIfAvailable()).thenReturn(provider);
         when(provider.available()).thenReturn(true);
         when(provider.availableFor(anyString(), anyString(), anyString())).thenAnswer(call -> provider.available());
-        when(provider.probeCapabilities(anyString(), anyString(), anyString())).thenAnswer(call -> {
+        when(provider.probeCapabilities(anyString(), anyString(), anyString(), anyString())).thenAnswer(call -> {
             assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
             return provider.available();
         });
