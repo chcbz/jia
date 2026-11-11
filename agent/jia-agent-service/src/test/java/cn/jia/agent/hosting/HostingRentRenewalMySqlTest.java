@@ -242,11 +242,13 @@ class HostingRentRenewalMySqlTest {
             when(owners.requireOwner(any())).thenAnswer(call -> ((HostingRentHttp.Actor)call.getArgument(0)).ownerJiacn());
             var credentials = new ManagedHostingCredentials(beans.getBeanProvider(cn.jia.oauth.service.ApiKeyService.class),
                     leases, owners, identities, identityBindings, manager, runtime);
-            var provider = new UnixManagedHostingProvisioner(properties,
-                    new cn.jia.agent.config.ManagedHostingAdapterProperties((String)endpoint.get("socketPath"),
-                            ((Number)endpoint.get("uid")).longValue(), "tenant", "client", "*", 10000,
-                            // Exercise the production default; do not hide cold-start regressions.
-                            ((Number)endpoint.get("gid")).longValue(), null), credentials, auth);
+            var channelConfig = new cn.jia.agent.config.ManagedHostingAdapterProperties((String)endpoint.get("socketPath"),
+                    ((Number)endpoint.get("uid")).longValue(), "tenant", "client", "*", 10000,
+                    ((Number)endpoint.get("gid")).longValue(), null);
+            var channel = new HostingControlChannel(new cn.jia.agent.config.HostingControlRemoteProperties(
+                    (String)endpoint.get("hostId"), Map.of()), channelConfig, mock(cn.jia.agent.dao.AgentRuntimeDao.class),
+                    beans.getBeanProvider(org.springframework.boot.ssl.SslBundles.class));
+            var provider = new UnixManagedHostingProvisioner(properties, channelConfig, credentials, auth, channel);
             beans.addBean("provider", provider);
             var gate = new EconomyPreviewGate(new EconomyPreviewProperties(true,
                     List.of(new EconomyPreviewProperties.AllowedScope("tenant", "client"))));

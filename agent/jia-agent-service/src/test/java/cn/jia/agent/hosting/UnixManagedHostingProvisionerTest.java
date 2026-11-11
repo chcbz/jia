@@ -48,19 +48,19 @@ class UnixManagedHostingProvisionerTest {
         var existing = new ManagedHostingProvisioner.Candidate("rti_" + "1".repeat(32), "a".repeat(64), null, 0, 1, "fixture-host");
         var request = UnixManagedHostingProvisioner.request(initial, "adopt", existing);
         var response = new LinkedHashMap<>(request); response.put("outcome", "ADOPTED"); response.put("hostId", existing.hostId());
-        var adapter = adapter(); doReturn(response).when(adapter).exchange(request);
+        var adapter = adapter(); doReturn(response).when(adapter).exchange(eq(request), anyString(), nullable(String.class));
         assertTrue(adapter.adoptExisting(initial, existing));
         assertTrue(adapter.adoptExisting(initial, existing));
         verify(credentials, never()).ensureInstallation(any(), any()); verifyNoInteractions(sessions);
         for (String field : List.of("bindingId", "leaseId", "initialIntentId", "operationId", "canonicalAgentId", "installationId",
                 "manifestSha256", "hostId", "ownerJiacn", "clientId", "tenantId", "outcome")) {
             var wrong = new LinkedHashMap<>(response); wrong.put(field, "wrong");
-            doReturn(wrong).when(adapter).exchange(request);
+            doReturn(wrong).when(adapter).exchange(eq(request), anyString(), nullable(String.class));
             assertFalse(adapter.adoptExisting(initial, existing), field);
         }
         var extra = new LinkedHashMap<>(response); extra.put("runtimeAuthorization", "must-not-be-returned");
-        doReturn(extra).when(adapter).exchange(request); assertFalse(adapter.adoptExisting(initial, existing));
-        doThrow(new java.io.IOException("lost reply")).when(adapter).exchange(request);
+        doReturn(extra).when(adapter).exchange(eq(request), anyString(), nullable(String.class)); assertFalse(adapter.adoptExisting(initial, existing));
+        doThrow(new java.io.IOException("lost reply")).when(adapter).exchange(eq(request), anyString(), nullable(String.class));
         assertFalse(adapter.adoptExisting(initial, existing));
         TransactionSynchronizationManager.setActualTransactionActive(true);
         try { assertThrows(IllegalStateException.class, () -> adapter.adoptExisting(initial, existing)); }
@@ -109,7 +109,7 @@ class UnixManagedHostingProvisionerTest {
             assertNotNull(input);
             var fixture = JSON.readValue(input, new TypeReference<Map<String, Map<String, Object>>>() {});
             var request = fixture.get("request"); var response = fixture.get("response");
-            var adapter = adapter(); doReturn(response).when(adapter).exchange(request);
+            var adapter = adapter(); doReturn(response).when(adapter).exchange(eq(request), anyString(), nullable(String.class));
             var inventory = adapter.inventory("0", "fixture-client", "fixture-owner", "agt_fixture");
             assertNotNull(inventory); assertEquals(2, inventory.installedSkillCount());
             assertEquals(List.of("installed", "菜谱"), inventory.skills().stream().map(ManagedHostingProvisioner.InstalledSkill::skillKey).toList());
@@ -143,12 +143,12 @@ class UnixManagedHostingProvisionerTest {
         response.put("installationId", candidate().installationId());
         response.put("manifestSha256", candidate().manifestSha256());
         response.put("provisionGeneration", 2L); response.put("hostId", candidate().hostId());
-        doReturn(response).when(adapter).exchange(anyMap());
+        doReturn(response).when(adapter).exchange(anyMap(), anyString(), nullable(String.class));
         var current = adapter.currentOperation(preparation());
         assertNotNull(current);
         assertEquals(preparation("reprovisionPrepareRequest"), current.preparation());
         assertEquals(2, current.candidate().provisionGeneration());
-        verify(adapter).exchange(UnixManagedHostingProvisioner.request(preparation(), "current", null));
+        verify(adapter).exchange(eq(UnixManagedHostingProvisioner.request(preparation(), "current", null)), anyString(), nullable(String.class));
         verify(credentials, never()).ensureInstallation(any(), any());
         verifyNoInteractions(sessions);
         for (String field : List.of("ownerJiacn", "bindingId", "leaseId", "initialIntentId", "installationId", "operationKind")) {
@@ -179,15 +179,17 @@ class UnixManagedHostingProvisionerTest {
                 "rti_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", host, generation, "a".repeat(64), 1, 0);
     }
     private UnixManagedHostingProvisioner adapter(Path socket, long uid, long gid, String owner) {
-        return new UnixManagedHostingProvisioner(new AgentHostingRentProperties(true, "1", "1000000000", "2592000"),
-                new ManagedHostingAdapterProperties(socket.toString(), uid, "0", "fixture-client", owner, 1000, gid, null), credentials, sessions);
+        var local = new ManagedHostingAdapterProperties(socket.toString(), uid, "0", "fixture-client", owner, 1000, gid, null);
+        var channel = new HostingControlChannel(new cn.jia.agent.config.HostingControlRemoteProperties("fixture-host", Map.of()),
+                local, mock(cn.jia.agent.dao.AgentRuntimeDao.class), new org.springframework.beans.factory.support.DefaultListableBeanFactory().getBeanProvider(org.springframework.boot.ssl.SslBundles.class));
+        return new UnixManagedHostingProvisioner(new AgentHostingRentProperties(true, "1", "1000000000", "2592000"), local, credentials, sessions, channel);
     }
     private UnixManagedHostingProvisioner adapter() { return spy(adapter(Path.of("/private/control.sock"), 0, 1000, "*")); }
     private void exchangeFixture(UnixManagedHostingProvisioner adapter, Map<String, Object> observed) throws Exception {
         doAnswer(call -> {
             Map<String, Object> request = call.getArgument(0);
             return "prepare".equals(request.get("method")) ? frame("preparedResponse") : observed;
-        }).when(adapter).exchange(anyMap());
+        }).when(adapter).exchange(anyMap(), anyString(), nullable(String.class));
     }
     private Map<String, Object> wire(Map<String, Object> request) {
         return JSON.readValue(JSON.writeValueAsString(request), new TypeReference<Map<String, Object>>() {});
@@ -243,11 +245,11 @@ class UnixManagedHostingProvisionerTest {
         var adapter = adapter(); exchangeFixture(adapter, frame("readyResponse"));
         assertEquals(ManagedHostingProvisioner.Outcome.SERVICE_READY, adapter.prepareAndObserve(preparation()).outcome());
         var order = inOrder(adapter, credentials, sessions);
-        order.verify(adapter).exchange(argThat(r -> "prepare".equals(r.get("method"))));
+        order.verify(adapter).exchange(argThat(r -> "prepare".equals(r.get("method"))), anyString(), nullable(String.class));
         order.verify(credentials).ensureInstallation(preparation(), candidate());
-        order.verify(adapter).exchange(argThat(r -> "observe".equals(r.get("method"))));
+        order.verify(adapter).exchange(argThat(r -> "observe".equals(r.get("method"))), anyString(), nullable(String.class));
         order.verify(sessions).currentRegisteredProof("0", "fixture-client", "agt_fixture");
-        verify(adapter, never()).exchange(argThat(r -> "ensure".equals(r.get("method"))));
+        verify(adapter, never()).exchange(argThat(r -> "ensure".equals(r.get("method"))), anyString(), nullable(String.class));
     }
     @Test void unknownObserveUsesSamePreparedInstallationAndGenerationForEnsure() throws Exception {
         var adapter = adapter(); List<Map<String,Object>> requests = new ArrayList<>();
@@ -256,7 +258,7 @@ class UnixManagedHostingProvisionerTest {
             if ("prepare".equals(request.get("method"))) return frame("preparedResponse");
             if ("observe".equals(request.get("method"))) return frame("unknownResponse");
             var ready = frame("readyResponse"); ready.put("method", "ensure"); return ready;
-        }).when(adapter).exchange(anyMap());
+        }).when(adapter).exchange(anyMap(), anyString(), nullable(String.class));
         assertEquals(ManagedHostingProvisioner.Outcome.SERVICE_READY, adapter.prepareAndObserve(preparation()).outcome());
         assertEquals(List.of("prepare", "observe", "ensure"), requests.stream().map(r -> r.get("method")).toList());
         assertTrue(requests.stream().noneMatch(r -> r.containsKey("apiKey") || r.containsKey("enrollmentSecret")));
@@ -275,12 +277,12 @@ class UnixManagedHostingProvisionerTest {
         assertEquals(ManagedHostingProvisioner.Outcome.UNKNOWN, adapter.prepareAndObserve(preparation()).outcome());
     }
     @Test void lostPrepareOrEnsureResponseAndRecoveryRequiredNeverRefundOrReenroll() throws Exception {
-        var adapter = adapter(); doThrow(new java.net.SocketTimeoutException("fixture")).when(adapter).exchange(anyMap());
+        var adapter = adapter(); doThrow(new java.net.SocketTimeoutException("fixture")).when(adapter).exchange(anyMap(), anyString(), nullable(String.class));
         assertEquals(ManagedHostingProvisioner.Outcome.UNKNOWN, adapter.prepareAndObserve(preparation()).outcome());
         verify(credentials, never()).ensureInstallation(any(), any());
         var recovery = frame("unknownResponse"); recovery.put("outcome", "RECOVERY_REQUIRED"); exchangeFixture(adapter, recovery);
         assertEquals(ManagedHostingProvisioner.Outcome.UNKNOWN, adapter.prepareAndObserve(preparation()).outcome());
-        verify(adapter, never()).exchange(argThat(r -> "ensure".equals(r.get("method"))));
+        verify(adapter, never()).exchange(argThat(r -> "ensure".equals(r.get("method"))), anyString(), nullable(String.class));
         var noEffect = frame("readyResponse"); noEffect.put("outcome", "FAILED_NO_EFFECT");
         assertEquals(ManagedHostingProvisioner.Outcome.UNKNOWN, UnixManagedHostingProvisioner.decode(preparation(), candidate(), "observe", noEffect).outcome());
     }
@@ -288,15 +290,15 @@ class UnixManagedHostingProvisionerTest {
         var adapter = adapter(); exchangeFixture(adapter, frame("readyResponse"));
         doThrow(new IllegalStateException("CAS")).when(credentials).ensureInstallation(any(), any());
         assertEquals(ManagedHostingProvisioner.Outcome.UNKNOWN, adapter.prepareAndObserve(preparation()).outcome());
-        verify(adapter, never()).exchange(argThat(r -> !"prepare".equals(r.get("method"))));
+        verify(adapter, never()).exchange(argThat(r -> !"prepare".equals(r.get("method"))), anyString(), nullable(String.class));
     }
     @Test void liveCapabilitiesProbeIsTransactionExternalExactScopedAndFailClosed() throws Exception {
         var adapter = adapter();
-        doAnswer(call -> { var response = new LinkedHashMap<String,Object>(call.getArgument(0)); response.put("hostId", "fixture-host"); response.put("available", true); return response; }).when(adapter).exchange(anyMap(), anyString());
+        doAnswer(call -> { var response = new LinkedHashMap<String,Object>(call.getArgument(0)); response.put("hostId", "fixture-host"); response.put("available", true); return response; }).when(adapter).exchange(anyMap(), anyString(), nullable(String.class));
         assertTrue(adapter.probeCapabilities("0", "fixture-client", "fixture-owner"));
         assertFalse(adapter.probeCapabilities("other", "fixture-client", "fixture-owner"));
         assertFalse(adapter.probeCapabilities("0", "fixture-client", "*"));
-        doThrow(new java.net.SocketTimeoutException("absent")).when(adapter).exchange(anyMap(), anyString());
+        doThrow(new java.net.SocketTimeoutException("absent")).when(adapter).exchange(anyMap(), anyString(), nullable(String.class));
         assertFalse(adapter.probeCapabilities("0", "fixture-client", "fixture-owner"));
         TransactionSynchronizationManager.setActualTransactionActive(true);
         try {
@@ -534,10 +536,10 @@ class UnixManagedHostingProvisionerTest {
         var adapter = adapter();
         doAnswer(call -> { var response = new LinkedHashMap<String,Object>(call.getArgument(0));
             response.put("hostId", candidate().hostId()); response.put("outcome", "QUIESCED"); return response;
-        }).when(adapter).exchange(anyMap());
+        }).when(adapter).exchange(anyMap(), anyString(), nullable(String.class));
         assertTrue(adapter.quiesce(preparation(), candidate(), "finish-fixture-lease"));
         verifyNoInteractions(sessions); verify(credentials, never()).ensureInstallation(any(), any());
-        doThrow(new java.net.SocketTimeoutException("lost reply")).when(adapter).exchange(anyMap());
+        doThrow(new java.net.SocketTimeoutException("lost reply")).when(adapter).exchange(anyMap(), anyString(), nullable(String.class));
         assertFalse(adapter.quiesce(preparation(), candidate(), "finish-fixture-lease"));
         TransactionSynchronizationManager.setActualTransactionActive(true);
         try { assertThrows(IllegalStateException.class, () -> adapter.quiesce(preparation(), candidate(), "finish-fixture-lease")); }
@@ -562,14 +564,14 @@ class UnixManagedHostingProvisionerTest {
             assertFalse(UnixManagedHostingProvisioner.decodeHandover(request, candidate(), changed, "EVIDENCE_ACCEPTED"), field);
         }
         var adapter = adapter();
-        doReturn(response).when(adapter).exchange(anyMap());
+        doReturn(response).when(adapter).exchange(anyMap(), anyString(), nullable(String.class));
         assertTrue(adapter.flushEvidence(preparation(), candidate(), "finish-fixture-lease"));
         for (var outcome : List.of("QUIESCED", "EVIDENCE_PENDING")) {
             var pending = new LinkedHashMap<>(response); pending.put("outcome", outcome);
-            doReturn(pending).when(adapter).exchange(anyMap());
+            doReturn(pending).when(adapter).exchange(anyMap(), anyString(), nullable(String.class));
             assertFalse(adapter.flushEvidence(preparation(), candidate(), "finish-fixture-lease"));
         }
-        doThrow(new java.net.SocketTimeoutException("lost receipt")).when(adapter).exchange(anyMap());
+        doThrow(new java.net.SocketTimeoutException("lost receipt")).when(adapter).exchange(anyMap(), anyString(), nullable(String.class));
         assertFalse(adapter.flushEvidence(preparation(), candidate(), "finish-fixture-lease"));
         verifyNoInteractions(sessions); verify(credentials, never()).ensureInstallation(any(), any());
         TransactionSynchronizationManager.setActualTransactionActive(true);
@@ -594,14 +596,14 @@ class UnixManagedHostingProvisionerTest {
             assertFalse(UnixManagedHostingProvisioner.decodeHandover(request, candidate(), changed, "CLEANED"), field);
         }
         var adapter = adapter();
-        doReturn(response).when(adapter).exchange(anyMap());
+        doReturn(response).when(adapter).exchange(anyMap(), anyString(), nullable(String.class));
         assertTrue(adapter.cleanup(preparation(), candidate(), "finish-fixture-lease"));
         for (var outcome : List.of("QUIESCED", "EVIDENCE_ACCEPTED", "CLEANUP_PENDING")) {
             var pending = new LinkedHashMap<>(response); pending.put("outcome", outcome);
-            doReturn(pending).when(adapter).exchange(anyMap());
+            doReturn(pending).when(adapter).exchange(anyMap(), anyString(), nullable(String.class));
             assertFalse(adapter.cleanup(preparation(), candidate(), "finish-fixture-lease"));
         }
-        doThrow(new java.net.SocketTimeoutException("lost receipt")).when(adapter).exchange(anyMap());
+        doThrow(new java.net.SocketTimeoutException("lost receipt")).when(adapter).exchange(anyMap(), anyString(), nullable(String.class));
         assertFalse(adapter.cleanup(preparation(), candidate(), "finish-fixture-lease"));
         verifyNoInteractions(sessions); verify(credentials, never()).ensureInstallation(any(), any());
         TransactionSynchronizationManager.setActualTransactionActive(true);
@@ -613,7 +615,7 @@ class UnixManagedHostingProvisionerTest {
         var p=preparation();var response=new LinkedHashMap<>(UnixManagedHostingProvisioner.request(p,"prepare",null));
         response.put("outcome","FAILED_NO_EFFECT");response.put("reasonCode","HOSTING_INVENTORY_CHANGED");
         response.put("hostId","fixture-host");response.put("evidenceRef","a".repeat(64));
-        var adapter=adapter();doReturn(response).when(adapter).exchange(anyMap());
+        var adapter=adapter();doReturn(response).when(adapter).exchange(anyMap(), anyString(), nullable(String.class));
         assertEquals(ManagedHostingProvisioner.Outcome.FAILED_NO_EFFECT,adapter.prepareAndObserve(p).outcome());
         verify(credentials,never()).ensureInstallation(any(),any());verifyNoInteractions(sessions);
         for(String field:List.of("hostId","quotedInventory","evidenceRef","initialIntentId","reasonCode")) {

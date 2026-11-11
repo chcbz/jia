@@ -443,6 +443,7 @@ def managedHostingRegressionSourceSet = sourceSets.create('managedHostingRegress
         include 'cn/jia/agent/service/usage/PlatformKnowledgeMaintenanceFixture.java'
         include 'cn/jia/agent/security/PlatformKnowledgeUsageControllerTest.java'
         include 'cn/jia/agent/hosting/UnixManagedHostingProvisionerTest.java'
+        include 'cn/jia/agent/hosting/HostingControlChannelTest.java'
         include 'cn/jia/agent/hosting/ManagedHostingCredentialsTest.java'
         include 'cn/jia/agent/hosting/HostingRentApplicationServiceTest.java'
         include 'cn/jia/agent/service/impl/AgentIdentityServiceImplTest.java'

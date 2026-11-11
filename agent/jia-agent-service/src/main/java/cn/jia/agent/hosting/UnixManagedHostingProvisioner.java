@@ -40,14 +40,15 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
     private final AgentHostingRentProperties rent;
     private final ManagedHostingAdapterProperties config;
     private final ManagedHostingCredentials credentials;
+    private final HostingControlChannel channel;
     private final AgentRuntimeAuthenticationService sessions;
     public UnixManagedHostingProvisioner(AgentHostingRentProperties rent, ManagedHostingAdapterProperties config,
-            ManagedHostingCredentials credentials, AgentRuntimeAuthenticationService sessions) {
-        this.rent = rent; this.config = config; this.credentials = credentials; this.sessions = sessions;
+            ManagedHostingCredentials credentials, AgentRuntimeAuthenticationService sessions, HostingControlChannel channel) {
+        this.rent = rent; this.config = config; this.credentials = credentials; this.sessions = sessions; this.channel = channel;
     }
-    @Override public boolean available() { return rent.configured() && config.configured() && credentials.available(); }
+    @Override public boolean available() { return rent.configured() && channel.available() && credentials.available(); }
     @Override public boolean availableFor(String tenantId, String clientId, String ownerJiacn) {
-        return available() && config.allowsScope(tenantId, clientId, ownerJiacn);
+        return available() && channel.availableFor(tenantId, clientId, ownerJiacn);
     }
     @Override public boolean probeCapabilities(String tenantId, String clientId, String ownerJiacn) {
         outsideTransaction();
@@ -132,10 +133,10 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
             Candidate candidate = decodePrepared(p, prepared);
             if (candidate == null) return unknown(p);
             credentials.ensureInstallation(p, candidate); // DB-only atomic authorization/linkage, committed before ensure.
-            var observed = exchange(request(p, "observe", candidate));
+            var observed = exchange(request(p, "observe", candidate), java.util.UUID.randomUUID().toString(), candidate.hostId());
             Observation proof = trustedObservation(p, candidate, "observe", observed);
             if (proof.outcome() == Outcome.SERVICE_READY || recoveryRequired(observed)) return proof;
-            return trustedObservation(p, candidate, "ensure", exchange(request(p, "ensure", candidate)));
+            return trustedObservation(p, candidate, "ensure", exchange(request(p, "ensure", candidate), java.util.UUID.randomUUID().toString(), candidate.hostId()));
         } catch (Exception uncertain) {
             // Lost prepare/enroll/ensure response remains UNKNOWN. No new key/order/refund/reenrollment.
             return unknown(p);
@@ -150,7 +151,7 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
                 || !availableFor(initial.tenantId(), initial.clientId(), initial.ownerJiacn())) return false;
         try {
             var request = request(initial, "adopt", existing);
-            return decodeHandover(request, existing, exchange(request), "ADOPTED");
+            return decodeHandover(request, existing, exchange(request, java.util.UUID.randomUUID().toString(), existing.hostId()), "ADOPTED");
         } catch (Exception uncertain) { return false; }
     }
     @Override public CurrentOperation currentOperation(Preparation initial) {
@@ -198,7 +199,7 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
                 || !availableFor(p.tenantId(), p.clientId(), p.ownerJiacn())) return false;
         try {
             var request = handoverRequest(p, candidate, handoverId, method);
-            return decodeHandover(request, candidate, exchange(request), outcome);
+            return decodeHandover(request, candidate, exchange(request, java.util.UUID.randomUUID().toString(), candidate.hostId()), outcome);
         } catch (Exception uncertain) {
             // Same relationship/operation retry only. A missing receipt never advances cleanup.
             return false;
@@ -355,16 +356,25 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
         return exchange(request, java.util.UUID.randomUUID().toString());
     }
     Map<String, Object> exchange(Map<String, Object> request, String requestId) throws IOException {
+        return exchange(request, requestId, null);
+    }
+    Map<String, Object> exchange(Map<String, Object> request, String requestId, String preferredHost) throws IOException {
         outsideTransaction();
-        Path socket = Path.of(config.socketPath());
-        validateSocket(socket, config.runnerUid(), config.socketGroupGid());
+        var target = channel.target(request, preferredHost);
         var message = cn.jia.core.entity.ProtocolMessage.event(requestId, "hosting." + request.get("method"),
                 java.util.UUID.randomUUID().toString(), hostingData(request));
         byte[] frame = (JSON.writeValueAsString(message) + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8);
         if (frame.length > MAX_FRAME) throw new IOException("Managed frame too large");
-        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(
-                ("inventory".equals(request.get("method")) || "prepare".equals(request.get("method")) && request.containsKey("quotedInventory"))
-                        ? config.inventoryTimeoutMs() : config.timeoutMs());
+        int timeoutMs = ("inventory".equals(request.get("method")) || "prepare".equals(request.get("method")) && request.containsKey("quotedInventory"))
+                ? config.inventoryTimeoutMs() : config.timeoutMs();
+        if (target.remote() != null) {
+            var response = hostingResponse(message, JSON.readValue(channel.exchange(target, frame, timeoutMs), new TypeReference<Map<String, Object>>() { }));
+            if (!target.hostId().equals(response.get("hostId"))) throw new IOException("HOSTING_HOST_MISMATCH");
+            return response;
+        }
+        Path socket = Path.of(config.socketPath());
+        validateSocket(socket, config.runnerUid(), config.socketGroupGid());
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
         try (SocketChannel channel = SocketChannel.open(StandardProtocolFamily.UNIX); Selector selector = Selector.open()) {
             channel.configureBlocking(false);
             if (!channel.connect(UnixDomainSocketAddress.of(socket))) {
