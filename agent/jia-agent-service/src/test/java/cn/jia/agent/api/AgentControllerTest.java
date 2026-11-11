@@ -66,7 +66,7 @@ class AgentControllerTest {
     @Test
     void bindPersonaNeverAllowsSensitiveOutput() throws Exception {
         Method method = AgentController.class.getDeclaredMethod(
-                "bindPersonaHttp", String.class, Authentication.class, byte[].class, jakarta.servlet.http.HttpServletRequest.class);
+                "bindPersonaHttp", String.class, Authentication.class, jakarta.servlet.http.HttpServletRequest.class, byte[].class);
         assertNull(method.getAnnotation(AllowSensitiveOutput.class));
     }
 
@@ -167,7 +167,7 @@ class AgentControllerTest {
             var request = new org.springframework.mock.web.MockHttpServletRequest();
             request.addHeader("Idempotency-Key", "00000000-0000-0000-0000-000000000001");
             var body = ("{\"mode\":\"" + mode + "\",\"hostingAction\":\"INITIAL\"}").getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            var response = assertInstanceOf(ResponseEntity.class, controller.bindPersonaHttp("wuyong", jwt("Owner-A", "Client-A"), body, request));
+            var response = assertInstanceOf(ResponseEntity.class, controller.bindPersonaHttp("wuyong", jwt("Owner-A", "Client-A"), request, body));
             assertEquals(202, response.getStatusCode().value());
             verify(rent).bind(new HostingRentHttp.Actor("login-sub", "0", "Client-A", "Owner-A"), "wuyong",
                     "00000000-0000-0000-0000-000000000001", java.util.Map.of("mode", mode, "hostingAction", "INITIAL"));
@@ -180,7 +180,7 @@ class AgentControllerTest {
         var rent = mock(HostingRentApplicationService.class); controller.setHostingRent(rent);
         for (String body : List.of("null", "{}", "{\"mode\":null}", "{\"mode\":\" \"}", "{\"mode\":\"local\"}")) {
             assertThrows(HostingRentApplicationException.class, () -> controller.bindPersonaHttp("wuyong", jwt("Owner-A", "Client-A"),
-                    body.getBytes(java.nio.charset.StandardCharsets.UTF_8), new org.springframework.mock.web.MockHttpServletRequest()));
+                    new org.springframework.mock.web.MockHttpServletRequest(), body.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
         }
         verifyNoInteractions(rent, provisioning, agentService);
     }
@@ -205,7 +205,7 @@ class AgentControllerTest {
             assertThrows(AgentBizException.class,
                     () -> controller.personaCatalog(authentication));
             assertThrows(HostingRentApplicationException.class,
-                    () -> controller.bindPersonaHttp("wuyong", authentication, "{}".getBytes(java.nio.charset.StandardCharsets.UTF_8), new org.springframework.mock.web.MockHttpServletRequest()));
+                    () -> controller.bindPersonaHttp("wuyong", authentication, new org.springframework.mock.web.MockHttpServletRequest(), "{}".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
             assertThrows(HostingRentApplicationException.class,
                     () -> controller.unbindPersona("wuyong", authentication, "{}".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
         }
