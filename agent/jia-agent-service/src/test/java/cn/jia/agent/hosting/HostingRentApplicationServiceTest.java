@@ -156,6 +156,54 @@ class HostingRentApplicationServiceTest {
         order.verify(reconciler).wakeInitial(eq(ACTOR.clientId()), anyString());
     }
 
+    @Test void legacyRetainedCanonicalCanBeQuotedAndConfirmedWithoutRenaming() {
+        String agent = "jyt-fixture-likui";
+        releasedInvitation().setAgentId(agent);
+        when(renewal.completedHandover(ACTOR.scope(), agent, "original-installation")).thenReturn(true);
+        var quote = rent.selectQuoteForUpdate("0", "Client-A", "hrq-test");
+        quote.setAgentId(agent);
+        when(rent.selectPlanForUpdate(anyString(), anyString(), anyString(), eq(1L))).thenReturn(
+                new EconomyHostingRentPlanEntity().setPlanId("agent-hosting-preview").setPlanVersion(1L)
+                        .setAmountWen(1000000000L).setPeriodSeconds(2592000L).setStatus("ACTIVE"));
+        when(ledger.quote(any())).thenAnswer(call -> {
+            HostingRentQuoteCommand command = call.getArgument(0);
+            assertEquals(agent, command.agentId());
+            return new HostingRentQuoteReceipt("hrq-test", HostingRentQuotePurpose.INITIAL,
+                    "agent-hosting-preview", 1L, 1000000000L, 2592000L, "wuyong", agent,
+                    null, null, 1800000000000L, 1000000000L, EMPTY_INVENTORY);
+        });
+        doAnswer(call -> {
+            AgentPersonaBindingEntity binding = call.getArgument(0);
+            assertEquals(agent, binding.getAgentId()); binding.setId(17L);
+            jdbc.update("INSERT INTO effects VALUES('binding')"); return 1;
+        }).when(bindings).insert(any());
+        doAnswer(call -> {
+            AgentPersonaBindingEntity binding = call.getArgument(0);
+            assertEquals(agent, binding.getAgentId());
+            var identity = new AgentIdentityRegistryEntity().setCanonicalAgentId(agent).setOwnerJiacn("Tenant-A");
+            identity.setTenantId("0"); jdbc.update("INSERT INTO effects VALUES('identity')"); return identity;
+        }).when(identities).provisionRetainedIdentity(any(), anyString());
+        assertEquals(agent, application.quote(ACTOR, "wuyong", KEY,
+                Map.of("purpose", "INITIAL", "agentId", agent)).agentId());
+        var body = new java.util.HashMap<>(confirmation()); body.put("agentId", agent);
+        application.bind(ACTOR, "wuyong", KEY, body);
+        assertEquals(4, count());
+        verify(runtimes, never()).insert(any());
+        verify(identities, never()).provisionOpaqueIdentity(any(), anyString());
+        verify(identities).provisionRetainedIdentity(any(), anyString());
+        verify(reconciler).wakeInitial(ACTOR.clientId(), receipt.intentId());
+    }
+
+    @Test void arbitraryCanonicalTextCannotChooseAnUnownedNewOrRetainedAgent() {
+        assertThrows(HostingRentApplicationException.class, () -> application.quote(ACTOR, "wuyong", KEY,
+                Map.of("purpose", "INITIAL", "agentId", "jyt-unregistered")));
+        releasedInvitation().setAgentId("jyt-fixture-likui");
+        when(renewal.completedHandover(ACTOR.scope(), "jyt-fixture-likui", "original-installation")).thenReturn(true);
+        assertThrows(HostingRentApplicationException.class, () -> application.quote(ACTOR, "wuyong", KEY,
+                Map.of("purpose", "INITIAL", "agentId", "jyt-other-owner")));
+        verifyNoInteractions(ledger, bindings, identities, reconciler); assertEquals(0, count());
+    }
+
     @Test void incompleteHandoverRefusesQuoteAndReserveWithoutFunds() {
         releasedInvitation();
         when(rent.selectPlanForUpdate(anyString(),anyString(),anyString(),eq(1L))).thenReturn(

@@ -77,7 +77,7 @@ public final class HostingRentApplicationService {
         key(idempotencyKey); exact(personaCode, 100);
         if (!"INITIAL".equals(body.get("purpose"))) throw badRequest();
         String requestedAgent = body.get("agentId");
-        if (requestedAgent != null) requireCanonicalShape(requestedAgent);
+        if (requestedAgent != null) requireAgentId(requestedAgent);
         byte[] hash = hash("INITIAL:" + personaCode, body);
         InitialQuoteSubject subject = transactions.execute(status -> {
             String owner = owners.requireOwner(actor);
@@ -148,7 +148,7 @@ public final class HostingRentApplicationService {
         if (!"INITIAL".equals(body.get("hostingAction"))) throw badRequest();
         if (!Set.of("mode", "hostingAction", "agentId", "quoteId", "expectedPlanVersion",
                 "expectedAmountWen", "expectedPeriodSeconds").containsAll(body.keySet())) throw badRequest();
-        requireCanonicalShape(required(body, "agentId"));
+        requireAgentId(required(body, "agentId"));
         byte[] hash = hash("INITIAL-CONFIRM:" + personaCode, body);
         InitialAdmission admission = initialAdmission(actor, personaCode, idempotencyKey, body, hash);
         if (admission.replay() != null) return admission.replay();
@@ -415,7 +415,7 @@ public final class HostingRentApplicationService {
         if (runtime.getId() == null || runtime.getBindingId() != null || runtime.getOwnerJiacn() != null
                 || !renewal.completedHandover(actor.scope(), runtime.getAgentId(), runtime.getRuntimeInstallationId()))
             throw conflict("HOSTING_RENT_HANDOVER_PENDING");
-        requireCanonicalShape(runtime.getAgentId());
+        requireAgentId(runtime.getAgentId());
         return runtime;
     }
 
@@ -508,9 +508,6 @@ public final class HostingRentApplicationService {
     private static void requireAgentId(String agentId) {
         try { exact(agentId, 100); }
         catch (IllegalArgumentException invalid) { throw badRequest(); }
-    }
-    private static void requireCanonicalShape(String agentId) {
-        if (agentId == null || !agentId.matches("agt_[0-9a-f]{32}")) throw badRequest();
     }
     private static HostingRentApplicationException forbidden() { return new HostingRentApplicationException(404, "HOSTING_RENT_NOT_FOUND_OR_FORBIDDEN"); }
     private static HostingRentApplicationException conflict(String code) { return new HostingRentApplicationException(409, code); }
