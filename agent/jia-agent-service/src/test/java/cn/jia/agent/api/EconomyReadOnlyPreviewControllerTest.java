@@ -33,7 +33,7 @@ class EconomyReadOnlyPreviewControllerTest {
         when(owners.requireOwner(any(HostingRentHttp.Actor.class)))
                 .thenAnswer(invocation -> invocation.<HostingRentHttp.Actor>getArgument(0).ownerJiacn());
         var service = new EconomyReadOnlyPreviewService(mapper, new EconomyReadOnlyPreviewProperties(true),
-                new AgentHostingRentProperties(false, null, null, null), owners);
+                new AgentHostingRentProperties(false, null, null, null, "1", "50"), owners);
         mvc = MockMvcBuilders.standaloneSetup(new EconomyReadOnlyPreviewController(service)).setControllerAdvice(new cn.jia.core.config.ApiRequestEnvelopeAdvice(),new cn.jia.core.config.ApiEnvelopeAdvice()).addFilters(new cn.jia.core.filter.RequestIdFilter()).build();
     }
 
@@ -125,7 +125,7 @@ class EconomyReadOnlyPreviewControllerTest {
     void disabledCapabilitiesRemainReadableButOtherRoutesReturnStable403() throws Exception {
         var owners = mock(HostingRentOwnerResolver.class);
         var disabled = new EconomyReadOnlyPreviewService(mapper, new EconomyReadOnlyPreviewProperties(false),
-                new AgentHostingRentProperties(false, null, null, null), owners);
+                new AgentHostingRentProperties(false, null, null, null, "1", "50"), owners);
         mvc = MockMvcBuilders.standaloneSetup(new EconomyReadOnlyPreviewController(disabled)).setControllerAdvice(new cn.jia.core.config.ApiRequestEnvelopeAdvice(),new cn.jia.core.config.ApiEnvelopeAdvice()).addFilters(new cn.jia.core.filter.RequestIdFilter()).build();
         mvc.perform(get("/economy/preview/capabilities").principal(jwt("Tenant-A", "Client-A", "actor-A")))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.data.enabled").value(false))

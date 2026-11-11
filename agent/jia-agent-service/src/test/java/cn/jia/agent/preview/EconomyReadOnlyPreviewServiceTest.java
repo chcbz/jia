@@ -264,7 +264,7 @@ class EconomyReadOnlyPreviewServiceTest {
 
     private EconomyReadOnlyPreviewService service(boolean enabled) {
         return new EconomyReadOnlyPreviewService(mapper, new EconomyReadOnlyPreviewProperties(enabled),
-                new AgentHostingRentProperties(false, null, null, null), owners);
+                new AgentHostingRentProperties(false, null, null, null, "1", "50"), owners);
     }
 
     private void owner() {

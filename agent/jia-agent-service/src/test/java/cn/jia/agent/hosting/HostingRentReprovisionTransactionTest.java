@@ -57,7 +57,7 @@ class HostingRentReprovisionTransactionTest {
         });
         when(rent.selectLeaseForUpdate("0", "Client-A", "hrl-one")).thenAnswer(call ->
                 jdbc.queryForObject("SELECT * FROM lease_root WHERE id=1 FOR UPDATE", (rs, row) -> new EconomyHostingLeaseEntity()
-                        .setLeaseId("hrl-one").setAgentId(AGENT).setPersonaCode("wuyong").setBindingId("17")
+                        .setPlanId("agent-hosting-preview").setLeaseId("hrl-one").setAgentId(AGENT).setPersonaCode("wuyong").setBindingId("17")
                         .setPrincipalType("USER").setPrincipalId("login-sub").setStatus(rs.getString("status"))
                         .setVersion(rs.getLong("version")).setPaidThrough(rs.getLong("paid_through"))));
         when(rent.selectReprovisionReplay(anyString(), anyString(), anyString(), any())).thenAnswer(call -> replay(call.getArgument(3), false));
@@ -87,7 +87,7 @@ class HostingRentReprovisionTransactionTest {
             assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
             return provider.available();
         });
-        app = new HostingRentApplicationService(new AgentHostingRentProperties(true, "1", "1000000000", "2592000"),
+        app = new HostingRentApplicationService(new AgentHostingRentProperties(true, "1", "1000000000", "2592000", "1", "50"),
                 new EconomyPreviewGate(new EconomyPreviewProperties(true, List.of(new EconomyPreviewProperties.AllowedScope("0", "Client-A")))),
                 owners, rent, ledger, mock(HostingRentRenewalService.class), mock(AgentHostingRentBindingMapper.class), bindings, mock(AgentRuntimeDao.class), identities,
                 providers, reconciler, new DataSourceTransactionManager(dataSource), true);

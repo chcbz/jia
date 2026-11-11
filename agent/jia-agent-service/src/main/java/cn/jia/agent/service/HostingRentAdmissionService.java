@@ -16,7 +16,7 @@ public class HostingRentAdmissionService {
     }
 
     public static HostingRentAdmissionService unconfigured() {
-        return new HostingRentAdmissionService(new AgentHostingRentProperties(false, null, null, null));
+        return new HostingRentAdmissionService(new AgentHostingRentProperties(false, null, null, null, "1", "50"));
     }
 
     /** Must be called before any legacy server bind read, mutation, identity, runtime, or profile operation. */

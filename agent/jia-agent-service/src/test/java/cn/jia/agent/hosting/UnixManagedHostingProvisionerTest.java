@@ -182,9 +182,9 @@ class UnixManagedHostingProvisionerTest {
     }
     private UnixManagedHostingProvisioner adapter(Path socket, long uid, long gid, String owner) {
         var local = new ManagedHostingAdapterProperties(socket.toString(), uid, "0", "fixture-client", owner, 1000, gid, null);
-        var channel = new HostingControlChannel(new cn.jia.agent.config.HostingControlRemoteProperties("fixture-host", Map.of()),
+        var channel = new HostingControlChannel(new cn.jia.agent.config.HostingControlRemoteProperties("fixture-host", Map.of(), java.util.Set.of()),
                 local, mock(cn.jia.agent.dao.AgentRuntimeDao.class), new org.springframework.beans.factory.support.DefaultListableBeanFactory().getBeanProvider(org.springframework.boot.ssl.SslBundles.class));
-        return new UnixManagedHostingProvisioner(new AgentHostingRentProperties(true, "1", "1000000000", "2592000"), local, credentials, sessions, channel);
+        return new UnixManagedHostingProvisioner(new AgentHostingRentProperties(true, "1", "1000000000", "2592000", "1", "50"), local, credentials, sessions, channel);
     }
     private UnixManagedHostingProvisioner adapter() { return spy(adapter(Path.of("/private/control.sock"), 0, 1000, "*")); }
     private void exchangeFixture(UnixManagedHostingProvisioner adapter, Map<String, Object> observed) throws Exception {

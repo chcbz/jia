@@ -237,7 +237,7 @@ class HostingRentRenewalMySqlTest {
             var reader = new java.io.BufferedReader(new java.io.InputStreamReader(child.getInputStream(), java.nio.charset.StandardCharsets.UTF_8));
             String line = reader.readLine(); assertNotNull(line, () -> read(log));
             var endpoint = json.readValue(line, new tools.jackson.core.type.TypeReference<java.util.Map<String,Object>>() {});
-            var properties = new cn.jia.agent.config.AgentHostingRentProperties(true, "1", "500", "2592000");
+            var properties = new cn.jia.agent.config.AgentHostingRentProperties(true, "1", "500", "2592000", "1", "50");
             var owners = mock(HostingRentOwnerResolver.class);
             when(owners.requireOwner(any())).thenAnswer(call -> ((HostingRentHttp.Actor)call.getArgument(0)).ownerJiacn());
             var credentials = new ManagedHostingCredentials(beans.getBeanProvider(cn.jia.oauth.service.ApiKeyService.class),
@@ -246,7 +246,7 @@ class HostingRentRenewalMySqlTest {
                     ((Number)endpoint.get("uid")).longValue(), "tenant", "client", "*", 10000,
                     ((Number)endpoint.get("gid")).longValue(), null);
             var channel = new HostingControlChannel(new cn.jia.agent.config.HostingControlRemoteProperties(
-                    (String)endpoint.get("hostId"), java.util.Map.of()), channelConfig, mock(cn.jia.agent.dao.AgentRuntimeDao.class),
+                    (String)endpoint.get("hostId"), java.util.Map.of(), java.util.Set.of()), channelConfig, mock(cn.jia.agent.dao.AgentRuntimeDao.class),
                     beans.getBeanProvider(org.springframework.boot.ssl.SslBundles.class));
             var provider = new UnixManagedHostingProvisioner(properties, channelConfig, credentials, auth, channel);
             beans.addBean("provider", provider);
@@ -916,7 +916,7 @@ class HostingRentRenewalMySqlTest {
         });
         var gate = new EconomyPreviewGate(new EconomyPreviewProperties(true,
                 List.of(new EconomyPreviewProperties.AllowedScope("tenant", "client"))));
-        var reconciler = new HostingRentReconciler(new cn.jia.agent.config.AgentHostingRentProperties(true, "1", "500", "2592000"),
+        var reconciler = new HostingRentReconciler(new cn.jia.agent.config.AgentHostingRentProperties(true, "1", "500", "2592000", "1", "50"),
                 gate, leases, ledger, identities, owners, beans.getBeanProvider(ManagedHostingProvisioner.class), credentials,
                 manager, identityBindings, policy, true, beans.getBeanProvider(ScheduleService.class));
         return new RefundFixture(reconciler, provider, leases.selectIntent("tenant", "client", reserved.intentId()), keys);
@@ -956,7 +956,7 @@ class HostingRentRenewalMySqlTest {
         beans.addBean("schedules", schedules);
         var gate = new EconomyPreviewGate(new EconomyPreviewProperties(true,
                 List.of(new EconomyPreviewProperties.AllowedScope("tenant", "client"))));
-        return new HostingRentReconciler(new cn.jia.agent.config.AgentHostingRentProperties(true, "1", "500", "2592000"),
+        return new HostingRentReconciler(new cn.jia.agent.config.AgentHostingRentProperties(true, "1", "500", "2592000", "1", "50"),
                 gate, leases, ledger, mock(cn.jia.agent.service.AgentIdentityService.class), mock(HostingRentOwnerResolver.class),
                 beans.getBeanProvider(ManagedHostingProvisioner.class), mock(ManagedHostingCredentials.class), manager,
                 mock(cn.jia.agent.dao.AgentPersonaBindingDao.class), policy, true, beans.getBeanProvider(ScheduleService.class));
@@ -1232,7 +1232,7 @@ class HostingRentRenewalMySqlTest {
                 mock(org.springframework.beans.factory.ObjectProvider.class);
         when(providers.getIfAvailable()).thenReturn(removalProvider);
         // Removing an existing lease must not depend on a current plan price or provisioner availability.
-        return new HostingRentApplicationService(new cn.jia.agent.config.AgentHostingRentProperties(false, null, null, null),
+        return new HostingRentApplicationService(new cn.jia.agent.config.AgentHostingRentProperties(false, null, null, null, "1", "50"),
                 new EconomyPreviewGate(new EconomyPreviewProperties(true, List.of(new EconomyPreviewProperties.AllowedScope("tenant", "client")))),
                 owners, leases, mock(HostingRentLedgerService.class), service,
                 mock(cn.jia.agent.mapper.AgentHostingRentBindingMapper.class), mock(cn.jia.agent.dao.AgentPersonaBindingDao.class),

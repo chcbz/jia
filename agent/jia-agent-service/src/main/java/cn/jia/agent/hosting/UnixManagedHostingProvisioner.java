@@ -76,6 +76,11 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
             return false;
         }
     }
+    @Override public String deploymentMode(String tenantId, String clientId, String ownerJiacn, String hostId) {
+        if (!availableFor(tenantId, clientId, ownerJiacn)) return null;
+        try { return channel.deploymentMode(tenantId, clientId, ownerJiacn, hostId); }
+        catch (IOException unavailable) { return null; }
+    }
     @Override public SkillInventory inventory(String tenantId, String clientId, String ownerJiacn, String agentId) {
         outsideTransaction();
         if (!availableFor(tenantId, clientId, ownerJiacn)) return null;

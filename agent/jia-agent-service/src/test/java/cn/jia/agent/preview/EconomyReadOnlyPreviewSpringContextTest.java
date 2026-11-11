@@ -119,7 +119,7 @@ class EconomyReadOnlyPreviewSpringContextTest {
 
         @Bean
         AgentHostingRentProperties agentHostingRentProperties() {
-            return new AgentHostingRentProperties(false, null, null, null);
+            return new AgentHostingRentProperties(false, null, null, null, "1", "50");
         }
 
         @Bean

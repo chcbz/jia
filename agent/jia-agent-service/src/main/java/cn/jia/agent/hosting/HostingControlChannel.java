@@ -39,6 +39,10 @@ public final class HostingControlChannel {
         return routes.localHostId() != null && local.allowsScope(tenant, client, owner)
                 || routes.remotes().values().stream().anyMatch(endpoint -> endpoint.allows(tenant, client, owner));
     }
+    String deploymentMode(String tenant, String client, String owner, String hostId) throws IOException {
+        target(Map.of("tenantId", tenant, "clientId", client, "ownerJiacn", owner), hostId);
+        return routes.selfHostedHostIds().contains(hostId) ? "local" : "server";
+    }
     Target target(Map<String, Object> request, String preferredHost) throws IOException {
         String tenant = (String)request.get("tenantId"), client = (String)request.get("clientId"), owner = (String)request.get("ownerJiacn");
         String host = preferredHost;

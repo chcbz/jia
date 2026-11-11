@@ -114,7 +114,7 @@ class AgentHostingRentControllerTest {
     @Test
     void configuredPlanStillReturnsNotReadyAndNeverInventsQuote() throws Exception {
         HostingRentAdmissionService configured = new HostingRentAdmissionService(
-                new AgentHostingRentProperties(true, "1", "1000000000", "2592000"));
+                new AgentHostingRentProperties(true, "1", "1000000000", "2592000", "1", "50"));
 
         mvc(configured).perform(post(PATH).principal(jwt("actor-1", "Tenant-A", "Client-A"))
                         .contentType(MediaType.APPLICATION_JSON).content(" { } "))

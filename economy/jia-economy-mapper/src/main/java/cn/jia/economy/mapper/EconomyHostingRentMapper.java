@@ -308,6 +308,12 @@ public interface EconomyHostingRentMapper {
             @Param("escrowVersion") long escrowVersion,
             @Param("newVersion") long newVersion);
 
+    /** Immutable plan discovery before acquiring plan -> binding -> lease locks. */
+    @Select("SELECT * FROM economy_hosting_lease WHERE " + EXACT_SCOPE
+            + " AND lease_id=#{leaseId} AND OCTET_LENGTH(lease_id)=OCTET_LENGTH(#{leaseId}) LIMIT 1")
+    EconomyHostingLeaseEntity selectLease(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("leaseId") String leaseId);
+
     @Select("SELECT * FROM economy_hosting_lease WHERE " + EXACT_SCOPE
             + " AND agent_id=#{agentId} AND OCTET_LENGTH(agent_id)=OCTET_LENGTH(#{agentId})"
             + " ORDER BY id DESC LIMIT 1")

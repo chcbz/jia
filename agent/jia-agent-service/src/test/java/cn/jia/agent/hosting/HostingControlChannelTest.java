@@ -42,7 +42,7 @@ class HostingControlChannelTest {
             beans.registerSingleton("sslBundles", registry);
         }
         var endpoint = new HostingControlRemoteProperties.Endpoint(address, port, "control", "0", "fixture-client", "fixture-owner");
-        return new HostingControlChannel(new HostingControlRemoteProperties("local-host", Map.of(host, endpoint)),
+        return new HostingControlChannel(new HostingControlRemoteProperties("local-host", Map.of(host, endpoint), java.util.Set.of()),
                 local, runtimes, beans.getBeanProvider(SslBundles.class));
     }
     @Test void trustedQuoteAndCandidateRouteWithoutProjectionQueryOrLocalFallback() throws Exception {
@@ -68,6 +68,17 @@ class HostingControlChannelTest {
         var control = channel("127.0.0.1", 9443, "remote-host", null);
         assertNull(control.target(request(), null).remote());
         assertThrows(IOException.class, () -> control.exchange(control.target(request(), "remote-host"), "{}\n".getBytes(), 1000));
+    }
+    @Test void pricingClassificationIsExplicitAndIndependentOfTransport() throws Exception {
+        var beans = new DefaultListableBeanFactory();
+        var endpoint = new HostingControlRemoteProperties.Endpoint("127.0.0.1", 9443, "control", "0", "fixture-client", "fixture-owner");
+        var control = new HostingControlChannel(new HostingControlRemoteProperties("local-host",
+                Map.of("remote-host", endpoint), Set.of("local-host")), local, runtimes, beans.getBeanProvider(SslBundles.class));
+        assertEquals("local", control.deploymentMode("0", "fixture-client", "fixture-owner", "local-host"));
+        assertEquals("server", control.deploymentMode("0", "fixture-client", "fixture-owner", "remote-host"));
+        assertThrows(IOException.class, () -> control.deploymentMode("0", "fixture-client", "fixture-owner", "unknown"));
+        assertThrows(IOException.class, () -> control.deploymentMode("0", "fixture-client", "intruder", "remote-host"));
+        verifyNoInteractions(runtimes);
     }
     private void openssl(String... args) throws Exception {
         var command = new ArrayList<String>(); command.add("openssl"); command.addAll(List.of(args));
@@ -118,7 +129,7 @@ class HostingControlChannelTest {
             when(runtimes.findInScope("0", "fixture-client", agent)).thenReturn(new AgentRuntimeEntity().setRuntimeHostId(host));
             var credentials = mock(ManagedHostingCredentials.class); when(credentials.available()).thenReturn(true);
             var sessions = mock(AgentRuntimeAuthenticationService.class);
-            var rent = new AgentHostingRentProperties(true, "1", "500", "2592000");
+            var rent = new AgentHostingRentProperties(true, "1", "500", "2592000", "1", "50");
             var initial = new ManagedHostingProvisioner.Preparation("0", "fixture-client", "fixture-owner", agent,
                     "tls-transition", "tls-lease", "17", 1791594000000L);
             var existing = new ManagedHostingProvisioner.Candidate((String)subject.get("installationId"),

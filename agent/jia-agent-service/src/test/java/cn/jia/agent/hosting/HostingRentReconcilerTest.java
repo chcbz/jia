@@ -93,7 +93,7 @@ class HostingRentReconcilerTest {
         when(provider.available()).thenReturn(true);
         ObjectProvider<cn.jia.task.scheduling.ScheduleService> scheduleProvider = mock(ObjectProvider.class);
         when(scheduleProvider.getObject()).thenReturn(schedules);
-        worker = new HostingRentReconciler(new AgentHostingRentProperties(true, "1", "1000000000", "2592000"),
+        worker = new HostingRentReconciler(new AgentHostingRentProperties(true, "1", "1000000000", "2592000", "1", "50"),
                 new EconomyPreviewGate(new EconomyPreviewProperties(true, List.of(
                         new EconomyPreviewProperties.AllowedScope(TENANT, CLIENT)))), mapper, ledger, identities,
                 owners, providers, credentials, manager, bindings, new cn.jia.core.security.FixedTenantAdmissionPolicy(TENANT, CLIENT), true, scheduleProvider);

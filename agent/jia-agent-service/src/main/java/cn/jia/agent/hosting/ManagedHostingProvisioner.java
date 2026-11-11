@@ -21,6 +21,8 @@ public interface ManagedHostingProvisioner {
     default boolean probeCapabilities(String tenantId, String clientId, String ownerJiacn, String existingAgentId) {
         return probeCapabilities(tenantId, clientId, ownerJiacn);
     }
+    /** Operator-owned deployment kind for a verified inventory host; null means unavailable, never a cheaper fallback. */
+    String deploymentMode(String tenantId, String clientId, String ownerJiacn, String hostId);
     /** Public installed inventory only, transaction-external; null is unknown, never zero fees. */
     SkillInventory inventory(String tenantId, String clientId, String ownerJiacn, String agentId);
     record ManagedSkillReference(String skillInstallationId, String productVersionId, String skillVersion,

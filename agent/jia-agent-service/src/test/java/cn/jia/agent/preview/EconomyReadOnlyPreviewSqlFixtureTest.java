@@ -85,7 +85,7 @@ class EconomyReadOnlyPreviewSqlFixtureTest {
             return actor.ownerJiacn();
         });
         service = new EconomyReadOnlyPreviewService(mapper, new EconomyReadOnlyPreviewProperties(true),
-                new AgentHostingRentProperties(false, "", "", ""), owners);
+                new AgentHostingRentProperties(false, "", "", "", "1", "50"), owners);
         seed();
     }
 
