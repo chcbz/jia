@@ -70,3 +70,7 @@ java -Dloader.main=cn.jia.maintenance.HostingRentCutover \
 ```
 
 租户/客户端只能来自进程配置；actor必须匹配原真实账号，安装/关系沿既有服务核验。先预检整批，apply逐个复用原事务外adopt、事务内复核与赠送30天登记，保持原实例/安装/会话/技能/配置，不伪造金融流水。回执CREATE_NEW保留输入SHA、预检、逐条登记和最终COMPLETED；异常时缺少最终完成项，不能声称全批成功。已提交项不整体回滚，使用**相同输入和新回执**幂等续跑；不得修改cutoverAt重置赠送期。
+
+
+首次技能费用升级使用 `economy/jia-economy-mapper/src/main/resources/db/migration-hosting-initial-fee-v1.sql`。
+生产只读预检2026-11-11的报价表为0行；实际执行仍须在停旧writer和真实备份后复核为空，不能删除报价来满足前提。若有存量报价，停止该结构升级并明确历史数据处理，不猜测技能库存或重复收费。此脚本只补报价金额/库存列；租约锁定/交接列、TRANSITION可空资金列、统一调度表等各用原专项迁移，正常启动不得补DDL。
