@@ -67,13 +67,19 @@ public final class ScheduledWorkStore implements ScheduleService {
 
     /** Returns only after commit; caller must invoke business handlers outside this method. */
     public List<LeasedWork> claimDue(String node, int limit, long leaseMillis) {
+        return claimDue(node, limit, leaseMillis, Set.of(), false);
+    }
+
+    /** Selection is applied before SQL ordering/locking/LIMIT, not to already leased rows. */
+    public List<LeasedWork> claimDue(String node, int limit, long leaseMillis, Set<String> handlers, boolean included) {
         requireWorkerBoundary();
         if (limit <= 0 || leaseMillis <= 0) throw new IllegalArgumentException("Positive batch and lease required");
+        if (included && handlers.isEmpty()) return List.of();
         return transaction.execute(status -> {
             long now = mapper.nowMillis();
             long until = Math.addExact(now, leaseMillis);
             var claimed = new ArrayList<LeasedWork>();
-            for (var row : mapper.due(scope.businessTenantId(), scope.clientId(), node, now, limit)) {
+            for (var row : mapper.due(scope.businessTenantId(), scope.clientId(), node, now, limit, handlers, included)) {
                 var result = row.state().acquire(now, until, UUID.randomUUID().toString());
                 save(row, result.work());
                 result.acquired().ifPresent(claim -> claimed.add(new LeasedWork(row.key(), claim)));
@@ -84,7 +90,11 @@ public final class ScheduledWorkStore implements ScheduleService {
 
     /** Delay uses the same DB clock as acquisition, avoiding application clock skew. */
     public Long nextDelay(String node) {
-        return mapper.nextDelay(scope.businessTenantId(), scope.clientId(), node);
+        return nextDelay(node, Set.of(), false);
+    }
+    public Long nextDelay(String node, Set<String> handlers, boolean included) {
+        if (included && handlers.isEmpty()) return null;
+        return mapper.nextDelay(scope.businessTenantId(), scope.clientId(), node, handlers, included);
     }
 
     public boolean retryAfter(LeasedWork work, long delayMillis) {

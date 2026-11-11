@@ -48,7 +48,7 @@ class TaskSchedulingConfigurationTest {
     @Test void configuredRuntimeWaitsForApplicationReadyRatherThanClaimingDuringConstruction() {
         var redis = mock(RedissonClient.class);
         try (var context = context(Map.of("cyf.task.scheduling.enabled", "true",
-                "cyf.task.scheduling.node-id", "node-a", "cyf.task.scheduling.workers", "1",
+                "cyf.task.scheduling.node-id", "node-a", "cyf.task.scheduling.workers", "1", "cyf.task.scheduling.control-workers", "1",
                 "cyf.task.scheduling.batch-size", "1", "cyf.task.scheduling.lease-ms", "60000",
                 "cyf.task.scheduling.retry-ms", "1000", "cyf.task.scheduling.recovery-ms", "60000",
                 "cyf.task.scheduling.owner-retry-ms", "1000"), redis)) {

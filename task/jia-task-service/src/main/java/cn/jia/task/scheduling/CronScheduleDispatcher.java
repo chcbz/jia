@@ -29,6 +29,7 @@ public final class CronScheduleDispatcher implements CronScheduleService, Schedu
         this.mapper=mapper;this.clock=clock;this.schedules=schedules;this.scope=scope;this.registry=registry;
         this.transactions=new TransactionTemplate(manager);
     }
+    @Override public ExecutionClass executionClass() { return ExecutionClass.CONTROL; }
     @Override public String getName() { return HANDLER; }
 
     @Override public void register(CronSchedule definition) {

@@ -8,6 +8,9 @@ import cn.jia.task.job.JobHandler;
  * Existing JobHandlers are not automatically migrated/enabled by their cron metadata.
  */
 public interface ScheduledJobHandler extends JobHandler {
+    /** CONTROL is reserved for short database-only callbacks; external I/O remains GENERAL. */
+    enum ExecutionClass { CONTROL, GENERAL }
+    default ExecutionClass executionClass() { return ExecutionClass.GENERAL; }
     void executeScheduled(ScheduledInvocation invocation) throws Exception;
     @Override default String execute(JobContext context) {
         throw new UnsupportedOperationException("Durable job requires scheduler-owned context");

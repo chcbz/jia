@@ -732,6 +732,37 @@ class HostingRentRenewalMySqlTest {
                                 "user", EconomyAccountPurpose.AVAILABLE), amount)), null));
     }
 
+    @Test void slowGeneralHandlerCannotBlockActualRentRenewal() throws Exception {
+        seed("due", "ACTIVE", 500, now()-1, null);
+        var registry = new cn.jia.task.job.JobRegistry();
+        registry.register(handler);
+        assertEquals(cn.jia.task.scheduling.ScheduledJobHandler.ExecutionClass.CONTROL, handler.executionClass());
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var firstCompleted = new java.util.concurrent.CountDownLatch(1);
+        var allCompleted = new java.util.concurrent.CountDownLatch(2);
+        registry.register(new cn.jia.task.scheduling.ScheduledJobHandler() {
+            public String getName() { return "slow-external-fixture"; }
+            public void executeScheduled(ScheduledInvocation invocation) throws Exception {
+                entered.countDown(); assertTrue(release.await(15, java.util.concurrent.TimeUnit.SECONDS));
+            }
+        });
+        schedules.signal(new ScheduleKey("client", "slow-external-fixture", "blocked", ""), 0);
+        var runner = new cn.jia.task.scheduling.ScheduledJobRunner(schedules, registry, policy, "", 1, 1, 1, 60000, 1000,
+                () -> { firstCompleted.countDown(); allCompleted.countDown(); });
+        try {
+            runner.tick(); assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS));
+            schedules.signal(key, 0);
+            runner.tick(); assertTrue(firstCompleted.await(5, java.util.concurrent.TimeUnit.SECONDS));
+            assertEquals(1L, release.getCount(), "External work remains blocked while actual rent settles");
+            assertEquals(500, balance()); assertEquals(1, charges());
+            assertEquals("ACTIVE", lease("due").getStatus());
+        } finally {
+            runner.close(); release.countDown();
+            assertTrue(allCompleted.await(5, java.util.concurrent.TimeUnit.SECONDS));
+        }
+    }
+
     @Test void duePaymentAndDuplicateCallbackChargeOnlyOnce() throws Exception {
         long due = now() - 1000; seed("a", "ACTIVE", 500, due, null);
         trigger(); var paid = lease("a");

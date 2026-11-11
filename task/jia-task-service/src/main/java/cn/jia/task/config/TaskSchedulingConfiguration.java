@@ -41,6 +41,7 @@ public class TaskSchedulingConfiguration {
         return new TaskSchedulingRuntime(store, registry, redis, scope,
                 environment.getRequiredProperty(prefix + "node-id"),
                 environment.getRequiredProperty(prefix + "workers", Integer.class),
+                environment.getRequiredProperty(prefix + "control-workers", Integer.class),
                 environment.getRequiredProperty(prefix + "batch-size", Integer.class),
                 environment.getRequiredProperty(prefix + "lease-ms", Long.class),
                 environment.getRequiredProperty(prefix + "retry-ms", Long.class),

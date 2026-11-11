@@ -23,6 +23,15 @@
         tenant_id = #{tenant} AND target_node = #{node}
         <if test="client != null">AND client_id = #{client}</if>
     </sql>
+    <sql id="handlerSelection">
+        <choose>
+            <when test="handlers != null and !handlers.isEmpty()">
+                AND handler <if test="!included">NOT</if> IN
+                <foreach collection="handlers" item="handlerName" open="(" separator="," close=")">#{handlerName}</foreach>
+            </when>
+            <when test="included">AND 1 = 0</when>
+        </choose>
+    </sql>
     <insert id="ensure">
         INSERT INTO task_scheduled_work (tenant_id, client_id, handler, business_key, target_node)
         VALUES (#{tenant}, #{key.clientId}, #{key.handler}, #{key.businessKey}, #{key.targetNode})
@@ -41,6 +50,7 @@
     </update>
     <select id="due" resultMap="work">
         SELECT * FROM task_scheduled_work WHERE <include refid="partition"/>
+          <include refid="handlerSelection"/>
           AND next_wake_at &lt;= #{now}
         ORDER BY next_wake_at, client_id, handler, business_key
         LIMIT #{limit} FOR UPDATE SKIP LOCKED
@@ -51,6 +61,6 @@
     </select>
     <select id="nextDelay" resultType="java.lang.Long">
         SELECT GREATEST(0, MIN(next_wake_at) - CAST(UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3)) * 1000 AS SIGNED))
-        FROM task_scheduled_work WHERE <include refid="partition"/> AND next_wake_at IS NOT NULL
+        FROM task_scheduled_work WHERE <include refid="partition"/> <include refid="handlerSelection"/> AND next_wake_at IS NOT NULL
     </select>
 </mapper>

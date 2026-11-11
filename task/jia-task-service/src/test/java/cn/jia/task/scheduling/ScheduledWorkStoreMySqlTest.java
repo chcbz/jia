@@ -140,6 +140,36 @@ class ScheduledWorkStoreMySqlTest {
         assertEquals(maintenance, store.claimDue("node-a", 1, 60000).getFirst().key());
     }
 
+    @Test void controlSelectionIsAppliedBeforeLimitAndKeepsGeneralWorkUnclaimed() throws Exception {
+        var controls = java.util.Set.of("rent");
+        for (int i=0;i<40;i++) store.signal(new ScheduleKey("client", "slow", "work-"+i, ""), 0);
+        store.signal(KEY, 1);
+        var scoped = store("tenant", "client");
+        store.signal(new ScheduleKey("foreign-client", "rent", "foreign", ""), 0);
+        store.signal(new ScheduleKey("client", "rent", "node-work", "other-node"), 0);
+        store("other-tenant", null).signal(KEY, 0);
+        var control = scoped.claimDue("", 1, 60000, controls, true);
+        assertEquals(List.of(KEY), control.stream().map(ScheduledWorkStore.LeasedWork::key).toList());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM task_scheduled_work WHERE handler='slow' AND claim_token IS NOT NULL", Integer.class));
+        assertTrue(scoped.succeed(control.getFirst()));
+        assertNull(scoped.nextDelay("", controls, true));
+        assertEquals(0L, scoped.nextDelay("", controls, false));
+        var general = scoped.claimDue("", 1, 60000, controls, false);
+        assertEquals("slow", general.getFirst().key().handler());
+        assertTrue(scoped.claimDue("", 1, 60000, java.util.Set.of(), true).isEmpty());
+        assertNull(scoped.nextDelay("", java.util.Set.of(), true));
+    }
+
+    @Test void handlerIndexMigrationPreservesPendingFactsAndCanReplay() {
+        store.signal(KEY, 1); var before = row();
+        jdbc.execute("ALTER TABLE task_scheduled_work DROP INDEX idx_task_scheduled_handler_due");
+        var migration = new ResourceDatabasePopulator(new ClassPathResource("db/task-scheduled-handler-index-v1.sql"));
+        migration.execute(source); migration.execute(source);
+        assertEquals(before.state(), row().state());
+        assertEquals(List.of("tenant_id", "target_node", "handler", "next_wake_at"), jdbc.queryForList(
+                "SELECT column_name FROM information_schema.statistics WHERE table_schema=? AND table_name='task_scheduled_work' AND index_name='idx_task_scheduled_handler_due' ORDER BY seq_in_index", String.class, database));
+    }
+
     @Test void notificationJoinsBusinessRollbackAndCommit() {
         jdbc.execute("CREATE TABLE business_fact (id INT PRIMARY KEY)");
         var tx = new TransactionTemplate(manager);
@@ -323,7 +353,7 @@ class ScheduledWorkStoreMySqlTest {
             }
         });
         var runner = new ScheduledJobRunner(store, registry, new FixedTenantAdmissionPolicy("tenant", null),
-                "", 1, 1, 60000, 1000, finished::countDown);
+                "", 1, 1, 1, 60000, 1000, finished::countDown);
         store.signal(KEY, 0);
         try {
             runner.tick(); assertTrue(entered.await(5, TimeUnit.SECONDS));
@@ -342,7 +372,7 @@ class ScheduledWorkStoreMySqlTest {
         });
         var finished = new CountDownLatch(1);
         try (var runner = new ScheduledJobRunner(store, registry, new FixedTenantAdmissionPolicy("tenant", null),
-                "", 1, 1, 60000, 60000, finished::countDown)) {
+                "", 1, 1, 1, 60000, 60000, finished::countDown)) {
             store.signal(KEY, 0); runner.tick(); assertTrue(finished.await(5, TimeUnit.SECONDS));
             assertEquals(0, calls.get()); assertNull(row().getClaimToken());
             assertTrue(store.nextDelay("") > 0);

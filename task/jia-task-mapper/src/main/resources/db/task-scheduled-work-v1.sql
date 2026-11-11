@@ -14,5 +14,6 @@ CREATE TABLE IF NOT EXISTS task_scheduled_work (
     claim_until BIGINT NULL,
     next_wake_at BIGINT NULL,
     PRIMARY KEY (tenant_id, client_id, handler, business_key, target_node),
-    KEY idx_task_scheduled_due (tenant_id, target_node, next_wake_at)
+    KEY idx_task_scheduled_due (tenant_id, target_node, next_wake_at),
+    KEY idx_task_scheduled_handler_due (tenant_id, target_node, handler, next_wake_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;

@@ -14,9 +14,9 @@ public final class TaskSchedulingRuntime implements ApplicationListener<Applicat
     private final List<RedisScheduleCoordinator> coordinators = new ArrayList<>();
 
     public TaskSchedulingRuntime(ScheduledWorkStore store, JobRegistry registry, RedissonClient redis,
-            FixedTenantAdmissionPolicy scope, String nodeId, int concurrency, int batch, long leaseMillis,
+            FixedTenantAdmissionPolicy scope, String nodeId, int concurrency, int controlConcurrency, int batch, long leaseMillis,
             long retryMillis, long recoveryMillis, long ownerRetryMillis) {
-        runner = new ScheduledJobRunner(store, registry, scope, "", concurrency, batch, leaseMillis, retryMillis,
+        runner = new ScheduledJobRunner(store, registry, scope, "", concurrency, controlConcurrency, batch, leaseMillis, retryMillis,
                 () -> coordinators.forEach(RedisScheduleCoordinator::wake));
         coordinators.add(new RedisScheduleCoordinator(redis, scope, "", runner::tick, recoveryMillis, ownerRetryMillis));
         if (!nodeId.isBlank()) coordinators.add(new RedisScheduleCoordinator(redis, scope, nodeId,

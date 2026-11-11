@@ -18,6 +18,7 @@ public final class HostingRentRenewalHandler implements ScheduledJobHandler {
                                      FixedTenantAdmissionPolicy scope) {
         this.renewal = renewal; this.scope = scope;
     }
+    @Override public ExecutionClass executionClass() { return ExecutionClass.CONTROL; }
     @Override public String getName() { return HostingRentBalanceWakeup.HANDLER; }
     @Override public void executeScheduled(ScheduledInvocation invocation) {
         scope.requireAdmitted(invocation.tenantId(), invocation.key().clientId());

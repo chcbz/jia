@@ -15,9 +15,11 @@ public interface ScheduledWorkMapper {
     ScheduledWorkRow lock(@Param("tenant") String tenant, @Param("key") ScheduleKey key);
     int replace(@Param("row") ScheduledWorkRow row, @Param("expectedVersion") long expectedVersion);
     List<ScheduledWorkRow> due(@Param("tenant") String tenant, @Param("client") String client,
-            @Param("node") String node, @Param("now") long now, @Param("limit") int limit);
+            @Param("node") String node, @Param("now") long now, @Param("limit") int limit,
+            @Param("handlers") java.util.Set<String> handlers, @Param("included") boolean included);
     Long nextWake(@Param("tenant") String tenant, @Param("client") String client, @Param("node") String node);
-    Long nextDelay(@Param("tenant") String tenant, @Param("client") String client, @Param("node") String node);
+    Long nextDelay(@Param("tenant") String tenant, @Param("client") String client, @Param("node") String node,
+            @Param("handlers") java.util.Set<String> handlers, @Param("included") boolean included);
     @Select("SELECT CAST(UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3)) * 1000 AS UNSIGNED)")
     long nowMillis();
 }
