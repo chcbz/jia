@@ -100,7 +100,7 @@ class AgentWebSocketRuntimeAuthenticationTest {
                         "native-runtime-v1", TENANT, CLIENT, OWNER, AGENT, "runtime-a", UnifiedRuntimeTestSupport.INSTALLATION, "host-1", 1, true));
         doThrow(new java.io.IOException("untrusted transport detail")).when(f.session).sendMessage(any());
         f.register();
-        verify(f.auth, times(2)).disconnect("socket-a"); // prior-generation invalidation and failed delivery
+        verify(f.auth).disconnect("socket-a"); // failed receipt revokes; a declaration is not a disconnect
         assertTrue(f.frames.isEmpty());
     }
 

@@ -2285,7 +2285,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 }else if(item.get("providerBinding")!=null)throw failure(Reason.BAD_REQUEST);
             }
         }
-        if(runtimeRequired&&!catalog.equals(skillCapabilities.lookup(policy.runtimeScope(),policy.fence())))throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        if(runtimeRequired&&!catalog.sameExecutionFacts(skillCapabilities.lookup(policy.runtimeScope(),policy.fence())))throw failure(Reason.CAPABILITY_UNAVAILABLE);
     }
     private void validateNativeOutputs(Map<String,Object> snapshot) {
         var spec=skillObject(snapshot.get("outputs"));

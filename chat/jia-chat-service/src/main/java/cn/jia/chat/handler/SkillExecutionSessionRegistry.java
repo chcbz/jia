@@ -60,7 +60,7 @@ public final class SkillExecutionSessionRegistry implements SkillCapabilityLooku
         if(sessionId!=null)watermarks.entrySet().removeIf(e->sessionId.equals(e.getKey().sessionId()));
     }
 
-    @Override public View lookup(Scope scope, SessionFence expectedFence) {
+    @Override public synchronized View lookup(Scope scope, SessionFence expectedFence) {
         Objects.requireNonNull(scope); SkillCapabilityLookup.validateFence(expectedFence);
         Entry selected = null;
         for (var entry : entries.values()) {

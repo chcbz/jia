@@ -70,6 +70,26 @@ class AgentWebSocketSkillExecutionRegistrationTest {
         verify(f.auth,atLeastOnce()).disconnect("socket-a");
         verify(f.session).close(CloseStatus.SERVER_ERROR);
     }
+    @Test void sameSocketCapabilityRefreshDoesNotWithdrawAcknowledgedAuthority() throws Exception {
+        var f = fixture(); register(f, SkillExecutionFixtures.catalog());
+        clearInvocations(f.auth);
+        doAnswer(inv -> {
+            // Concurrent HTTP admissions and directory queries can occur at both
+            // stages of a readiness refresh, before the replacement is committed.
+            assertEquals(State.AVAILABLE, registry.lookup(scope, fence).state());
+            return new cn.jia.agent.entity.AgentRegisterResultDTO(AGENT, TOKEN, "online");
+        }).when(f.service).register(any());
+        doAnswer(inv -> {
+            assertEquals(State.AVAILABLE, registry.lookup(scope, fence).state());
+            f.frames.add(((TextMessage) inv.getArgument(0)).getPayload());
+            return null;
+        }).when(f.session).sendMessage(any());
+        register(f, SkillExecutionFixtures.catalog());
+        verify(f.auth, never()).disconnect("socket-a");
+        verify(f.service, times(2)).register(any());
+        assertEquals(State.AVAILABLE, registry.lookup(scope, fence).state());
+    }
+
     @Test void actualAuthenticationRecordIsProjectedBeforeRegistrationReceiptSerialization() throws Exception {
         var f = fixture();
         when(f.auth.bind(eq("socket-a"), any(AgentRuntimeAuthenticationService.Proof.class), any()))
