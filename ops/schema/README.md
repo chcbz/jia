@@ -49,3 +49,24 @@ java -Dloader.main=cn.jia.chat.config.ChatTypedDeliberationSchemaInitializer \
 入口复用原backfill方法、完整catalog核对和共享schema锁，不重新实现SQL/JSON抽取或启动全应用。主机直接执行已通过Flow的字节码；不在主机编译或伪造Flow身份。输出仅scanned/updated/batches，执行失败保持非零退出；不得把前置授权/备份/停writer当成这个命令已自动完成。当前仅源代码候选，尚未Flow、主机演练或生产执行。
 
 本候选还删除了事件event_version冗余UPDATE，物理列保留为0；回退到仍读取物理event_version的旧JAR前，需要在停止新writer、固定真实备份与原维护锁的受控窗口，按现行配置租户将`chat_conversation_event.event_version=0`的行回填为其`event_sequence`。这是恢复派生列，不改payload/消息/完成事实，不删除新事件。不能仅替换旧JAR然后声称回退兼容，正常启动不再自动补全这一列。
+
+## 存量租约切换入口（2026-11-11 候选）
+
+`cn.jia.maintenance.HostingRentCutover`是显式的一次性入口，不能用JiaApplication启用schema-maintenance代替。只装配原身份/安装/租约服务、明确Mapper、数据源、SSL bundle和同事务调度存储，不启动worker、HTTP或其他schema initializer。入口/隔离上下文11项已在API4dca063976通过；真实MySQL+Runtime组合验证及生产执行另记。
+
+使用已验证的同批JAR及独立维护配置（环境变量或`SPRING_CONFIG_ADDITIONAL_LOCATION`，密码不放命令参数），配置原固定tenant/client、数据源、租费套餐描述、economy scope及可信hosting-control UDS/mTLS路由。`--preview`只读校验明确主体及配置路由，不证明外部ADOPTED或数据库套餐已经准备；不需要运行正常业务服务。先按现有授权流程固定真实备份、迁移DDL/正常套餐、控制端点与停旧writer，再apply；脚本不会自动执行这些前置操作。
+
+```sh
+java -Dloader.main=cn.jia.maintenance.HostingRentCutover \
+  -cp /absolute/verified-build/cyf-api-kit.jar \
+  org.springframework.boot.loader.launch.PropertiesLauncher \
+  --preview /private/fixed-input.json /private/new-preview.jsonl
+# 在相同固定输入上执行切换，仅将--preview改为--apply，并使用新的回执文件。
+```
+
+输入格式（示例值不作为生产执行输入）：
+```json
+{"cutoverAt":1794396000000,"subjects":[{"actorId":"exact-login-subject","ownerJiacn":"exact-owner","agentId":"registered-canonical-agent","installationId":"registered-installation"}]}
+```
+
+租户/客户端只能来自进程配置；actor必须匹配原真实账号，安装/关系沿既有服务核验。先预检整批，apply逐个复用原事务外adopt、事务内复核与赠送30天登记，保持原实例/安装/会话/技能/配置，不伪造金融流水。回执CREATE_NEW保留输入SHA、预检、逐条登记和最终COMPLETED；异常时缺少最终完成项，不能声称全批成功。已提交项不整体回滚，使用**相同输入和新回执**幂等续跑；不得修改cutoverAt重置赠送期。
