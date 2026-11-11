@@ -147,6 +147,17 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    public AgentRuntimeV1InstallationView lockExistingInstallation(
+            String tenantId, String clientId, String ownerJiacn, String installationId) {
+        requireScope(tenantId, clientId);
+        requireAdmitted(tenantId, clientId);
+        AgentRuntimeV1InstallationEntity installation = installations.lock(installationId);
+        requireInstallationOwner(installation, tenantId, clientId, ownerJiacn);
+        return view(installation, null);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
     public void revoke(String tenantId, String clientId, String ownerJiacn, String installationId, long now) {
         requireScope(tenantId, clientId);
         requireAdmitted(tenantId, clientId);

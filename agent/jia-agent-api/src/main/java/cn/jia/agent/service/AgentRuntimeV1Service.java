@@ -9,6 +9,8 @@ public interface AgentRuntimeV1Service {
     AgentRuntimeV1InstallationView ensureInstallation(String tenantId, String clientId, String ownerJiacn,
             AgentRuntimeV1InstallationRequest request, long now);
     AgentRuntimeV1InstallationView status(String tenantId, String clientId, String ownerJiacn, String installationId);
+    /** Internal same-transaction installation fence; never creates or re-enrolls an installation. */
+    AgentRuntimeV1InstallationView lockExistingInstallation(String tenantId, String clientId, String ownerJiacn, String installationId);
     void revoke(String tenantId, String clientId, String ownerJiacn, String installationId, long now);
     AgentRuntimeV1EnrollmentResult enroll(AgentRuntimeV1EnrollmentRequest request, long now);
     /** Internal installation credential boundary. Callback must enforce its own maintenance relationship;

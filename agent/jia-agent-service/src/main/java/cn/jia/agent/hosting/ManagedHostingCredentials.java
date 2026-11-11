@@ -33,10 +33,11 @@ public final class ManagedHostingCredentials {
     public void ensureInstallation(ManagedHostingProvisioner.Preparation p, ManagedHostingProvisioner.Candidate candidate) {
         transactions.executeWithoutResult(status -> {
             if (p == null || candidate == null || candidate.provisionGeneration() <= 0) throw unavailable();
-            var installed = runtime.ensureInstallation(p.tenantId(), p.clientId(), p.ownerJiacn(),
+            var installed = p.operationId().equals(p.intentId()) ? runtime.ensureInstallation(p.tenantId(), p.clientId(), p.ownerJiacn(),
                     new cn.jia.agent.entity.AgentRuntimeV1InstallationRequest(candidate.installationId(), p.agentId(), "1",
                             candidate.manifestSha256(), candidate.enrollmentSecretSha256(), candidate.enrollmentExpiresAt()),
-                    System.currentTimeMillis());
+                    System.currentTimeMillis())
+                    : runtime.lockExistingInstallation(p.tenantId(), p.clientId(), p.ownerJiacn(), candidate.installationId());
             if (installed == null || !candidate.installationId().equals(installed.installationId())
                     || !candidate.manifestSha256().equals(installed.manifestSha256())
                     || !p.tenantId().equals(installed.tenantId()) || !p.clientId().equals(installed.clientId())

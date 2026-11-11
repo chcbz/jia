@@ -380,6 +380,17 @@ class AgentRuntimeV1ServiceImplTest {
         verifyNoInteractions(identities, acks);
     }
 
+    @Test void existingInstallationFencePreservesExactOwnerAndDoesNotCreateOrActivate() {
+        var row = installation("ACTIVE"); row.setTenantId("0");
+        var identity = registrationIdentity("0", "client-a", "owner-a", AGENT);
+        when(installations.lock("rti-1")).thenReturn(row);
+        when(registry.findExactByCanonicalInScope("0", "client-a", "owner-a", AGENT)).thenReturn(identity);
+        assertEquals("ACTIVE", service.lockExistingInstallation("0", "client-a", "owner-a", "rti-1").status());
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> service.lockExistingInstallation("0", "client-a", "owner-b", "rti-1"));
+        verify(installations, never()).insert(any()); verifyNoInteractions(identities, acks);
+    }
+
     @Test void ownerCanInspectPendingAndRevokeWithoutReactivatingIdentity() {
         AgentRuntimeV1InstallationEntity row = installation("PENDING");
         row.setTenantId("0");

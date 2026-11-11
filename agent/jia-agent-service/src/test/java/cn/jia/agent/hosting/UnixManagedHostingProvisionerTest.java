@@ -42,6 +42,68 @@ class UnixManagedHostingProvisionerTest {
         when(credentials.available()).thenReturn(true);
         when(sessions.currentRegisteredProof("0", "fixture-client", "agt_fixture")).thenReturn(proof("fixture-owner", "fixture-host", "fixture-instance", 2));
     }
+    @Test void existingAdoptionRequiresExactAssociationAndNeverIssuesCredentialsOrReadiness() throws Exception {
+        var initial = new ManagedHostingProvisioner.Preparation("0", "fixture-client", "fixture-owner",
+                "jyt-fixture-peer-0", "transition-intent", "transition-lease", "17", 1791594000000L);
+        var existing = new ManagedHostingProvisioner.Candidate("rti_" + "1".repeat(32), "a".repeat(64), null, 0, 1, "fixture-host");
+        var request = UnixManagedHostingProvisioner.request(initial, "adopt", existing);
+        var response = new LinkedHashMap<>(request); response.put("outcome", "ADOPTED"); response.put("hostId", existing.hostId());
+        var adapter = adapter(); doReturn(response).when(adapter).exchange(request);
+        assertTrue(adapter.adoptExisting(initial, existing));
+        assertTrue(adapter.adoptExisting(initial, existing));
+        verify(credentials, never()).ensureInstallation(any(), any()); verifyNoInteractions(sessions);
+        for (String field : List.of("bindingId", "leaseId", "initialIntentId", "operationId", "canonicalAgentId", "installationId",
+                "manifestSha256", "hostId", "ownerJiacn", "clientId", "tenantId", "outcome")) {
+            var wrong = new LinkedHashMap<>(response); wrong.put(field, "wrong");
+            doReturn(wrong).when(adapter).exchange(request);
+            assertFalse(adapter.adoptExisting(initial, existing), field);
+        }
+        var extra = new LinkedHashMap<>(response); extra.put("runtimeAuthorization", "must-not-be-returned");
+        doReturn(extra).when(adapter).exchange(request); assertFalse(adapter.adoptExisting(initial, existing));
+        doThrow(new java.io.IOException("lost reply")).when(adapter).exchange(request);
+        assertFalse(adapter.adoptExisting(initial, existing));
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        try { assertThrows(IllegalStateException.class, () -> adapter.adoptExisting(initial, existing)); }
+        finally { TransactionSynchronizationManager.setActualTransactionActive(false); }
+    }
+
+    @Test @EnabledOnOs(OS.LINUX)
+    @EnabledIfEnvironmentVariable(named = "CYF_GSS_RUNTIME_TEST_SOURCE", matches = ".+")
+    void actualJavaAdapterAdoptsStaticInstallationAndUsesSharedStopCleanup() throws Exception {
+        Path source = Path.of(System.getenv("CYF_GSS_RUNTIME_TEST_SOURCE")).toRealPath();
+        var builder = new ProcessBuilder(System.getenv("CYF_GSS_NODE_BIN"),
+                source.resolve("conf/cyf-agent-runtime-v1/test/hosting-java-bridge-fixture.mjs").toString())
+                .directory(source.toFile()).redirectError(ProcessBuilder.Redirect.INHERIT);
+        builder.environment().put("CYF_GSS_STATIC_ADOPTION", "1");
+        Process child = builder.start();
+        try (var output = new java.io.BufferedReader(new java.io.InputStreamReader(child.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
+            var handshake = new java.util.concurrent.FutureTask<String>(output::readLine); Thread.ofVirtual().start(handshake);
+            String line = handshake.get(10, TimeUnit.SECONDS); assertNotNull(line);
+            Map<String, Object> endpoint = JSON.readValue(line, new TypeReference<Map<String, Object>>() {});
+            @SuppressWarnings("unchecked") var subject = (Map<String, Object>)endpoint.get("adoptionSubject");
+            var real = adapter(Path.of((String)endpoint.get("socketPath")), ((Number)endpoint.get("uid")).longValue(),
+                    ((Number)endpoint.get("gid")).longValue(), "fixture-owner");
+            var initial = new ManagedHostingProvisioner.Preparation("0", "fixture-client", "fixture-owner",
+                    (String)subject.get("canonicalAgentId"), "transition-intent", "transition-lease", "17", 1791594000000L);
+            var existing = new ManagedHostingProvisioner.Candidate((String)subject.get("installationId"),
+                    ((String)subject.get("manifestSha256")).substring(7), null, 0, 1, (String)endpoint.get("hostId"));
+            assertTrue(real.adoptExisting(initial, existing)); assertTrue(real.adoptExisting(initial, existing));
+            var current = real.currentOperation(initial); assertNotNull(current);
+            assertEquals(existing, current.candidate()); assertEquals(initial, current.preparation());
+            assertTrue(real.quiesce(initial, existing, "transition-finish"));
+            assertFalse(real.flushEvidence(initial, existing, "transition-finish"));
+            assertTrue(real.flushEvidence(initial, existing, "transition-finish"));
+            assertTrue(real.cleanup(initial, existing, "transition-finish"));
+            assertTrue(real.cleanup(initial, existing, "transition-finish"));
+            verify(credentials, never()).ensureInstallation(any(), any()); verifyNoInteractions(sessions);
+        } finally {
+            child.getOutputStream().write("stop\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            child.getOutputStream().flush();
+            if (!child.waitFor(10, TimeUnit.SECONDS)) { child.destroyForcibly(); fail("Owned Runtime fixture did not stop"); }
+            assertEquals(0, child.exitValue());
+        }
+    }
+
     @Test void nativeInventoryFixtureBindsScopeCountAndDigestWithoutProvisioning() throws Exception {
         try (var input = getClass().getResourceAsStream("/hosting/hosting-inventory-v1.json")) {
             assertNotNull(input);
@@ -140,6 +202,19 @@ class UnixManagedHostingProvisionerTest {
         assertEquals(frame("reprovisionPrepareRequest"), wire(UnixManagedHostingProvisioner.request(free, "prepare", null)));
         assertEquals(2, UnixManagedHostingProvisioner.decodePrepared(free, frame("reprovisionPreparedResponse")).provisionGeneration());
     }
+    @Test void existingReprovisionMayOmitEnrollmentButInitialProvisionMayNot() {
+        var free = preparation("reprovisionPrepareRequest");
+        var existing = frame("reprovisionPreparedResponse");
+        existing.put("enrollmentSecretSha256", null); existing.put("enrollmentExpiresAt", null);
+        var decoded = UnixManagedHostingProvisioner.decodePrepared(free, existing);
+        assertNotNull(decoded); assertNull(decoded.enrollmentSecretSha256()); assertEquals(0, decoded.enrollmentExpiresAt());
+        existing.put("enrollmentExpiresAt", 1L);
+        assertNull(UnixManagedHostingProvisioner.decodePrepared(free, existing));
+        var initial = frame("preparedResponse");
+        initial.put("enrollmentSecretSha256", null); initial.put("enrollmentExpiresAt", null);
+        assertNull(UnixManagedHostingProvisioner.decodePrepared(preparation(), initial));
+    }
+
     @Test void preparedRejectsCrossWireScopeMethodNumericCoercionAndSecretsBeforeAuthorization() {
         for (var change : Map.<String,Object>of("ownerJiacn", "other", "method", "observe", "manifestSha256", "c".repeat(64),
                 "reservedAt", "1791594000000", "provisionGeneration", 0, "enrollmentExpiresAt", 1.5, "operationKind", "REPROVISION").entrySet()) {

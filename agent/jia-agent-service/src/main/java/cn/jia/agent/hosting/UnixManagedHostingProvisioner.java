@@ -141,6 +141,18 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
             return unknown(p);
         }
     }
+    @Override public boolean adoptExisting(Preparation initial, Candidate existing) {
+        outsideTransaction();
+        if (!validPreparation(initial) || !initial.intentId().equals(initial.operationId())
+                || initial.quotedInventory() != null || existing == null || !installation(existing.installationId())
+                || !digest(existing.manifestSha256()) || existing.provisionGeneration() != 1
+                || !exact(existing.hostId(), 100) || existing.enrollmentSecretSha256() != null || existing.enrollmentExpiresAt() != 0
+                || !availableFor(initial.tenantId(), initial.clientId(), initial.ownerJiacn())) return false;
+        try {
+            var request = request(initial, "adopt", existing);
+            return decodeHandover(request, existing, exchange(request), "ADOPTED");
+        } catch (Exception uncertain) { return false; }
+    }
     @Override public CurrentOperation currentOperation(Preparation initial) {
         outsideTransaction();
         if (!validPreparation(initial) || !initial.intentId().equals(initial.operationId())
@@ -226,7 +238,7 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
         return observation;
     }
     static Map<String, Object> request(Preparation p, String method, Candidate candidate) {
-        if (!validPreparation(p) || !Set.of("prepare", "ensure", "observe", "current", "quiesce", "evidence", "cleanup").contains(method)
+        if (!validPreparation(p) || !Set.of("adopt", "prepare", "ensure", "observe", "current", "quiesce", "evidence", "cleanup").contains(method)
                 || !Set.of("prepare", "current").contains(method) && candidate == null) throw new IllegalArgumentException("Invalid hosting control request");
         Map<String, Object> request = association(p);
         request.put("protocol", PROTOCOL); request.put("method", method);
@@ -271,9 +283,11 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
         var allowed = new java.util.HashSet<>(expected.keySet());
         allowed.addAll(Set.of("outcome", "installationId", "manifest", "manifestSha256", "enrollmentSecretSha256",
                 "enrollmentExpiresAt", "provisionGeneration", "hostId"));
+        boolean existingWithoutEnrollment = !p.operationId().equals(p.intentId())
+                && response.get("enrollmentSecretSha256") == null && response.get("enrollmentExpiresAt") == null;
         if (!response.keySet().equals(allowed) || !echoes(expected, response) || !"PREPARED".equals(response.get("outcome"))
                 || !installation(response.get("installationId")) || !digest(response.get("manifestSha256"))
-                || !digest(response.get("enrollmentSecretSha256")) || integral(response.get("enrollmentExpiresAt")) <= 0
+                || !existingWithoutEnrollment && (!digest(response.get("enrollmentSecretSha256")) || integral(response.get("enrollmentExpiresAt")) <= 0)
                 || integral(response.get("provisionGeneration")) <= 0 || !exact(response.get("hostId"), 100)) return null;
         if (p.operationId().equals(p.intentId()) && (integral(response.get("provisionGeneration")) != 1
                 || !validQuotedInventory(p.quotedInventory()) || !p.quotedInventory().hostId().equals(response.get("hostId")))) return null;
@@ -293,7 +307,7 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
             if (!computed.equals(response.get("manifestSha256"))) return null;
         } catch (Exception invalidManifest) { return null; }
         return new Candidate((String) response.get("installationId"), (String) response.get("manifestSha256"),
-                (String) response.get("enrollmentSecretSha256"), integral(response.get("enrollmentExpiresAt")),
+                (String) response.get("enrollmentSecretSha256"), existingWithoutEnrollment ? 0 : integral(response.get("enrollmentExpiresAt")),
                 integral(response.get("provisionGeneration")), (String) response.get("hostId"));
     }
     static Observation decode(Preparation p, Candidate candidate, String method, Map<String, Object> response) {

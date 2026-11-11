@@ -29,6 +29,10 @@ public interface ManagedHostingProvisioner {
     record Candidate(String installationId, String manifestSha256, String enrollmentSecretSha256,
                      long enrollmentExpiresAt, long provisionGeneration, String hostId) { }
     Observation prepareAndObserve(Preparation preparation);
+    /** Bind an already-authorized static installation to its transition lease, without enrollment,
+     * execution restart or charging. True acknowledges association only, never SERVICE_READY. */
+    boolean adoptExisting(Preparation initial, Candidate existing);
+
     /** Read-only original relationship lookup. Null is unknown, never proof that cleanup/release is safe. */
     CurrentOperation currentOperation(Preparation initial);
     record CurrentOperation(Preparation preparation, Candidate candidate) { }

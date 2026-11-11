@@ -74,6 +74,12 @@ class ManagedHostingCredentialsTest {
             return new AgentRuntimeV1InstallationView(candidate.installationId(), "0", "Client-A", p.agentId(), "1", candidate.manifestSha256(),
                     candidate.enrollmentExpiresAt(), ("ACTIVE".equals(base.getStatus()) || "SERVICE_READY".equals(base.getStatus())) ? "ACTIVE" : "PENDING", null);
         });
+        when(runtime.lockExistingInstallation(anyString(), anyString(), anyString(), anyString())).thenAnswer(call -> {
+            assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
+            jdbc.queryForObject("SELECT id FROM installation_lock WHERE id=1 FOR UPDATE", Integer.class);
+            return new AgentRuntimeV1InstallationView(candidate.installationId(), "0", "Client-A", p.agentId(), "1", candidate.manifestSha256(),
+                    candidate.enrollmentExpiresAt(), "ACTIVE", null);
+        });
         when(rent.attachRuntimeInstallation(anyString(), anyString(), anyString(), anyString(), anyString())).thenAnswer(call ->
                 jdbc.update("UPDATE association SET installation=?,manifest=?,generation=1 WHERE id=1 AND generation=0 AND installation IS NULL",
                         (String)call.getArgument(3), (String)call.getArgument(4)));
@@ -166,6 +172,16 @@ class ManagedHostingCredentialsTest {
                     .setPaidThrough(lease.getPaidThrough()).setRuntimeTargetGeneration(target);
         });
     }
+    @Test void adoptedInstallationReprovisionUsesExistingFenceWithoutEnrollmentMetadata() {
+        active(); clearInvocations(runtime);
+        var existing = new ManagedHostingProvisioner.Candidate(candidate.installationId(), candidate.manifestSha256(), null, 0, 2, candidate.hostId());
+        service.ensureInstallation(free(), existing);
+        verify(runtime).lockExistingInstallation(p.tenantId(), p.clientId(), p.ownerJiacn(), candidate.installationId());
+        verify(runtime, never()).ensureInstallation(anyString(), anyString(), anyString(), any(), anyLong());
+        assertEquals(2L, jdbc.queryForObject("SELECT target FROM free_request", Long.class));
+        verifyNoInteractions(keys);
+    }
+
     @Test void freeReprovisionDurablyAllocatesOneNewGenerationAndExactReplayWithoutAnyFunds() {
         active(); service.ensureInstallation(free(), generation(2)); service.ensureInstallation(free(), generation(2));
         assertEquals(2L, jdbc.queryForObject("SELECT generation FROM association", Long.class));
