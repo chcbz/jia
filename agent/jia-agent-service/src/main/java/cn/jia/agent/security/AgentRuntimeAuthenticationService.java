@@ -65,9 +65,10 @@ public class AgentRuntimeAuthenticationService implements cn.jia.agent.service.A
                 || !installation.getClientId().equals(request.clientId())
                 || !installation.getCanonicalAgentId().equals(request.canonicalAgentId())
                 || !installation.getInstallationId().equals(request.installationId())) throw denied();
+        // Resolve the current relationship; suspended history remains readable but cannot issue sessions.
         // The installation binds the full subject, not an owner supplied by the caller.
         var candidates = registry.selectByMap(Map.of("tenant_id", installation.getTenantId(),
-                "client_id", installation.getClientId(), "canonical_agent_id", installation.getCanonicalAgentId()));
+                "client_id", installation.getClientId(), "live_agent_id", installation.getCanonicalAgentId()));
         if (candidates == null || candidates.size() != 1) throw denied();
         var candidate = candidates.getFirst();
         if (!Objects.equals(installation.getTenantId(), candidate.getTenantId())

@@ -43,6 +43,7 @@ class HostingRentRenewalMySqlTest {
     private String database;
     private JdbcTemplate jdbc;
     private cn.jia.agent.dao.AgentPersonaBindingDao identityBindings;
+    private cn.jia.agent.dao.AgentIdentityRegistryDao identityRegistry;
     private cn.jia.agent.mapper.AgentRuntimeMapper runtimeProjection;
     private cn.jia.agent.mapper.AgentExternalServicePolicyMapper externalIdentities;
     private cn.jia.agent.mapper.AgentHostingRentBindingMapper admissionRoots;
@@ -163,6 +164,55 @@ class HostingRentRenewalMySqlTest {
                 "UPDATE agent_identity_registry SET owner_jiacn='new-owner' WHERE id=?", old.getId()));
     }
 
+    @Test void reinvitedRuntimeSessionUsesCurrentSqlIdentityWithoutDeletingHistory() throws Exception {
+        var identities = identityFixture();
+        String agent = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var old = inviteIdentity(identities, "old-owner", agent);
+        new org.springframework.transaction.support.TransactionTemplate(manager).executeWithoutResult(tx ->
+                identities.activateForFirstRegistration(old));
+        jdbc.update("UPDATE agent_persona_binding SET status=0 WHERE id=?", old.getBindingId());
+        identities.suspendForBinding("tenant", "client", "old-owner", old.getBindingId());
+        var historical = jdbc.queryForMap("SELECT * FROM agent_identity_registry WHERE id=?", old.getId());
+        var next = inviteIdentity(identities, "new-owner", agent);
+        // Identity/binding SQL and session issuance are real; runtime persistence, installation
+        // and account collaborators are explicit fixtures, not a full Runtime handover acceptance.
+        var rows = mock(cn.jia.agent.dao.AgentRuntimeDao.class);
+        var installations = mock(cn.jia.agent.dao.AgentRuntimeV1InstallationDao.class);
+        var accounts = mock(cn.jia.user.security.AccountSecurityService.class);
+        var captured = new java.util.concurrent.atomic.AtomicReference<cn.jia.agent.entity.AgentRuntimeEntity>();
+        when(rows.insert(any())).thenAnswer(call -> {
+            cn.jia.agent.entity.AgentRuntimeEntity row = call.getArgument(0);
+            row.setId(1L); captured.set(row); return 1;
+        });
+        when(rows.findInScope("tenant", "client", agent)).thenAnswer(call -> captured.get());
+        when(accounts.findUniqueByExactJiacn("new-owner")).thenReturn(java.util.Optional.of(
+                new cn.jia.user.security.AccountSecuritySnapshot(42, "new-owner", cn.jia.user.security.AccountState.ACTIVE, 3)));
+        String installationId = "rti_" + "1".repeat(32);
+        var installation = new cn.jia.agent.entity.AgentRuntimeV1InstallationEntity().setId(1L)
+                .setInstallationId(installationId).setCanonicalAgentId(agent).setStatus("ACTIVE");
+        installation.setTenantId("tenant"); installation.setClientId("client");
+        when(installations.lock(installationId)).thenReturn(installation);
+        var auth = new cn.jia.agent.security.AgentRuntimeAuthenticationService(rows, installations,
+                identityRegistry, identities, accounts, mock(cn.jia.agent.config.AgentTaskEventsGate.class), policy);
+        var request = new cn.jia.agent.entity.AgentRuntimeV1SessionRequest(installationId, "tenant", "client",
+                agent, "1", "b".repeat(64), "host", "boot-new");
+        var session = new org.springframework.transaction.support.TransactionTemplate(manager)
+                .execute(tx -> auth.issue(installation, request, 1000));
+        assertNotNull(session);
+        assertEquals("new-owner", captured.get().getOwnerJiacn());
+        assertEquals(next.getBindingId(), captured.get().getBindingId());
+        var headers = new cn.jia.agent.security.AgentRuntimeAuthenticationFilter.SessionHeaders(agent,
+                installationId, "host", "boot-new", session.sessionGeneration(), session.sessionToken());
+        assertEquals("new-owner", auth.verify(headers).scope().ownerJiacn());
+        assertEquals(historical, jdbc.queryForMap("SELECT * FROM agent_identity_registry WHERE id=?", old.getId()));
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM agent_identity_registry", Integer.class));
+        verify(accounts, never()).findUniqueByExactJiacn("old-owner");
+        jdbc.update("UPDATE agent_persona_binding SET status=0 WHERE id=?", next.getBindingId());
+        identities.suspendForBinding("tenant", "client", "new-owner", next.getBindingId());
+        assertThrows(RuntimeException.class, () -> auth.verify(headers));
+        assertThrows(RuntimeException.class, () -> auth.issue(installation, request, 1001));
+    }
+
     @Test void sameOwnerNewInvitationDoesNotHidePreviouslyActivatedHistory() throws Exception {
         var identities = identityFixture();
         String agent = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -233,6 +283,7 @@ class HostingRentRenewalMySqlTest {
         ReflectionTestUtils.setField(aliases,"baseMapper",template.getMapper(cn.jia.agent.mapper.AgentIdentityAliasMapper.class));
         ReflectionTestUtils.setField(bindings,"baseMapper",template.getMapper(cn.jia.agent.mapper.AgentPersonaBindingMapper.class));
         identityBindings = bindings;
+        identityRegistry = registry;
         return new cn.jia.agent.service.impl.AgentIdentityServiceImpl(registry, aliases, bindings);
     }
 

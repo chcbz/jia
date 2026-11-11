@@ -306,6 +306,10 @@ class AgentRuntimePersistentSessionFenceTest {
         assertThrows(RuntimeException.class, () -> auth.issue(installation, request("host", "boot"), 1000));
         verifyNoInteractions(rows);
     }
+    @Test void sessionLookupSelectsOnlyCurrentRelationship() {
+        auth.issue(installation, request("host", "boot"), 1000);
+        verify(registry).selectByMap(java.util.Map.of("tenant_id", "0", "client_id", "client", "live_agent_id", AGENT));
+    }
     @Test void ambiguousOwnerRegistryIsRejected() {
         when(registry.selectByMap(anyMap())).thenReturn(List.of(identity, identity));
         assertThrows(RuntimeException.class, () -> auth.issue(installation, request("host", "boot"), 1000));
