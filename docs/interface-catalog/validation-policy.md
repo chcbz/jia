@@ -1,0 +1,144 @@
+# 校验必要性与兼容规格（2026-10-24）
+
+## 现行适用边界（2026-11-07）
+
+本政策的风险/条件/失败域/回归要求继续有效。业务tenant由环境配置及公共持久化隔离承担，不层层透传重验；资金、身份和幂等保护不删。旧表中2026-10-24保留CHECK、旧runner、Provider专用通道及Flow-only描述只证明当时裁定，同范围分别由根2026-11-02数据库规则、RB-1原生执行和2026-11-06本地规则替代；既有历史表达式和测试记录不重标。具体开发仍按[统一约束](../../../specs/architecture-convergence/development-principles.md)。
+
+本规格属于统一接口规范v1.4，适用于CYF API/Web/Runtime及本项目发布工具。不是新校验器、框架或审批阶段，也不代表所有存量校验已经逐条核实。
+
+## 1. 判定规则
+
+用户要求：未写清必要性的校验，不得默认认定必要。已有代码、旧测试和“安全起见”都不是充分依据。每项保留的业务拒绝至少说明：保护的具体事实、输入/条件、失败范围和行为、实现及回归入口。没有依据的性能数字、字段数量、应用版本一致性或重复检查应移除；尚未完成核实的项明确记为待核实，不能借补一句“安全检查”转成已批准。
+
+同一事实只在实际信任/事务边界核验，不在同一个可信调用链机械重复。客户端可做用户提示，服务端授权和事务校验不能因前端已检查而移除。已缓存不可变制品可复用其验证结果，但不能跨内容、主体、版本或会话复用。
+
+## 2. 本轮取消的限制（明确实现范围）
+
+| 范围/代码入口 | 删除什么 | 保留及输出行为 |
+| --- | --- | --- |
+| HTTP Q/R：API `ApiJsonInput`/`JsonRequest`；Web `apiEnvelope.js`；Runtime engine/host `api-envelope.mjs` | 外层多一个字段即拒绝 | 仍必须有现行必需字段/类型、支持的语义版本、请求关联；扩展元数据忽略，不作为身份/授权；API保留原data字节；嵌套业务写DTO仍按其合同 |
+| 异步M：API `ProtocolMessage.decode`，Web/engine/host `message-envelope` | 外层字段总数精确相等 | 已知事件/回复字段投影；扩展type/channel不能替代messageType，不下传为权限；回复三字段必须完整 |
+| Web `hallAssigneeCandidates` | 候选/分页多字段导致无法点将 | 只输出已知展示字段；保留Agent ID、必需字段、去重、游标前进/尾项关联 |
+| Web `hallSkillCapabilities`/`useHallAgentProfileCapabilities` | 目录/技能/费用说明多字段导致隐藏技能 | 仅投影已知字段；Agent绑定、就绪状态、费用类型不放宽；未知费用不是免费，目录不是执行授权 |
+| Web `commandObservabilityPolicy`/`economyPreviewCapability` | 能力只读响应多字段导致整页不可用 | 保留明确可用/只读/身份范围；新增字段不授予写操作；不改变更深层资金操作合同 |
+| Web `silverAmount.isSilverMoney` | Money展示多元数据就拒绝 | 只读取amountMinor/currency；Long精度、非负、币种保留；amountMicro不是amountMinor的替代字段 |
+| Runtime `skill-conversation`及native/controlled-image/v3、`pollWorkspaceFileCommands` | 服务端已返回批次超过16条或多分页元数据就拒绝 | 仍检查items为数组、逐命令验证、租约/去重/主体隔离；服务端分页策略不变，不取消文件体积或Provider输入合同 |
+| Runtime `skill-conversation`租约/副作用ACK/提交ACK | 多个无害回执字段即判未确认 | 保留executionId/token/version/expiry及结果摘要/状态关联，ACK只投影已知字段 |
+| Runtime `conversation-text-file.test` | 测试将应用版本写死为1.2.0 | 保留执行器/安装包文件闭合检查；应用版本追溯由制品清单负责，不在功能测试固定旧发行号 |
+| Runtime历史扫描（前轮b77f7d0） | 已完成历史记录被新执行DTO拒绝；单坏记录阻塞新任务 | 只读历史身份/摘要/提交事实；未决缺授权仅隔离对应execution，不重放UNKNOWN，不改原字节 |
+
+上述兼容是允许扩展字段，不是兼容未知执行语义、大小写猜测、字段别名或自动填充授权。生产者仍输出最小现行字段；不主动制造扩展字段。
+
+## 3. 已核实需要保留的规则
+
+| 必要规则及原因 | 精确失败条件/失败行为 | 实现与回归入口 |
+| --- | --- | --- |
+| 外部JSON不应在不同消费者变成不同指令 | 重复key（含转义后同名）、尾随JSON、必需字段缺失/类型错误拒绝；不把损坏结果当成功 | `ApiJsonInput`、`ApiEnvelopeJsonConfig`、各端`parseStrictJson`；`ApiEnvelopeBoundaryTest`、`interface-envelope.test.mjs` |
+| 请求和回复必须属于同一次请求 | requestId与请求/响应头不一致，或HTTP非成功却code=E0，拒绝；401/403仍作为实际失败 | `decodeHttpResponse`、`ApiJsonInput.bind`；上述测试及`interface-runtime-http.test.mjs` |
+| 当前不理解的协议不能猜测执行副作用 | protocolVersion不等于已实现1、执行命令不等于4，拒绝该消息；不以Runtime/app发布版本号为门禁 | `ProtocolMessage`、`parseSkillCommand`；`ProtocolMessageTest`、`skill-executor.test.mjs`。新增无害字段不升级协议版本 |
+| 不得跨用户/Agent/租户读取或执行 | 认证无效、资源主体不符、grant已撤销/代际变化，401/403或该领域明确拒绝；旧UI请求在主体切换后失效 | `nativeSessionHeaders`、`SkillConversationLane`、`PersonalWorkspaceExecutionServiceImpl`、Web身份epoch；`interface-agent-ws`、`skill-conversation`、`juyiting-agent-profile-capabilities`及后端权限专项 |
+| 防止用旧授权、旧包或旧租约执行新动作 | TaskSkillBinding执行ID/包/manifest/批准权限不一致，lease token/version/expiry无效拒绝；绑定封闭字段用于明确批准权限，不接受未知授权语义 | `skill-executor`、`skill-registry`、`SkillConversationLane`；`skill-executor`/`skill-conversation`原负例 |
+| 防重复调用模型/扣费和重复提交 | 已记录START但结果UNKNOWN，不再发起新效果；同execution换commandDigest为冲突；保持原key/副作用记录，只读核对 | `SkillEffects`、`SkillExecutionStore`、安装/报价事务；`skill-execution-store`、`skill-conversation`及购买幂等回归 |
+| 防止读取错误资料或把未提交结果当交付 | inputRef/sha/byteLength/授权版本或提交摘要不匹配拒绝；真实bytes/回执不能由模型文字自证 | `validateSkillInputReceipts`、`parseSkillInputSnapshot`、`validateCommittedSkillResult`；`skill-executor`/`skill-execution-store`，资料授权专项 |
+| 防路径逃逸和篡改本地恢复事实 | 非归属用户/过宽权限/软硬链接/读取中变更/identity摘要冲突拒绝共享扫描；单记录格式坏仅隔离并报告 | `readPrivate`、`privateDirectory`、`readSkillRecoveryCheckpoint`；`skill-conversation`、`skill-execution-store` |
+| 防资金精度和购买意图改变 | 金额为规范非负十进制字符串且≤Java Long；币种正确；报价/批准权限/CAS/原key不可被新字段覆盖；失败不能默认0或再扣一次 | `silverAmount`、`skillManagementContract`写DTO、API技能报价/创建事务；`interface-money`、`ApiEnvelopeJsonConfigTest`及管理交易专项 |
+| 防分页死循环与旧请求覆盖新UI | 游标不前进/重复ID/错误尾项，停止该分页并提示；主体或epoch变化丢弃旧响应 | `assigneePage`、`normalizeDlqPage`、各read composable；`juyiting-external-commission`、`command-observability` |
+| 预览/Provider必须真实支持数据 | 不能展示不等于禁止存储；解码或Provider输入不支持应只拒绝该处理路径，不新增存储扩展名白名单 | 资料存储与预览分工沿用资料/多媒体规格；本轮未重写存储/Provider适配器 |
+| 防错误安装、并发覆盖和无恢复发布 | 实际源码/同Run制品摘要不符、身份/发布锁冲突、恢复条件不足，不安装；不拿历史Run冒充 | 根AGENTS本地来源规则及现有安装器；保留完整性/锁/备份。完整本地批次600秒是目标，不是强杀/请求deadline；仅另获授权Flow才使用其Run规则 |
+
+其中业务封闭DTO仅保护已明确的动作/授权/签名语义，不能把本表当成“所有Object.keys长度限制都有必要”的豁免。语义版本检查不等于应用升级必须同版本；CAS revision不是程序版本。
+
+## 4. 存量五类逐项裁定（2026-10-24续核）
+
+本节覆盖本次库存检索命中的五类，不用“历史有测试”作为必要性理由。下表“删除”指候选源码；正式Flow、合并和安装状态另见handoff，不能把静态审计当作全业务线上验收。
+
+| 类别 | 删除的非必要拒绝 | 保留的边界、依据及失败范围 | 实现/回归 |
+| --- | --- | --- | --- |
+| CHAT上下文 | 深度8、256字段/数组项、128字节键、256KiB快照、64KiB正文及派生envelope重复总量 | JSON类型/安全整数、循环对象、原contextHash和dispatch身份仍验证；完整事实不截断。数据嵌套迭代检查，不按嵌套层数判业务失败 | Runtime `chat-runtime.mjs`；`chat-runtime.test.mjs`含300字段/长键/40层/300KB中文及错摘要负例 |
+| CHAT调度/持久记录 | 默认256排队、默认512绑定、1024条停止索引扫描；默认inbox1024/64MiB、dedupe100000/128MiB业务硬门槛；配置上限10GB/100000等无来源数值 | 并发lane仍串行；持久ACK、原指纹、归属/锁保留。已明确配置的正整数容量作为运维选择继续在ACK前背压，未配置不补猜测值；磁盘/IO真实失败不ACK。归档保留周期不是拒收门槛，本次不删除历史证据/改变retention | `chat-runtime`、`agent-client`；原显式maxFiles=1并发背压/去重/锁测试仍保留；新增默认300任务、514绑定恢复 |
+| 技能ZIP | 压缩包默认16MiB、单entry默认16MiB、默认256entry（含API描述符残留）；API存储16MiB | 下载按批准byteLength/sha核对；Java byte[]/ByteBuffer int寻址必须可表示（不是业务容量）。解压仍只在安装暂存边界保留**总展开64MiB**防zip-bomb预算，禁止路径逃逸/链接/重复与别名冲突，并核对真实展开bytes=ZIP声明。总量约束已经覆盖单entry，故不另加16MiB。64MiB是现有解压安全预算，不声称是生产物理容量或Provider限制；不能推广到原始资料存储。显式安装预算不等于默认产品规则 | `SkillPackageStore`、`SkillPackageDescriptor`、`skill-install-manager`；API描述符按已验证展开长度读取并单独探测EOF，不对int上限+1；`SkillPackageDescriptorTest`覆盖小manifest/302条目和65MiB展开拒绝；`SkillPackageStoreTest`实读写16MiB+1；Runtime真实261entry安装、展开超预算、路径/摘要原负例 |
+| 媒体通用层 | 三个通道instruction16000重复拒绝；资料快照/收件端16资料数限制；native MIME识别16MiB；图像返回16MiB；成果publish16MiB/data24MiB及下载/目录64MiB；语音结果/缓存/实时文本256KiB重复限制 | 身份/grant/原bytes/hash/长度、MIME真实解码和effect幂等仍保留；不能因预览不支持而禁止存储；下载仍核对声明长度和真实内容。MP4固定moov→trak→mdia→minf→stbl调用链不会任意递归，删除不可达depth8和传递参数；保留box范围/实际音频时长、采样计数和解码安全检查 | `conversation-*`、`controlled-image*`、`image-http-codec`、两artifact/deliverable Controller、`SpeechTranscriptionService`、`CliproxyRealtimeSessionClient`、`OpenAiCompatibleSpeechTranscriptionProvider`、`AudioDurationInspector`；native/imagegen/skill-runners、Controller/VoiceServices/Cliproxy/音频格式回归 |
+| Provider专属 | 不把Provider限额重复套到通用资料快照；不增加格式存储白名单 | Images JSON编辑边界仍16张、单image_url≤20,971,520字符：官方API参考明确规定，2026-10-24核对 `https://developers.openai.com/api/reference/resources/images/methods/edit`。仅HTTP编辑适配器负责；当前image-edit技能manifest自身单输入合同不外推到其他技能。编码魔数/PNG/base64和真实错误仍检查。语音PCM256KiB是**分块大小**，不是拒绝超过该大小的总音频 | `skill-runners/image-provider`、`controlled-image-http-executor[-v3]`、`controlled-image-v3-files`、`CliproxyRealtimeSessionClient`；image与语音真实输入/关联测试 |
+| Web只读 | 技能目录/变更列表/报价/费用嵌套字段精确数量、reasonCode封闭展示枚举；资金只读capability和接外单read/ACK多字段拒绝 | 只读投影忽略新增字段，报价金额/批准权限/expectedRevision保持原语义；写DTO仍封闭，未知动作/状态不能自动获得权限，新增reason只作展示。Money/projected package在比较和组装写请求前去掉扩展字段，避免新增metadata导致重复购买或错误CAS | `skillManagementContract`、`economyReadOnlyPreviewPolicy`、`useExternalServicePolicy`；`validation-compatibility`、`skill-market`、`juyiting-external-commission` |
+| 成果Web残留 | `useHallArtifactTransfer`上传16MiB/下载64MiB及MIME白名单，`useOutputs`成果目录/下载64MiB、只读元数据精确字段拒绝 | 原型本已允许任意文件；同步取消传输面板accept与上限文案，缺MIME用通用二进制，畸形MIME/非安全整数/实际长度不符仍拒绝；回执与目录仅投影已知字段，未知URL/权限字段不消费。预览解码能力限制不扩成存储限制 | 原型规格2026-10-24传输节；`juyiting-artifact-transfer`新增65MiB真实流与长度不符负例、`juyiting-hall-deliverables`大成果与元数据投影、`output-preview-image-size` |
+| 数据库启动 | transport、creation、requirement、provider-consent、settlement、bridge、followup、delivery-review、typed-review-context因额外**非唯一读索引**拒绝启动 | 必需索引仍验证字段/顺序/唯一性/前缀；额外UNIQUE会改变INSERT/去重事务语义仍拒绝。列类型/归属binary collation、外键、列类型、唯一约束和迁移基线继续保护持久状态；按2026-11-02决定不新增/依赖CHECK，不以触发器替代业务规则，生产旧CHECK仅经获授权迁移处理，不因字段兼容移除；本次不执行生产DDL | 上述9个`*SchemaInitializer`；ProviderCostConsent/Followup/TypedReviewContext新增“额外读索引通过、额外唯一索引拒绝”；原DDL负例 |
+| API业务字段/构建资产 | 本次源码库没有`@Size/@Length/@Min/@Max`注解门禁命中；不得照上轮泛称的“注解长度”虚构修改。删除sprite编码文件/PNG64MiB大小门槛 | `task_id`/idempotency100、tenant/client/owner50等身份长度对齐SQL列，Long/版本/金额防溢出；业务写DTO封闭保护动作、批准权限和摘要，不把它推广成只读展示要求。地图tile ID/尺寸/纹理引用和sprite解码总RGBA64MiB防解码放大保留，不以压缩文件字节拒绝。Gradle分层、锁定依赖/同RunSHA、制品恢复保护按根规则保留 | Controller/业务mapper及对应DDL；`validateLayering`；Web `validate-sprites`/mapValidation与资产回归。E14显式assets测试的测量/来源合同未借此删除，release测试仍按既有profile执行 |
+
+边界说明：身份、事务、幂等、完整性、格式可解析性/实际能力及安装恢复属于必要事实；**固定数值不是仅靠写入此文档就成为物理事实**。保留的ZIP/RGBA解码预算是对不可信压缩内容的局部安全预算，而非平台资料限额/性能SLO；本次没有测量生产最大可承载文件、没有新增配额，也不声称“任意大小必成功”。真实资源错误仍如实失败。不能以本表概括性条目批准未来新增门槛。
+
+## 5. 验收及证据边界
+
+1. 正向：新增元数据不导致正常页面/任务不可用；输出不透传未知权限/endpoint，原业务字节/摘要不变。
+2. 反向：缺字段、错类型、错主体、错摘要、部分ACK、UNKNOWN、重复扣费、越权等原负例仍拒绝。
+3. 混合恢复：旧已完成、旧未决、新任务并存；异常局部隔离，不重放旧副作用。
+4. 源码/测试/上线分别记录，修改旧测试时必须保留原受保护不变量，不删除失败样例来凑绿。
+
+扫描证据：`/var/tmp/cyf-skill-adoption-20261024/validation-scan/inventory.json`（路径/行/模式/文件SHA）、`summary.json`、各定向测试日志。扫描基线API ff819208、Web8c84e51、Runtime b77f7d0；操作脚本来自共享根工作区实际字节，非干净HEAD快照。排除依赖、测试、产物和其他项目；扫描范围与“已逐条核实”分开记录。
+
+## 6. 资料链路续核（2026-10-24，候选源码，未上线）
+
+- 删除资料选择/创建/点将/议事/检查/通用执行快照的32项门槛，删除草稿Web100/API128项、执行128项及草稿HTTP256KiB重复门槛。覆盖Web picker、create/point intents、draft与typed消费者；API creation/Grant/allTaskMaterials、draft、workspace execute；Chat typed wire/context/final与bootstrap及历史只读投影；Runtime reference/materials/typed-inspection/action/skill command。目录不截断，完整分页仍检查游标前进/主体，不以超过单页长度拒绝整个目录。
+- `MATERIAL_PAGE_SIZE=33`只控制每次数据库读取批次，循环读取全部页，不是总资料限额。点将回归使用34份跨页目录；草稿129份逐项核权，最后一份不可读仍拒绝且不创建草稿。去掉通用数量校验不等于删除逐项版本/归属/哈希/租约/幂等/CAS核对。
+- 技能manifest的minItems/maxItems不再限定≤32；保留0≤min≤max及int可表示范围（Java使用asInt及List.size，2147483648会溢出）。具体技能批准manifest仍决定单次技能输入范围：运行时不能偷偷修改已安装manifest/摘要，也不能将目录全部资料自动授权给某个动作。既有发布包maxItems=32不在本轮重打包，新增声明可超过32；Provider真实能力仍在Provider边界校验。完整目录可用于普通议事，不要求全部参与单次技能调用。
+- 必要的可执行技能输出声明：dataSchema与mimeTypes不能同时为空，否则无法区分“只返回文字解释”与“正式技能结果”；artifactsRequired=true必须声明可交付类型。失败范围仅该技能manifest，不影响普通SKILL.md说明包；实现`SkillManifestCodec`/Runtime manifest，shared contract fixtures与descriptor回归。API270失败来自新增测试错误地同时声明null dataSchema和空mimeTypes，修正夹具为text/plain而不删除该语义保护。
+
+### 数据库存量迁移（未执行）
+
+创建事项表旧`chk_atco_refs`把input_refs_json限定为ARRAY且0..32；只删Java/Web仍会写库失败，不能宣称已打通。新建表保留JSON ARRAY类型但去数量上限；现有表必须在受控schema维护窗口应用`agent/jia-agent-mapper/src/main/resources/db/agent-task-creation-operation-unbounded-materials.sql`。
+
+步骤：核对真实目标与授权→按现有schema/发布锁保存SHOW CREATE TABLE及数据恢复点/行数→确认仅旧ARRAY+0..32 CHECK待替换（已迁移则只读验证，不重复ALTER）→同一ALTER原子替换为ARRAY-only→读取CHECK及原行数/抽样原内容→原initializer只读校验→再启用候选程序。不能删除身份/唯一键/receipt CHECK、清表、自动截断或把迁移写进普通应用启动；本轮仅提交脚本和隔离MySQL回归，不修改生产库。
+
+回退：出现超过32的真实数据后旧程序/旧CHECK不能无损承载；不得为回退截断资料或恢复旧备份覆盖新事实。先核对数据兼容性，再决定受控恢复或向前修复。正式验证包含复用既有自有MySQL的`SkillManagementMaterialMigrationTest`（非环境跳过）；原opt-in `AgentTaskCreationOperationMySqlTest`另保留。
+
+### 尚未逐项核实（不是必要性豁免）
+
+剩余其他业务DTO/只读事件/工作空间帧的封闭字段、其他HTTP body和文本阈值、成果数量限制、分页上限、旧技能/工作空间发现采样与深度限制仍须按调用链逐项裁定。检索命中、文档列名和局部回归都不等于全库审核完成；本节不将这些项默认保留为必要，也不声称全库已清理完。
+
+### 同链残留续核（2026-10-24 17:15，实施中）
+
+当前action事实32、通用工作空间文件桥输入/输出128、Web执行选择128、成果目录/提交128、执行报告outputStageRefs32、技能购买HTTP8KiB及权限列表32均无独立必要性依据，删除；所有元素仍逐一核验主体、版本、授权、重复项、路径、摘要和真实长度，不能只放开草稿入口却在执行/回读阶段再次拒绝或返回空目录。权限批准集合仍必须与报价/manifest一致，删除数组数量限制不赋予新权限。Provider图像编辑16张仅保留在有真实Provider合同的路径，不保留通用32兜底。成果原始事实及历史摘要不改写。工作空间路径/endpoint/run绑定继续防越权写入。按用户最新要求，不增加仅证明“超过旧上限”的数量边界正例；复用现有主流程、权限、幂等、完整性回归，失效的旧上限断言作最小调整。正式结果以固定源码Flow为准，未运行不得写为通过。
+
+2026-10-24 测试范围补充：本轮尚未提交的5个纯数量/体积放宽正例已撤下，不借校验清理扩增非关键测试。已提交的历史测试不在本轮批量删除，待用户后续统一清理。原负例保护的身份、权限、幂等和完整性不因旧数量限制删除而丢失。
+
+### 正式交付、响应体与旧存储续核（2026-10-24，源码未发布）
+
+- 正式交付提交/读取/验收的通用100条、supersededArtifacts100条和Web批次明细/历史100条无业务依据，删除。空交付、重复pin、摘要、manifest必须在批次内、revision顺序、任务/工作项/lease/Owner核对保留，防止验错成果或覆盖并发新事实。正式交付DAO现有int limit使用int可表示范围，不把原100行展示窗口当作总历史限制。
+- 删除控制器JSON业务体固定1/8/32/64KiB重复限制，以及context-pack1MiB/workspace4MiB序列化响应硬拒绝；保留JSON解析、单次读取、非空、字段类型、授权/动作与真实传输异常，不改写摘要字节。分块buffer大小只是IO批次，不是业务总量。
+- 旧F02文件存储取消MIME白名单、默认16MiB和配置上界64MiB及配置体积拒绝；配置仅启用和root，旧max-content-bytes/allowed-mime-types不再用于准入。接口当前返回Java byte[]，只保留Integer.MAX_VALUE可表示性及实际IO失败，不能宣称任意大小均可加载。摘要/长度/归属/根inode/链接/原子写入/不可变内容继续保护，不改变HTTP主动内容预览策略。
+- 参考图选择32仅是旧UI数量限制，不是Provider编辑合同，删除；预览不支持的格式仍仅在该图片预览入口限制，不扩散到存储。本轮仅更新失效旧断言或撤下纯上限旧测试，不新增数量扩张正例。
+
+### 原上下文压缩与传输重复上限（2026-10-24续核）
+
+Runtime已无8KiB fact限制，但ChatDeliberationService仍按该旧假设裁剪availableRefs/taskMaterials/最近消息并可能抛出persistence错误；删除该第二层按字节裁剪及20万字符历史整条丢弃。保留原近期24条/较旧摘要的上下文组织（有source IDs/hash/truncated标记），不将摘要冒充全文；已授权目录不因8KiB任意裁剪，错主体/错会话/非授权消息仍隔离。该变化仅产生新的dispatch快照，不重写已持久化contextHash或重放旧副作用。
+
+AMQP/WS同一wire重复限制128KiB无独立依据，改为与transport真实MEDIUMBLOB列一致的16,777,215字节可表示边界（建表agent-command-transport SQL及inbox原边界）。默认值/配置可表示范围/核心wire/inbox使用同一常量，不再互相矛盾；保留明确配置的更小运维额度及拒绝无法落库的wire，不做生产DDL、不迁移为更大字段。租约、摘要/原字节、ACK持久顺序、实际broker错误与网络超时不变。只调整现有默认配置断言，不新增大包正例。
+
+### 个人工作空间与交付读取续核（2026-10-24）
+
+- 源码基线 API `2197fe32558807d8afe3cd27532c210fc3d7f656`，本节描述其续修候选，尚未上线。个人工作空间 `FileSystemPersonalWorkspaceStorage` 取消显式 `maximum/max-content-bytes` 存储额度，配置仅保留 enabled/rootDirectory；构造器仅接收 Path。`maxContentBytes()` 保留为现有消费者所需的实现可表示性声明，文件系统返回 Java `byte[]` 的 `Integer.MAX_VALUE`，不是人为业务配额；disabled 实现仍返回不可用。读取不可表示长度、实际IO错误不能伪造成功，不承诺无限内存或任意大文件可处理。旧配置不再用于容量准入。
+- 保留 MIME 语法防响应头注入（不是格式白名单）、实际长度/SHA-256、精确 owner/client/tenant、根inode、路径和符号链接、不可变原子存储保护；现有 `FileSystemPersonalWorkspaceStorageTest` / `PersonalWorkspaceStorageBoundaryTest` 验证隔离与篡改。删除原17字节越界拒绝断言，不新增超过旧上限的大体积正例。
+- 正式交付读取链补齐 `AgentTaskFormalDeliveryDaoImpl.listTaskDeliveries` 遗留的100条上限；limit须为正数（SQL参数含义），不再拒绝服务层完整读取。API272的真实MySQL事务回归发现此遗漏，不能把服务层单测成功当整链成功。
+- API272同时暴露3个Controller已有测试使用旧根级JSON路径；断言按当前公共R信封更新为 `$.data.*`，HTTP状态/`code`、可信身份转发及敏感字段不外泄断言继续保留。这是既有断言同步，不改变生产响应契约，也不删掉失败回归凑绿。
+
+
+### 任务拆分、Archive与托管通信续核（2026-10-24，候选未部署）
+
+核对基线API fa5e610/Web74fcd31；本节仅覆盖这些调用链，不代表全库逐项核实完成。
+- 任务拆分取消8项、能力32项、重试10次、priority ±1000及objective8KiB拒绝；默认4项、重试默认3仍是默认策略，调用方maxItems仍控制建议合并。保留非空/合法Unicode、重复键/能力/依赖、引用/DAG、正数重试、身份与事务幂等。description、required_abilities、dependency_json当前均SQL TEXT，序列化后的65535字节可表示边界必须保留，避免落库失败/截断；不是任意数量限额。DAG用迭代遍历，避免解除8项后递归栈成为隐含限制。
+- Archive取消请求64KiB、手札20000字节、选文16段/8192字节、问题8192字节、答案131072字节和事件32768字节业务额度；前端输入、快照读取、SSE及后端/DDL/catalog同步。保留同一block连续选文、UTF8边界、权威段落/选文/版本摘要、身份隔离、幂等/序列/fence/CAS、非空问题和合法非空答案；byte[]合并须可由int表示，真实资源/网络/数据库错误如实失败，不承诺任意长度均能处理。答案4096字节分块只控制传输批次，不是总量门禁。手札锚点用完整段落，不静默截前缀，不再显示旧限额提示。
+- Archive LONGTEXT不需改列；去note纯容量CHECK，question保留选文/问题非空，event保留JSON_VALID及至少2字节的有效载荷语义。受控迁移候选在chat/jia-chat-mapper/src/main/resources/db/archive-content-capacity-migration.sql，不在普通启动中自动执行。部署前按既有schema/发布锁核对旧CHECK、SHOW CREATE TABLE、备份/行数，执行后读回和initializer核验。MySQL各表ALTER独立提交，不宣称跨表原子；中断按读回事实续行。生产未迁移，不宣称旧限制已消失；回退不得截断新数据或用旧备份覆盖新事实。
+- 托管UDS取消Java重复16KiB帧限制；只读响应允许无害扩展元数据。身份/当前operation/lease/注册证明/ready时序/manifest摘要/本地socket权限/真实传输超时保留。apiKey、enrollmentSecret、engineThreadId、profileRef、commands/command等凭据或执行路由仍拒绝，不将它们视作普通元数据；manifest是实际安装授权合同，不随响应展示扩展透传执行字段。公共M关联字段必须一致，不能将无害扩展兼容变成未知命令执行。
+- 复用现有关键测试，只删失效纯容量断言或调整已有夹具；不增加“超过旧上限仍成功”的非关键正例。正式结果与源码、迁移、上线分别记录。
+
+
+### F06 发布结构兼容（2026-10-25，API develop b9dede8bf88e66d6716033e9631d8aba7d43bd78）
+
+仅覆盖 `agent_task_artifact_outcome` / `agent_task_artifact_outcome_decision` 的发布后置结构检查，不改应用授权或自动迁移。
+- 保留 owner/client/tenant 列、精确唯一键和索引、列类型/空值/排序规则、`chk_artifact_outcome_supersession`。风险分别为跨主体访问、重复裁决/并发覆盖以及替代成果指向不一致；缺失或表达式漂移仅阻止本次 schema 验证，不改写已有结果。
+- `chk_artifact_outcome_state`、`chk_artifact_outcome_versions`、`chk_artifact_outcome_digest`、`chk_artifact_outcome_decision_versions`、`chk_artifact_outcome_decision_digest` 是服务层已实施规则的重复数据库表达；不再要求已有表必须补齐这五个 CHECK 才能发布。存在时仍核对原表达式/ENFORCED，未知 CHECK 或改义 CHECK 不放行，防止额外约束导致写入失败。新建表沿用固定 SQL；不因兼容读取就 ALTER/DROP 已有表，不改历史 SQL 摘要。
+- 完整性不是取消：`AgentTaskArtifactOutcomeServiceImpl.normalizeDecision/requireRef` 规范版本并生成 SHA-256；`now` 生成正时间；`requireOutcomeState/requireOutcomeVersion/requireOutcomeAudit/requireOutcomeShape` 拒绝损坏读取；`requireExactReplay` 校验主体、版本、摘要及幂等记录。保留 Mapper 的 owner 条件、唯一键、事务与 CAS。错误请求/损坏记录仍在当前操作范围内失败，不猜测补全或自动重放。
+- 回归入口：`ops/ci/aliyun-flow/tests/test_api_additive_schema.py` 既有结构保留用例，覆盖旧表缺重复 CHECK、必需替代关系 CHECK 缺失、存在但表达式漂移与 owner 索引漂移；应用既有 ArtifactOutcome 服务/事务回归不删除。本节不代表上线完成。生产只读盘点两表目前0行；无法证明缺失约束由哪次历史操作造成，不编造历史原因。
+
+## 2026-11-02：取消所有 CYF 业务表 CHECK
+
+按用户最新决定，数据库不再以CHECK实现业务规则；本节覆盖上文保留或替换CHECK的旧口径。撤除候选的具体原表达式和迁移边界见 API `docs/interface-catalog/database-check-rules-20261102.md`（当前位于技能岗位任务隔离worktree，未合入/部署）。主键/唯一键/外键/非空与现有业务授权、资金、事务及幂等保护不变。不新增触发器或层层校验作为替代。源码、正式回归与生产DDL分别记录，不能把规格更新当成线上完成。

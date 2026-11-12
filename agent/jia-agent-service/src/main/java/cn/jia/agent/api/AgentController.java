@@ -440,28 +440,36 @@ public class AgentController {
     }
 
     @ExceptionHandler(AgentBizException.class)
-    public JsonResult<Void> handleAgentBizException(AgentBizException e, HttpServletRequest request) {
+    public ResponseEntity<JsonResult<Void>> handleAgentBizException(AgentBizException e, HttpServletRequest request) {
         log.warn("Agent API request rejected: uri={}, code={}, message={}",
                 request.getRequestURI(), e.getCode(), e.getMessage());
-        JsonResult<Void> result = JsonResult.failure(e.getCode(), e.getMessage());
-
-        return result;
+        int status = switch (e.getCode()) {
+            case AgentErrorConstants.TOKEN_INVALID -> 401;
+            case AgentErrorConstants.AGENT_FORBIDDEN -> 403;
+            case AgentErrorConstants.AGENT_NOT_FOUND, AgentErrorConstants.TASK_NOT_FOUND -> 404;
+            case AgentErrorConstants.AGENT_BUSY, AgentErrorConstants.AGENT_OFFLINE,
+                    AgentErrorConstants.PERSONA_BOUND, AgentErrorConstants.PERSONA_NOT_BINDABLE,
+                    AgentErrorConstants.TASK_STATUS_INVALID -> 409;
+            case AgentErrorConstants.AGENT_ABILITY_MISMATCH -> 422;
+            default -> 500;
+        };
+        String message = status == 500 ? "好汉操作失败，请稍后重试" : e.getMessage();
+        return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .body(JsonResult.failure(e.getCode(), message));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
-    public JsonResult<Void> handleIllegalArgumentException(IllegalArgumentException e, HttpServletRequest request) {
+    public ResponseEntity<JsonResult<Void>> handleIllegalArgumentException(IllegalArgumentException e, HttpServletRequest request) {
         log.warn("Agent API request invalid: uri={}, message={}", request.getRequestURI(), e.getMessage());
-        JsonResult<Void> result = JsonResult.failure("BAD_REQUEST", e.getMessage());
-
-        return result;
+        return ResponseEntity.badRequest().header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .body(JsonResult.failure("BAD_REQUEST", "请求参数不正确"));
     }
 
     @ExceptionHandler(Exception.class)
-    public JsonResult<Void> handleException(Exception e) {
+    public ResponseEntity<JsonResult<Void>> handleException(Exception e) {
         log.error("Agent API error", e);
-        JsonResult<Void> result = JsonResult.failure("AGENT_ERROR", e.getMessage());
-
-        return result;
+        return ResponseEntity.internalServerError().header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .body(JsonResult.failure("AGENT_ERROR", "好汉操作失败，请稍后重试"));
     }
 
     private static AgentTaskExecutionGrantService.Scope requireTaskGrantScope(

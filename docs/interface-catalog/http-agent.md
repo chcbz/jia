@@ -2565,3 +2565,10 @@ TASK概览和事项分页/阶段计数复用同一 `AgentTaskPhaseSql.PHASE`。`
 `agent.register`/现有注册DTO新增同名可选字段；Runtime复用已有配置readback，显式codexModel覆盖home默认，不使用chatModel代替执行模型。空白、控制字符、超过200字符或非字符串的显示元数据作未上报，不阻塞注册。注册更新允许清空；普通presence不覆盖此字段。注册权限/会话fence沿既有责任层执行。
 
 存储：`agent_runtime.execution_model VARCHAR(200) NULL`，无CHECK；建表、既有schema-maintenance入口、显式迁移脚本及相关fixture已同步。不自动回填历史模型，不在普通应用启动时迁移。生产执行须先完成固定快照/恢复与迁移授权。定向回归：AgentServiceImplTest、AgentIdentityRuntimeRealTransactionTest、AgentProfileCapabilitiesServiceTest/ControllerTest及Web模型投影/组件测试。
+
+
+## AgentController 异常边界收口（2026-11-12，源码候选）
+
+旧直接解绑路由及其忙碌阻止解绑规则已退役，不恢复 `AgentHostedBindingTransaction` 或旧解绑测试。保留有用的公共异常映射：TOKEN_INVALID→401、AGENT_FORBIDDEN→403、资源不存在→404、忙碌/离线/状态冲突→409、能力不匹配→422、参数错误→400、未知/内部错误→500。错误响应标记 private, no-store，内部细节只记日志；避免 HTTP200 搭非E0导致消费者误报协议错误。业务权限及资金状态由原服务负责，本次不改变移除租约流程。
+
+定向验证入口：`AgentControllerErrorHttpTest`，使用现行 GET `/agent/{agentId}` 验证真实MVC分派、公共信封、请求关联、错误状态与脱敏；服务为模拟，无生产写入。固定源码与本轮验证结果见根仓 git-cleanup-20261112 记录，不以旧未执行测试宣称通过。
